@@ -32,24 +32,24 @@ Backend foundation is live and tested end to end: business creation, user regist
 
 ## Project Structure
 
-Business-OS/
-├── backend/
-│ ├── cmd/api/main.go # entrypoint, runs AutoMigrate on startup
-│ └── internal/
-│ ├── config/ # env config, loaded once
-│ ├── router/ # wires all modules together — the ONLY
-│ │ # place that imports every module
-│ ├── shared/
-│ │ ├── database/ # postgres + redis connections
-│ │ ├── middleware/ # JWT auth, request logging
-│ │ └── response/ # consistent JSON response envelopes
-│ └── modules/
-│ ├── auth/ # ✅ full implementation — the template
-│ ├── business/ # ✅ full implementation
-│ └── ... # 🟡 stubs, one folder per module
-├── docker-compose.yml # postgres + redis (backend/frontend added once built)
-├── .env.example
-└── Makefile
+    Business-OS/
+    ├── backend/
+    │   ├── cmd/api/main.go              # entrypoint, runs AutoMigrate on startup
+    │   └── internal/
+    │       ├── config/                  # env config, loaded once
+    │       ├── router/                  # wires all modules together — the ONLY
+    │       │                            # place that imports every module
+    │       ├── shared/
+    │       │   ├── database/            # postgres + redis connections
+    │       │   ├── middleware/          # JWT auth, request logging
+    │       │   └── response/            # consistent JSON response envelopes
+    │       └── modules/
+    │           ├── auth/                # full implementation — the template
+    │           ├── business/            # full implementation
+    │           └── ...                  # stubs, one folder per module
+    ├── docker-compose.yml                # postgres + redis (backend/frontend added once built)
+    ├── .env.example
+    └── Makefile
 
 ## The module pattern
 
@@ -69,43 +69,47 @@ Modules never import each other directly. `router.go` is the only file that know
 
 ## Getting started
 
-```bash
-# 1. Environment
-cp .env.example .env
+Environment:
 
-# 2. Start Postgres + Redis
-docker compose up -d postgres redis
-docker compose ps   # confirm both show "healthy"
+    cp .env.example .env
 
-# 3. Install Go dependencies (first time only)
-cd backend && go mod tidy
+Start Postgres + Redis:
 
-# 4. Run the API
-go run ./cmd/api
-# or, from the project root: make backend-run
-```
+    docker compose up -d postgres redis
+    docker compose ps
 
-Health check: `curl http://localhost:8080/health` → `{"status":"ok"}`
+Install Go dependencies (first time only):
+
+    cd backend && go mod tidy
+
+Run the API:
+
+    go run ./cmd/api
+
+or, from the project root:
+
+    make backend-run
+
+Health check: `curl http://localhost:8080/health` should return `{"status":"ok"}`
 
 ### Try the working flow
 
-```bash
-# Create a business (public, no auth)
-curl -X POST http://localhost:8080/api/v1/business \
-  -H "Content-Type: application/json" \
-  -d '{"name": "My Hardware Store", "phone": "0700000000"}'
-# -> copy the returned "id"
+Create a business (public, no auth):
 
-# Register a user against that business
-curl -X POST http://localhost:8080/api/v1/auth/register \
-  -H "Content-Type: application/json" \
-  -d '{"business_id": "<id>", "name": "Owner", "email": "owner@example.com", "password": "password123"}'
-# -> copy the returned "token"
+    curl -X POST http://localhost:8080/api/v1/business \
+      -H "Content-Type: application/json" \
+      -d '{"name": "My Hardware Store", "phone": "0700000000"}'
 
-# Fetch the business using the token
-curl http://localhost:8080/api/v1/business \
-  -H "Authorization: Bearer <token>"
-```
+Copy the returned `id`, then register a user against that business:
+
+    curl -X POST http://localhost:8080/api/v1/auth/register \
+      -H "Content-Type: application/json" \
+      -d '{"business_id": "<id>", "name": "Owner", "email": "owner@example.com", "password": "password123"}'
+
+Copy the returned `token`, then fetch the business using it:
+
+    curl http://localhost:8080/api/v1/business \
+      -H "Authorization: Bearer <token>"
 
 ## Database migrations
 
@@ -129,5 +133,4 @@ Matches the MVP scope in the product vision doc:
 - No test suite yet
 - No CI pipeline yet
 - Frontend not started
-- `assistant`'s natural-language disambiguation flow (what happens when input is ambiguous — "sold hammers" with no quantity) is undecided
-
+- `assistant`'s natural-language disambiguation flow (what happens when input is ambiguous — e.g. "sold hammers" with no quantity) is undecided

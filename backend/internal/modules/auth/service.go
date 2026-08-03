@@ -13,7 +13,12 @@ import (
 var (
 	ErrInvalidCredentials = errors.New("invalid email or password")
 	ErrEmailTaken         = errors.New("email already registered")
+	ErrBusinessNotFound   = errors.New("business does not exist")
 )
+
+type BusinessChecker interface {
+	Exists(id uuid.UUID) (bool, error)
+}
 
 type RegisterInput struct {
 	BusinessID uuid.UUID
@@ -39,15 +44,24 @@ type Service interface {
 }
 
 type service struct {
-	repo Repository
-	cfg  *config.Config
+	repo       Repository
+	cfg        *config.Config
+	businesses BusinessChecker
 }
 
-func NewService(repo Repository, cfg *config.Config) Service {
-	return &service{repo: repo, cfg: cfg}
+func NewService(repo Repository, cfg *config.Config, businesses BusinessChecker) Service {
+	return &service{repo: repo, cfg: cfg, businesses: businesses}
 }
 
 func (s *service) Register(input RegisterInput) (*AuthResult, error) {
+	exists, err := s.businesses.Exists(input.BusinessID)
+	if err != nil {
+		return nil, err
+	}
+	if !exists {
+		return nil, ErrBusinessNotFound
+	}
+
 	if _, err := s.repo.FindByEmail(input.Email); err == nil {
 		return nil, ErrEmailTaken
 	}

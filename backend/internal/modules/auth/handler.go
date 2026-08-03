@@ -54,6 +54,18 @@ func (h *Handler) Register(c *gin.Context) {
 		return
 	}
 
+	if err != nil {
+		if errors.Is(err, ErrBusinessNotFound) {
+			response.Error(c, http.StatusBadRequest, err.Error())
+			return
+		}
+		if errors.Is(err, ErrEmailTaken) {
+			response.Error(c, http.StatusConflict, err.Error())
+			return
+		}
+		response.Error(c, http.StatusInternalServerError, "failed to register user")
+		return
+	}
 	response.Success(c, http.StatusCreated, gin.H{
 		"token": result.Token,
 		"user":  result.User,

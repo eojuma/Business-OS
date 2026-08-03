@@ -5,11 +5,11 @@ import (
 	"gorm.io/gorm"
 )
 
-
 type Repository interface {
 	Create(b *Business) error
 	FindByID(id uuid.UUID) (*Business, error)
 	Update(b *Business) error
+	Exists(id uuid.UUID) (bool, error)
 }
 
 type repository struct {
@@ -34,4 +34,13 @@ func (r *repository) FindByID(id uuid.UUID) (*Business, error) {
 
 func (r *repository) Update(b *Business) error {
 	return r.db.Save(b).Error
+}
+
+func (r *repository) Exists(id uuid.UUID) (bool, error) {
+	var count int64
+	err := r.db.Model(&Business{}).Where("id = ?", id).Count(&count).Error
+	if err != nil {
+		return false, err
+	}
+	return count > 0, nil
 }

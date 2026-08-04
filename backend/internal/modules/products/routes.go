@@ -1,22 +1,22 @@
 package products
 
 import (
-	"net/http"
-
 	"github.com/businessos/backend/internal/config"
-	"github.com/businessos/backend/internal/shared/response"
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 )
 
 func RegisterRoutes(rg *gin.RouterGroup, db *gorm.DB, cfg *config.Config) {
+	repo := NewRepository(db)
+	svc := NewService(repo)
+	handler := NewHandler(svc)
+
 	group := rg.Group("/products")
 	{
-		group.GET("", func(c *gin.Context) {
-			response.Success(c, http.StatusOK, gin.H{
-				"module":  "products",
-				"message": "Products module scaffolded — implement model/repository/service/handler",
-			})
-		})
+		group.POST("", handler.Create)
+		group.GET("", handler.List)
+		group.GET("/:id", handler.Get)
+		group.PATCH("/:id", handler.Update)
+		group.DELETE("/:id", handler.Delete)
 	}
 }

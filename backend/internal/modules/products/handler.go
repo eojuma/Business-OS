@@ -27,7 +27,7 @@ type createRequest struct {
 }
 
 func (h *Handler) Create(c *gin.Context) {
-	businessID, err := currentBusinessID(c)
+	businessID, err := middleware.CurrentBusinessID(c)
 	if err != nil {
 		response.Error(c, http.StatusUnauthorized, err.Error())
 		return
@@ -60,7 +60,7 @@ func (h *Handler) Create(c *gin.Context) {
 }
 
 func (h *Handler) List(c *gin.Context) {
-	businessID, err := currentBusinessID(c)
+	businessID, err := middleware.CurrentBusinessID(c)
 	if err != nil {
 		response.Error(c, http.StatusUnauthorized, err.Error())
 		return
@@ -76,7 +76,7 @@ func (h *Handler) List(c *gin.Context) {
 }
 
 func (h *Handler) Get(c *gin.Context) {
-	businessID, err := currentBusinessID(c)
+	businessID, err := middleware.CurrentBusinessID(c)
 	if err != nil {
 		response.Error(c, http.StatusUnauthorized, err.Error())
 		return
@@ -110,7 +110,7 @@ type updateRequest struct {
 }
 
 func (h *Handler) Update(c *gin.Context) {
-	businessID, err := currentBusinessID(c)
+	businessID, err := middleware.CurrentBusinessID(c)
 	if err != nil {
 		response.Error(c, http.StatusUnauthorized, err.Error())
 		return
@@ -152,7 +152,7 @@ func (h *Handler) Update(c *gin.Context) {
 }
 
 func (h *Handler) Delete(c *gin.Context) {
-	businessID, err := currentBusinessID(c)
+	businessID, err := middleware.CurrentBusinessID(c)
 	if err != nil {
 		response.Error(c, http.StatusUnauthorized, err.Error())
 		return
@@ -170,17 +170,4 @@ func (h *Handler) Delete(c *gin.Context) {
 	}
 
 	response.Success(c, http.StatusOK, gin.H{"deleted": true})
-}
-
-
-func currentBusinessID(c *gin.Context) (uuid.UUID, error) {
-	raw, exists := c.Get(middleware.ContextBusinessIDKey)
-	if !exists {
-		return uuid.Nil, errors.New("missing business context")
-	}
-	str, ok := raw.(string)
-	if !ok {
-		return uuid.Nil, errors.New("invalid business context")
-	}
-	return uuid.Parse(str)
 }

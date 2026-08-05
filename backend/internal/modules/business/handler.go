@@ -7,7 +7,6 @@ import (
 	"github.com/businessos/backend/internal/shared/middleware"
 	"github.com/businessos/backend/internal/shared/response"
 	"github.com/gin-gonic/gin"
-	"github.com/google/uuid"
 )
 
 type Handler struct {
@@ -49,7 +48,7 @@ func (h *Handler) Create(c *gin.Context) {
 }
 
 func (h *Handler) Get(c *gin.Context) {
-	businessID, err := currentBusinessID(c)
+	businessID, err := middleware.CurrentBusinessID(c)
 	if err != nil {
 		response.Error(c, http.StatusUnauthorized, err.Error())
 		return
@@ -76,7 +75,7 @@ type updateRequest struct {
 }
 
 func (h *Handler) Update(c *gin.Context) {
-	businessID, err := currentBusinessID(c)
+	businessID, err := middleware.CurrentBusinessID(c)
 	if err != nil {
 		response.Error(c, http.StatusUnauthorized, err.Error())
 		return
@@ -104,18 +103,4 @@ func (h *Handler) Update(c *gin.Context) {
 	}
 
 	response.Success(c, http.StatusOK, b)
-}
-
-func currentBusinessID(c *gin.Context) (uuid.UUID, error) {
-	raw, exists := c.Get(middleware.ContextBusinessIDKey)
-	if !exists {
-		return uuid.Nil, errors.New("missing business context")
-	}
-
-	str, ok := raw.(string)
-	if !ok {
-		return uuid.Nil, errors.New("invalid business context")
-	}
-
-	return uuid.Parse(str)
 }

@@ -13,6 +13,7 @@ type Repository interface {
 	List(businessID uuid.UUID) ([]Product, error)
 	Update(p *Product) error
 	Delete(id, businessID uuid.UUID) error
+	GetPrice(businessID, productID uuid.UUID) (int64, error)
 }
 
 type repository struct {
@@ -33,6 +34,17 @@ func (r *repository) FindByID(id, businessID uuid.UUID) (*Product, error) {
 		return nil, err
 	}
 	return &p, nil
+}
+
+func (r *repository) GetPrice(businessID, productID uuid.UUID) (int64, error) {
+	var p Product
+	err := r.db.Select("price").
+		Where("id = ? AND business_id = ?", productID, businessID).
+		First(&p).Error
+	if err != nil {
+		return 0, err
+	}
+	return p.Price, nil
 }
 
 func (r *repository) List(businessID uuid.UUID) ([]Product, error) {

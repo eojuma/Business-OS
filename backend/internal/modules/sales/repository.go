@@ -10,9 +10,13 @@ type InventoryMover interface {
 }
 
 type Repository interface {
-	CreateSale(sale *Sale, lineItems []SaleLineItem, inventory InventoryMover) error
+	CreateSale(sale *Sale, lineItems []SaleLineItem, inventory InventoryMover, customers CustomerCharger) error
 	FindByID(id, businessID uuid.UUID) (*Sale, error)
 	List(businessID uuid.UUID) ([]Sale, error)
+}
+
+type CustomerCharger interface {
+	ChargeCreditTx(tx *gorm.DB, businessID, customerID uuid.UUID, amount int64) error
 }
 
 type repository struct {
@@ -23,7 +27,7 @@ func NewRepository(db *gorm.DB) Repository {
 	return &repository{db: db}
 }
 
-func (r *repository) CreateSale(sale *Sale, lineItems []SaleLineItem, inventory InventoryMover) error {
+func (r *repository) CreateSale(sale *Sale, lineItems []SaleLineItem, inventory InventoryMover, customers CustomerCharger) error {
 	return r.db.Transaction(func(tx *gorm.DB) error {
 		if err := tx.Create(sale).Error; err != nil {
 			return err
@@ -44,6 +48,12 @@ func (r *repository) CreateSale(sale *Sale, lineItems []SaleLineItem, inventory 
 				"sale "+sale.ID.String(),
 			)
 			if err != nil {
+				return err
+			}
+		}
+
+		if sale.CustomerID != nil {
+			if err := customers.ChargeCreditTx(tx, sale.BusinessID, *sale.CustomerID, sale.TotalAmount); err != nil {
 				return err 
 			}
 		}

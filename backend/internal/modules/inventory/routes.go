@@ -1,22 +1,21 @@
 package inventory
 
 import (
-	"net/http"
-
 	"github.com/businessos/backend/internal/config"
-	"github.com/businessos/backend/internal/shared/response"
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 )
 
 func RegisterRoutes(rg *gin.RouterGroup, db *gorm.DB, cfg *config.Config) {
+	repo := NewRepository(db)
+	svc := NewService(repo)
+	handler := NewHandler(svc)
+
 	group := rg.Group("/inventory")
 	{
-		group.GET("", func(c *gin.Context) {
-			response.Success(c, http.StatusOK, gin.H{
-				"module":  "inventory",
-				"message": "Inventory module scaffolded — implement model/repository/service/handler",
-			})
-		})
+		group.POST("/movements", handler.RecordMovement)
+		group.GET("/movements/:productId", handler.ListMovements)
+		group.GET("/levels/:productId", handler.GetStockLevel)
+		group.GET("/low-stock", handler.ListLowStock)
 	}
 }

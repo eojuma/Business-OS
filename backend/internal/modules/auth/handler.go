@@ -46,15 +46,6 @@ func (h *Handler) Register(c *gin.Context) {
 		Role:       req.Role,
 	})
 	if err != nil {
-		if errors.Is(err, ErrEmailTaken) {
-			response.Error(c, http.StatusConflict, err.Error())
-			return
-		}
-		response.Error(c, http.StatusInternalServerError, "failed to register user")
-		return
-	}
-
-	if err != nil {
 		if errors.Is(err, ErrBusinessNotFound) {
 			response.Error(c, http.StatusBadRequest, err.Error())
 			return

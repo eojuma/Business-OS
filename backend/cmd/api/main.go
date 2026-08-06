@@ -6,6 +6,10 @@ import (
 	"github.com/businessos/backend/internal/config"
 	"github.com/businessos/backend/internal/modules/auth"
 	"github.com/businessos/backend/internal/modules/business"
+	"github.com/businessos/backend/internal/modules/customers"
+	"github.com/businessos/backend/internal/modules/inventory"
+	"github.com/businessos/backend/internal/modules/products"
+	"github.com/businessos/backend/internal/modules/sales"
 	"github.com/businessos/backend/internal/router"
 	"github.com/businessos/backend/internal/shared/database"
 )
@@ -16,8 +20,16 @@ func main() {
 	db := database.NewPostgres(cfg)
 	_ = database.NewRedis(cfg)
 
-
-	if err := db.AutoMigrate(&business.Business{}, &auth.User{}); err != nil {
+	if err := db.AutoMigrate(
+		&business.Business{},
+		&auth.User{},
+		&products.Product{},
+		&inventory.StockLevel{},
+		&inventory.StockMovement{},
+		&sales.Sale{},
+		&sales.SaleLineItem{},
+		&customers.Customer{},
+	); err != nil {
 		log.Fatalf("failed to run auto-migration: %v", err)
 	}
 
@@ -28,6 +40,3 @@ func main() {
 		log.Fatalf("server failed: %v", err)
 	}
 }
-
-
-// 1c672bfd-d7bc-46c3-a77a-c6affadd44d5 - mock business id for testing purposes

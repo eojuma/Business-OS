@@ -9,7 +9,7 @@ import (
 
 
 func CORS(cfg *config.Config) gin.HandlerFunc {
-	allowedOrigin := "http://localhost:3000" 
+	allowedOrigin := cfg.FrontendURL 
 
 	return func(c *gin.Context) {
 		c.Header("Access-Control-Allow-Origin", allowedOrigin)

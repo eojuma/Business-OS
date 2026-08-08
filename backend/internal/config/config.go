@@ -10,6 +10,7 @@ import (
 type Config struct {
 	AppEnv  string
 	AppPort string
+	FrontendURL string
 
 	DBHost     string
 	DBPort     string
@@ -37,6 +38,8 @@ func Load() *Config {
 	return &Config{
 		AppEnv:  getEnv("APP_ENV", "development"),
 		AppPort: getEnv("APP_PORT", "8080"),
+		FrontendURL: getEnv("FRONTEND_URL", "http://localhost:3000"),
+
 
 		DBHost:     getEnv("DB_HOST", "localhost"),
 		DBPort:     getEnv("DB_PORT", "5432"),

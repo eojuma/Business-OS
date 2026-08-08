@@ -64,7 +64,7 @@ export default function DashboardPage() {
 
       <div className="grid gap-4 sm:grid-cols-2">
         <div className="rounded-lg border border-gray-200 p-4">
-          <p className="text-sm text-gray-500">Today's Sales</p>
+        <p className="text-sm text-gray-500">Today&apos;s Sales</p>
           <p className="text-2xl font-semibold">
             KSh {formatMoney(todaysTotal)}
           </p>

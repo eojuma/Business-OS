@@ -60,3 +60,11 @@ func RegisterRoutes(rg *gin.RouterGroup, db *gorm.DB, cfg *config.Config) {
 		group.GET("/:id", handler.Get)
 	}
 }
+
+func NewInventoryAdapter(repo inventory.Repository) InventoryMover {
+	return &inventoryAdapter{repo: repo}
+}
+
+func NewCustomerAdapter(svc customers.Service) CustomerCharger {
+	return &customerAdapter{svc: svc}
+}

@@ -13,7 +13,8 @@ type Repository interface {
 	List(businessID uuid.UUID) ([]Product, error)
 	Update(p *Product) error
 	Delete(id, businessID uuid.UUID) error
-	GetPrice(businessID, productID uuid.UUID) (int64, error)
+	GetPricing(businessID, productID uuid.UUID) (price, costPrice int64, err error)
+	UpdateCostPriceTx(tx *gorm.DB, businessID, productID uuid.UUID, costPrice int64) error
 }
 
 type repository struct {
@@ -36,15 +37,26 @@ func (r *repository) FindByID(id, businessID uuid.UUID) (*Product, error) {
 	return &p, nil
 }
 
-func (r *repository) GetPrice(businessID, productID uuid.UUID) (int64, error) {
+func (r *repository) GetPricing(businessID, productID uuid.UUID) (int64, int64, error) {
 	var p Product
-	err := r.db.Select("price").
+	err := r.db.Select("price", "cost_price").
 		Where("id = ? AND business_id = ?", productID, businessID).
 		First(&p).Error
 	if err != nil {
-		return 0, err
+		return 0, 0, err
 	}
-	return p.Price, nil
+	return p.Price, p.CostPrice, nil
+}
+
+func (r *repository) UpdateCostPriceTx(tx *gorm.DB, businessID, productID uuid.UUID, costPrice int64) error {
+	result := tx.Model(&Product{}).Where("id = ? AND business_id = ?", productID, businessID).Update("cost_price", costPrice)
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
+		return gorm.ErrRecordNotFound
+	}
+	return nil
 }
 
 func (r *repository) List(businessID uuid.UUID) ([]Product, error) {

@@ -11,8 +11,9 @@ type Product struct {
 	BusinessID uuid.UUID `gorm:"type:uuid;index;not null" json:"business_id"`
 	Name       string    `gorm:"not null" json:"name"`
 	Category   string    `json:"category"`
-	Unit       string    `gorm:"not null" json:"unit"` 
-	Price      int64   `gorm:"not null" json:"price"`
+	Unit       string    `gorm:"not null" json:"unit"`
+	Price      int64     `gorm:"not null" json:"price"`
+	CostPrice  int64     `gorm:"not null;default:0" json:"cost_price"`
 	SKU        string    `json:"sku,omitempty"`
 	CreatedAt  time.Time `json:"created_at"`
 	UpdatedAt  time.Time `json:"updated_at"`

@@ -11,10 +11,12 @@ var (
 	ErrProductNotFound     = errors.New("one or more products not found")
 	ErrInsufficientStock   = errors.New("insufficient stock for this sale")
 	ErrCreditLimitExceeded = errors.New("this sale would exceed the customer's credit limit")
+	ErrInvalidSaleItem     = errors.New("sale quantities must be positive")
+	ErrInvalidDiscount     = errors.New("discount cannot be negative or exceed the sale subtotal")
 )
 
 type ProductLookup interface {
-	GetPrice(businessID, productID uuid.UUID) (int64, error)
+	GetPricing(businessID, productID uuid.UUID) (price, costPrice int64, err error)
 }
 
 type SaleItemInput struct {
@@ -63,7 +65,10 @@ func (s *service) CreateSale(input CreateSaleInput) (*Sale, error) {
 	var total int64
 
 	for _, item := range input.Items {
-		price, err := s.products.GetPrice(input.BusinessID, item.ProductID)
+		if item.Quantity <= 0 {
+			return nil, ErrInvalidSaleItem
+		}
+		price, costPrice, err := s.products.GetPricing(input.BusinessID, item.ProductID)
 		if err != nil {
 			return nil, ErrProductNotFound
 		}
@@ -75,10 +80,14 @@ func (s *service) CreateSale(input CreateSaleInput) (*Sale, error) {
 			ProductID: item.ProductID,
 			Quantity:  item.Quantity,
 			UnitPrice: price,
+			UnitCost:  costPrice,
 			Subtotal:  subtotal,
 		})
 	}
 
+	if input.Discount < 0 || input.Discount > total {
+		return nil, ErrInvalidDiscount
+	}
 	sale.TotalAmount = total - input.Discount
 
 	if err := s.repo.CreateSale(sale, lineItems, s.inventory, s.customers); err != nil {

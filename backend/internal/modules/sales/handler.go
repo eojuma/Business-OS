@@ -81,6 +81,8 @@ func (h *Handler) Create(c *gin.Context) {
 			response.Error(c, http.StatusBadRequest, err.Error())
 		case errors.Is(err, ErrInsufficientStock):
 			response.Error(c, http.StatusBadRequest, err.Error())
+		case errors.Is(err, ErrCreditLimitExceeded), errors.Is(err, ErrInvalidSaleItem), errors.Is(err, ErrInvalidDiscount):
+			response.Error(c, http.StatusBadRequest, err.Error())
 		default:
 			response.Error(c, http.StatusInternalServerError, "failed to record sale")
 		}

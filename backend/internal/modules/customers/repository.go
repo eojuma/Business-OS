@@ -11,6 +11,8 @@ type Repository interface {
 	List(businessID uuid.UUID) ([]Customer, error)
 	Update(c *Customer) error
 	ListAboveBalance(businessID uuid.UUID, threshold int64) ([]Customer, error)
+	RecordPayment(id, businessID uuid.UUID, payment *Payment) (*Customer, error)
+	ListPayments(id, businessID uuid.UUID) ([]Payment, error)
 }
 
 type repository struct {
@@ -53,4 +55,29 @@ func (r *repository) ListAboveBalance(businessID uuid.UUID, threshold int64) ([]
 		return nil, err
 	}
 	return customers, nil
+}
+
+func (r *repository) RecordPayment(id, businessID uuid.UUID, payment *Payment) (*Customer, error) {
+	var customer Customer
+	err := r.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Where("id = ? AND business_id = ?", id, businessID).First(&customer).Error; err != nil {
+			return err
+		}
+		if payment.Amount > customer.Balance {
+			return ErrPaymentExceedsBalance
+		}
+		customer.Balance -= payment.Amount
+		payment.BusinessID, payment.CustomerID = businessID, id
+		if err := tx.Save(&customer).Error; err != nil {
+			return err
+		}
+		return tx.Create(payment).Error
+	})
+	return &customer, err
+}
+
+func (r *repository) ListPayments(id, businessID uuid.UUID) ([]Payment, error) {
+	var payments []Payment
+	err := r.db.Where("customer_id = ? AND business_id = ?", id, businessID).Order("created_at desc").Find(&payments).Error
+	return payments, err
 }

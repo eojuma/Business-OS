@@ -18,5 +18,7 @@ func RegisterRoutes(rg *gin.RouterGroup, db *gorm.DB, cfg *config.Config) {
 		group.GET("/above-balance", handler.ListAboveBalance)
 		group.GET("/:id", handler.Get)
 		group.PATCH("/:id", handler.Update)
+		group.POST("/:id/payments", handler.RecordPayment)
+		group.GET("/:id/payments", handler.ListPayments)
 	}
 }

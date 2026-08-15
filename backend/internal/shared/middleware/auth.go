@@ -29,7 +29,7 @@ func RequireAuth(cfg *config.Config) gin.HandlerFunc {
 		claims := jwt.MapClaims{}
 		token, err := jwt.ParseWithClaims(tokenString, claims, func(t *jwt.Token) (interface{}, error) {
 			return []byte(cfg.JWTSecret), nil
-		})
+		}, jwt.WithValidMethods([]string{jwt.SigningMethodHS256.Alg()}))
 		if err != nil || !token.Valid {
 			response.Error(c, 401, "invalid or expired token")
 			c.Abort()

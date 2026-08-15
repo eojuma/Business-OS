@@ -8,8 +8,10 @@ import (
 )
 
 var (
-	ErrCustomerNotFound  = errors.New("customer not found")
-	ErrCreditLimitExceeded = errors.New("this would exceed the customer's credit limit")
+	ErrCustomerNotFound      = errors.New("customer not found")
+	ErrCreditLimitExceeded   = errors.New("this would exceed the customer's credit limit")
+	ErrInvalidPayment        = errors.New("payment amount must be positive")
+	ErrPaymentExceedsBalance = errors.New("payment exceeds customer balance")
 )
 
 type CreateInput struct {
@@ -33,6 +35,8 @@ type Service interface {
 	List(businessID uuid.UUID) ([]Customer, error)
 	Update(id, businessID uuid.UUID, input UpdateInput) (*Customer, error)
 	ListAboveBalance(businessID uuid.UUID, threshold int64) ([]Customer, error)
+	RecordPayment(id, businessID uuid.UUID, amount int64, note string) (*Customer, error)
+	ListPayments(id, businessID uuid.UUID) ([]Payment, error)
 	// ChargeCreditTx increases a customer's balance for a credit sale,
 	// refusing if it would exceed their credit limit. Called from sales
 	// inside the same transaction as the sale itself.
@@ -100,6 +104,21 @@ func (s *service) Update(id, businessID uuid.UUID, input UpdateInput) (*Customer
 
 func (s *service) ListAboveBalance(businessID uuid.UUID, threshold int64) ([]Customer, error) {
 	return s.repo.ListAboveBalance(businessID, threshold)
+}
+
+func (s *service) RecordPayment(id, businessID uuid.UUID, amount int64, note string) (*Customer, error) {
+	if amount <= 0 {
+		return nil, ErrInvalidPayment
+	}
+	c, err := s.repo.RecordPayment(id, businessID, &Payment{Amount: amount, Note: note})
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, ErrCustomerNotFound
+	}
+	return c, err
+}
+
+func (s *service) ListPayments(id, businessID uuid.UUID) ([]Payment, error) {
+	return s.repo.ListPayments(id, businessID)
 }
 
 func (s *service) ChargeCreditTx(tx *gorm.DB, businessID, customerID uuid.UUID, amount int64) error {

@@ -162,3 +162,59 @@ func (h *Handler) ListAboveBalance(c *gin.Context) {
 
 	response.Success(c, http.StatusOK, customers)
 }
+
+type paymentRequest struct {
+	Amount int64  `json:"amount" binding:"required"`
+	Note   string `json:"note"`
+}
+
+func (h *Handler) RecordPayment(c *gin.Context) {
+	businessID, err := middleware.CurrentBusinessID(c)
+	if err != nil {
+		response.Error(c, http.StatusUnauthorized, err.Error())
+		return
+	}
+	id, err := uuid.Parse(c.Param("id"))
+	if err != nil {
+		response.Error(c, http.StatusBadRequest, "invalid customer id")
+		return
+	}
+	var req paymentRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.Error(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	customer, err := h.service.RecordPayment(id, businessID, req.Amount, req.Note)
+	if errors.Is(err, ErrInvalidPayment) || errors.Is(err, ErrPaymentExceedsBalance) {
+		response.Error(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	if errors.Is(err, ErrCustomerNotFound) {
+		response.Error(c, http.StatusNotFound, err.Error())
+		return
+	}
+	if err != nil {
+		response.Error(c, http.StatusInternalServerError, "failed to record payment")
+		return
+	}
+	response.Success(c, http.StatusOK, customer)
+}
+
+func (h *Handler) ListPayments(c *gin.Context) {
+	businessID, err := middleware.CurrentBusinessID(c)
+	if err != nil {
+		response.Error(c, http.StatusUnauthorized, err.Error())
+		return
+	}
+	id, err := uuid.Parse(c.Param("id"))
+	if err != nil {
+		response.Error(c, http.StatusBadRequest, "invalid customer id")
+		return
+	}
+	payments, err := h.service.ListPayments(id, businessID)
+	if err != nil {
+		response.Error(c, http.StatusInternalServerError, "failed to list payments")
+		return
+	}
+	response.Success(c, http.StatusOK, payments)
+}

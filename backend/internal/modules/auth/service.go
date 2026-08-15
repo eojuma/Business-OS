@@ -14,6 +14,7 @@ var (
 	ErrInvalidCredentials = errors.New("invalid email or password")
 	ErrEmailTaken         = errors.New("email already registered")
 	ErrBusinessNotFound   = errors.New("business does not exist")
+	ErrInvalidRole        = errors.New("role must be owner, manager, or cashier")
 )
 
 type BusinessChecker interface {
@@ -41,6 +42,31 @@ type AuthResult struct {
 type Service interface {
 	Register(input RegisterInput) (*AuthResult, error)
 	Login(input LoginInput) (*AuthResult, error)
+	CreateTeamUser(input RegisterInput) (*User, error)
+	ListTeam(businessID uuid.UUID) ([]User, error)
+}
+
+func validRole(role string) bool { return role == "owner" || role == "manager" || role == "cashier" }
+
+func (s *service) CreateTeamUser(input RegisterInput) (*User, error) {
+	if !validRole(input.Role) {
+		return nil, ErrInvalidRole
+	}
+	if _, err := s.repo.FindByEmail(input.Email); err == nil {
+		return nil, ErrEmailTaken
+	}
+	hash, err := bcrypt.GenerateFromPassword([]byte(input.Password), bcrypt.DefaultCost)
+	if err != nil {
+		return nil, err
+	}
+	user := &User{BusinessID: input.BusinessID, Name: input.Name, Email: input.Email, PasswordHash: string(hash), Role: input.Role, Active: true}
+	if err := s.repo.Create(user); err != nil {
+		return nil, err
+	}
+	return user, nil
+}
+func (s *service) ListTeam(businessID uuid.UUID) ([]User, error) {
+	return s.repo.ListByBusiness(businessID)
 }
 
 type service struct {
@@ -71,17 +97,12 @@ func (s *service) Register(input RegisterInput) (*AuthResult, error) {
 		return nil, err
 	}
 
-	role := input.Role
-	if role == "" {
-		role = "owner"
-	}
-
 	user := &User{
 		BusinessID:   input.BusinessID,
 		Name:         input.Name,
 		Email:        input.Email,
 		PasswordHash: string(hash),
-		Role:         role,
+		Role:         "owner",
 		Active:       true,
 	}
 
@@ -104,6 +125,9 @@ func (s *service) Login(input LoginInput) (*AuthResult, error) {
 	}
 
 	if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(input.Password)); err != nil {
+		return nil, ErrInvalidCredentials
+	}
+	if !user.Active {
 		return nil, ErrInvalidCredentials
 	}
 

@@ -9,6 +9,13 @@ type Repository interface {
 	Create(user *User) error
 	FindByEmail(email string) (*User, error)
 	FindByID(id uuid.UUID) (*User, error)
+	ListByBusiness(businessID uuid.UUID) ([]User, error)
+}
+
+func (r *repository) ListByBusiness(businessID uuid.UUID) ([]User, error) {
+	var users []User
+	err := r.db.Where("business_id = ?", businessID).Order("created_at asc").Find(&users).Error
+	return users, err
 }
 
 type repository struct {

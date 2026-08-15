@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 
+	"github.com/businessos/backend/internal/shared/middleware"
 	"github.com/businessos/backend/internal/shared/response"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -11,6 +12,53 @@ import (
 
 type Handler struct {
 	service Service
+}
+
+type teamUserRequest struct {
+	Name     string `json:"name" binding:"required"`
+	Email    string `json:"email" binding:"required,email"`
+	Password string `json:"password" binding:"required,min=8"`
+	Role     string `json:"role" binding:"required"`
+}
+
+func (h *Handler) CreateTeamUser(c *gin.Context) {
+	businessID, err := middleware.CurrentBusinessID(c)
+	if err != nil {
+		response.Error(c, http.StatusUnauthorized, err.Error())
+		return
+	}
+	var req teamUserRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.Error(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	user, err := h.service.CreateTeamUser(RegisterInput{BusinessID: businessID, Name: req.Name, Email: req.Email, Password: req.Password, Role: req.Role})
+	if errors.Is(err, ErrEmailTaken) {
+		response.Error(c, http.StatusConflict, err.Error())
+		return
+	}
+	if errors.Is(err, ErrInvalidRole) {
+		response.Error(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err != nil {
+		response.Error(c, http.StatusInternalServerError, "failed to create user")
+		return
+	}
+	response.Success(c, http.StatusCreated, user)
+}
+func (h *Handler) ListTeam(c *gin.Context) {
+	businessID, err := middleware.CurrentBusinessID(c)
+	if err != nil {
+		response.Error(c, http.StatusUnauthorized, err.Error())
+		return
+	}
+	users, err := h.service.ListTeam(businessID)
+	if err != nil {
+		response.Error(c, http.StatusInternalServerError, "failed to list users")
+		return
+	}
+	response.Success(c, http.StatusOK, users)
 }
 
 func NewHandler(service Service) *Handler {

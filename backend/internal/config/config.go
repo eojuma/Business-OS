@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"strconv"
 
@@ -8,8 +9,8 @@ import (
 )
 
 type Config struct {
-	AppEnv  string
-	AppPort string
+	AppEnv      string
+	AppPort     string
 	FrontendURL string
 
 	DBHost     string
@@ -36,10 +37,9 @@ func Load() *Config {
 	_ = godotenv.Load()
 
 	return &Config{
-		AppEnv:  getEnv("APP_ENV", "development"),
-		AppPort: getEnv("APP_PORT", "8080"),
+		AppEnv:      getEnv("APP_ENV", "development"),
+		AppPort:     getEnv("APP_PORT", "8080"),
 		FrontendURL: getEnv("FRONTEND_URL", "http://localhost:3000"),
-
 
 		DBHost:     getEnv("DB_HOST", "localhost"),
 		DBPort:     getEnv("DB_PORT", "5432"),
@@ -64,6 +64,22 @@ func Load() *Config {
 
 func (c *Config) IsProduction() bool {
 	return c.AppEnv == "production"
+}
+
+func (c *Config) Validate() error {
+	if !c.IsProduction() {
+		return nil
+	}
+	if c.JWTSecret == "dev_secret_change_me" || c.JWTSecret == "change_me_in_production" || len(c.JWTSecret) < 32 {
+		return fmt.Errorf("JWT_SECRET must be a unique value of at least 32 characters in production")
+	}
+	if c.DBPassword == "businessos" {
+		return fmt.Errorf("DB_PASSWORD must not use the development default in production")
+	}
+	if c.DBSSLMode == "disable" {
+		return fmt.Errorf("DB_SSLMODE must enable TLS in production")
+	}
+	return nil
 }
 
 func getEnv(key, fallback string) string {

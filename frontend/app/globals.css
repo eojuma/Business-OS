@@ -1,3 +1,18 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+:root { --ink: #17211b; --muted: #6d796f; --line: #e5e9e4; --paper: #f7f9f6; --green: #16794c; --amber: #c78222; }
+* { box-sizing: border-box; }
+body { background: var(--paper); color: var(--ink); font-family: Arial, Helvetica, sans-serif; }
+button, input, select, textarea { font: inherit; }
+button { cursor: pointer; }
+button:disabled { cursor: not-allowed; }
+::selection { background: #b7e4c7; }
+@layer components {
+  .panel { @apply rounded-xl border border-[#e5e9e4] bg-white shadow-[0_4px_18px_rgba(23,33,27,0.04)]; }
+  .field { @apply w-full rounded-lg border border-[#d9e0d9] bg-white px-3 py-2.5 text-sm outline-none transition focus:border-[#16794c] focus:ring-2 focus:ring-[#16794c]/10; }
+  .btn-primary { @apply inline-flex items-center justify-center gap-2 rounded-lg bg-[#16794c] px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-[#12633e] disabled:opacity-50; }
+  .btn-secondary { @apply inline-flex items-center justify-center gap-2 rounded-lg border border-[#d9e0d9] bg-white px-4 py-2.5 text-sm font-semibold text-[#344139] transition hover:bg-[#f2f5f1] disabled:opacity-50; }
+  .eyebrow { @apply text-[11px] font-bold uppercase tracking-[0.14em] text-[#718078]; }
+}

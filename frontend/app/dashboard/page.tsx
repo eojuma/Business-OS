@@ -1,86 +1,9 @@
 "use client";
-
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
+import { AlertTriangle, ArrowUpRight, CircleDollarSign, CreditCard, Package, ShoppingCart, TrendingUp } from "lucide-react";
+import { PageHeader, StatCard, formatMoney } from "@/components/app-shell";
 
-interface Sale {
-  id: string;
-  total_amount: number;
-  created_at: string;
-}
-
-interface StockLevel {
-  id: string;
-  product_id: string;
-  quantity: number;
-  low_stock_threshold: number;
-}
-
-function formatMoney(cents: number): string {
-  return (cents / 100).toFixed(2);
-}
-
-export default function DashboardPage() {
-  const [sales, setSales] = useState<Sale[]>([]);
-  const [lowStock, setLowStock] = useState<StockLevel[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
-
-  useEffect(() => {
-    async function loadDashboard() {
-      try {
-        const [salesRes, lowStockRes] = await Promise.all([
-          api.get("/sales"),
-          api.get("/inventory/low-stock"),
-        ]);
-        setSales(salesRes.data.data || []);
-        setLowStock(lowStockRes.data.data || []);
-      } catch (err: any) {
-        setError(err.response?.data?.error || "Failed to load dashboard");
-      } finally {
-        setLoading(false);
-      }
-    }
-    loadDashboard();
-  }, []);
-
-  const today = new Date().toDateString();
-  const todaysSales = sales.filter(
-    (s) => new Date(s.created_at).toDateString() === today
-  );
-  const todaysTotal = todaysSales.reduce((sum, s) => sum + s.total_amount, 0);
-
-  if (loading) {
-    return <main className="p-8">Loading dashboard...</main>;
-  }
-
-  if (error) {
-    return <main className="p-8 text-red-600">{error}</main>;
-  }
-
-  return (
-    <main className="min-h-screen p-8">
-      <h1 className="mb-6 text-2xl font-semibold">Dashboard</h1>
-
-      <div className="grid gap-4 sm:grid-cols-2">
-        <div className="rounded-lg border border-gray-200 p-4">
-        <p className="text-sm text-gray-500">Today&apos;s Sales</p>
-          <p className="text-2xl font-semibold">
-            KSh {formatMoney(todaysTotal)}
-          </p>
-          <p className="text-sm text-gray-500">
-            {todaysSales.length} transaction{todaysSales.length !== 1 && "s"}
-          </p>
-        </div>
-
-        <div className="rounded-lg border border-gray-200 p-4">
-          <p className="text-sm text-gray-500">Low Stock Alerts</p>
-          <p className="text-2xl font-semibold">{lowStock.length}</p>
-          <p className="text-sm text-gray-500">
-            product{lowStock.length !== 1 && "s"} need restocking
-          </p>
-        </div>
-      </div>
-    </main>
-  );
-}
+type Overview = { revenue:number; profit:number; sale_count:number; average_sale:number; units_sold:number; customer_credit:number; supplier_debt:number; low_stock_count:number };
+type Notification = { severity:string; product_name:string; message:string; quantity:number; threshold:number };
+export default function DashboardPage() { const [data,setData]=useState<Overview|null>(null); const [alerts,setAlerts]=useState<Notification[]>([]); const [loading,setLoading]=useState(true); const [error,setError]=useState(""); useEffect(()=>{Promise.all([api.get("/analytics/overview"),api.get("/notifications")]).then(([a,n])=>{setData(a.data.data);setAlerts(n.data.data||[])}).catch((e)=>setError(e.response?.data?.error||"Unable to load your overview")).finally(()=>setLoading(false))},[]); if(loading)return <div className="space-y-6"><div className="h-10 w-52 animate-pulse rounded bg-[#e5e9e4]"/><div className="grid gap-4 md:grid-cols-4">{[1,2,3,4].map(i=><div key={i} className="h-32 animate-pulse rounded-xl bg-white"/>)}</div></div>; if(error)return <div className="panel p-6 text-sm text-red-700">{error}</div>; const d=data||{revenue:0,profit:0,sale_count:0,average_sale:0,units_sold:0,customer_credit:0,supplier_debt:0,low_stock_count:0}; return <><PageHeader eyebrow="Overview" title="Good morning" description="Here is how your business is moving today." action={<span className="hidden text-sm text-[#718078] sm:block">Live business snapshot</span>}/><div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4"><StatCard label="Revenue (30 days)" value={formatMoney(d.revenue)} note={`${d.sale_count} transactions`} icon={CircleDollarSign}/><StatCard label="Net profit" value={formatMoney(d.profit)} note="After product costs" icon={TrendingUp}/><StatCard label="Customer credit" value={formatMoney(d.customer_credit)} note="Outstanding balance" icon={CreditCard} tone="amber"/><StatCard label="Low stock items" value={String(d.low_stock_count)} note={`${d.units_sold} units sold`} icon={Package} tone={d.low_stock_count>0?"amber":"green"}/></div><div className="mt-6 grid gap-6 xl:grid-cols-[1.35fr_.65fr]"><section className="panel p-5"><div className="mb-5 flex items-center justify-between"><div><p className="eyebrow">Business pulse</p><h2 className="mt-1 text-lg font-bold">The numbers that need your attention</h2></div><ArrowUpRight size={19} className="text-[#16794c]"/></div><div className="grid gap-3 sm:grid-cols-3"><div className="rounded-lg bg-[#f7f9f6] p-4"><p className="text-xs text-[#718078]">Average sale</p><p className="mt-2 text-xl font-bold">{formatMoney(d.average_sale)}</p></div><div className="rounded-lg bg-[#f7f9f6] p-4"><p className="text-xs text-[#718078]">Supplier debt</p><p className="mt-2 text-xl font-bold">{formatMoney(d.supplier_debt)}</p></div><div className="rounded-lg bg-[#f7f9f6] p-4"><p className="text-xs text-[#718078]">Units moved</p><p className="mt-2 text-xl font-bold">{d.units_sold.toLocaleString()}</p></div></div><div className="mt-5 rounded-lg border border-dashed border-[#cfd8d0] p-4"><p className="text-sm font-semibold">Your next best action</p><p className="mt-1 text-sm text-[#718078]">{alerts.length?`Review ${alerts.length} low-stock alert${alerts.length===1?"":"s"} before the next rush.`:"Your stock is in good shape. Keep recording purchases as they arrive."}</p></div></section><section className="panel p-5"><div className="mb-4 flex items-center justify-between"><div><p className="eyebrow">Alerts</p><h2 className="mt-1 text-lg font-bold">Needs attention</h2></div><AlertTriangle size={19} className="text-[#c78222]"/></div>{alerts.length===0?<p className="py-8 text-sm text-[#718078]">No active alerts. You are all caught up.</p>:<div className="space-y-3">{alerts.slice(0,4).map((a,i)=><div key={i} className="flex gap-3 rounded-lg bg-[#fff8eb] p-3"><AlertTriangle size={16} className="mt-0.5 shrink-0 text-[#c78222]"/><div><p className="text-sm font-semibold">{a.product_name}</p><p className="mt-0.5 text-xs text-[#8c7756]">{a.message}</p></div></div>)}</div>}</section></div></> }

@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
+import { WalletCards } from "lucide-react";
 
 interface Customer {
   id: string;
@@ -25,6 +26,8 @@ export default function CustomersPage() {
   const [creditLimitInput, setCreditLimitInput] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [formError, setFormError] = useState("");
+  const [paying, setPaying] = useState<string | null>(null);
+  const [paymentAmount, setPaymentAmount] = useState("");
 
   async function loadCustomers() {
     try {
@@ -35,6 +38,15 @@ export default function CustomersPage() {
     } finally {
       setLoading(false);
     }
+  }
+
+  async function recordPayment(customerId: string) {
+    const amount = Math.round(Number(paymentAmount) * 100);
+    if (!amount || amount <= 0) { setFormError("Enter a valid payment amount"); return; }
+    try {
+      await api.post(`/customers/${customerId}/payments`, { amount });
+      setPaying(null); setPaymentAmount(""); await loadCustomers();
+    } catch (err: any) { setFormError(err.response?.data?.error || "Failed to record payment"); }
   }
 
   useEffect(() => {
@@ -125,6 +137,7 @@ export default function CustomersPage() {
               <th className="py-2">Phone</th>
               <th className="py-2 text-right">Balance owed</th>
               <th className="py-2 text-right">Credit limit</th>
+              <th className="py-2 text-right">Action</th>
             </tr>
           </thead>
           <tbody>
@@ -139,6 +152,9 @@ export default function CustomersPage() {
                 </td>
                 <td className="py-2 text-right text-gray-400">
                   KSh {formatMoney(c.credit_limit)}
+                </td>
+                <td className="py-2 text-right">
+                  {paying === c.id ? <span className="inline-flex gap-2"><input className="field w-28 py-1.5" type="number" min="0.01" step="0.01" placeholder="KSh" value={paymentAmount} onChange={(e) => setPaymentAmount(e.target.value)} /><button className="btn-primary py-1.5" onClick={() => recordPayment(c.id)}>Pay</button></span> : <button className="btn-secondary py-1.5" disabled={c.balance <= 0} onClick={() => setPaying(c.id)}><WalletCards size={15}/> Payment</button>}
                 </td>
               </tr>
             ))}

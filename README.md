@@ -16,12 +16,12 @@ Milestones 1–3 are done and tested live end to end — not just compiling, act
 | `customers` | ✅ | ✅ | Built & tested — profiles, credit limit enforcement, above-balance query |
 | `reports` | ✅ | ✅ | Built & tested — daily sales aggregated via Postgres `SUM`/`GROUP BY`, not loaded row-by-row |
 | Dashboard | — | ✅ | Today's sales, low-stock count, calls real endpoints |
-| `suppliers` | 🟡 Stub | — | Deferred — Version 2 |
-| `purchases` | 🟡 Stub | — | Deferred — Version 2 |
-| `finance` | 🟡 Stub | — | Not started |
-| `notifications` | 🟡 Stub | — | Deferred — Version 2 |
-| `analytics` | 🟡 Stub | — | Not started |
-| `assistant` | 🟡 Stub | — | **Next up** — deliberately last, since it depends on the service layers above |
+| `suppliers` | ✅ | — | Profiles, outstanding balances, and payments |
+| `purchases` | ✅ | — | Draft purchases, goods receipt, stock and supplier debt updates |
+| `finance` | ✅ | — | Expenses, profit, cash flow, and date-filtered summaries |
+| `notifications` | ✅ | — | Low-stock notifications with severity and product context |
+| `analytics` | ✅ | — | Overview, top-profit products, and slow-moving products |
+| `assistant` | ✅ | ✅ | Natural-language sale preview and explicit confirmation flow |
 
 ## Stack
 
@@ -35,7 +35,7 @@ Milestones 1–3 are done and tested live end to end — not just compiling, act
 
     Business-OS/
     ├── backend/
-    │   ├── cmd/api/main.go              # entrypoint, runs AutoMigrate on startup
+    │   ├── cmd/api/main.go              # entrypoint, runs versioned migrations on startup
     │   ├── Dockerfile                    # multi-stage Go build
     │   └── internal/
     │       ├── config/                  # env config, loaded once
@@ -163,7 +163,9 @@ The full loop — sign up, add a product, restock it, sell it, see it in reports
 
 ## Database migrations
 
-Currently using GORM's `AutoMigrate` on startup (see `main.go`) — every model from every module must be listed there explicitly, or its table silently never gets created (this bit us once already — caught via live testing, not the compiler). Fine for early development, but it can't safely handle things like column renames. Plan to move to versioned SQL migrations (e.g. [golang-migrate](https://github.com/golang-migrate/migrate)) before this touches production data.
+Versioned SQL migrations live in `backend/internal/shared/migrations/sql` and are embedded into the API binary. Pending migrations run automatically at startup and are recorded in `schema_migrations`.
+
+Run them explicitly with `make migrate-up`. `make migrate-down` rolls back only the most recently applied migration and is destructive, so use it deliberately.
 
 ## Build order
 
@@ -176,14 +178,12 @@ Matches the MVP scope in the product vision doc:
 5. ~~`customers`~~ ✅
 6. ~~Frontend (signup, dashboard, products, inventory, sales, customers)~~ ✅
 7. ~~`reports`~~ ✅
-8. **`assistant`** ← next — depends on stable service layers from the modules above, which are now built and live-tested
+8. ~~`assistant` sale entry flow~~ ✅
 
 ## Known gaps
 
-- No automated test suite yet — every fix so far has been verified by hand
-- No CI pipeline yet
-- `AutoMigrate` instead of real migrations (see above)
+- Test coverage is still limited; migration discovery is covered and CI runs backend tests plus the frontend production build
 - CORS origin is configurable via `FRONTEND_URL` but still assumes one single allowed origin — fine for one environment, will need revisiting for staging + production
-- No `suppliers`, `purchases`, `notifications` — deliberately deferred to post-MVP
-- `assistant`'s natural-language disambiguation flow (what happens when input is ambiguous — e.g. "sold hammers" with no quantity) is undecided — worth designing before writing the module's service layer
+- The frontend does not yet have dedicated supplier, purchasing, finance, notifications, or analytics screens; the authenticated APIs are available for the next UI milestone
+- The assistant currently handles sale entry only; business Q&A, report generation, forecasting, and anomaly detection remain future work
 - Not yet hardened for hosting: default JWT secret, default DB password, `GIN_MODE=debug` — see hosting checklist (tracked separately, not yet in this README)

@@ -2,8 +2,11 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Business OS",
-  description: "AI-powered operating system for hardware stores",
+  title: {
+    default: "Business OS | Run your store with clarity",
+    template: "%s | Business OS",
+  },
+  description: "Inventory, sales, customers, suppliers and financial insights for growing African hardware stores.",
 };
 
 export default function RootLayout({
@@ -13,7 +16,7 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en">
-      <body className="bg-gray-50 text-gray-900 antialiased">{children}</body>
+      <body className="antialiased">{children}</body>
     </html>
   );
 }

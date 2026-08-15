@@ -2,35 +2,41 @@ package main
 
 import (
 	"log"
+	"os"
 
 	"github.com/businessos/backend/internal/config"
-	"github.com/businessos/backend/internal/modules/auth"
-	"github.com/businessos/backend/internal/modules/business"
-	"github.com/businessos/backend/internal/modules/customers"
-	"github.com/businessos/backend/internal/modules/inventory"
-	"github.com/businessos/backend/internal/modules/products"
-	"github.com/businessos/backend/internal/modules/sales"
 	"github.com/businessos/backend/internal/router"
 	"github.com/businessos/backend/internal/shared/database"
+	"github.com/businessos/backend/internal/shared/migrations"
 )
 
 func main() {
 	cfg := config.Load()
+	if err := cfg.Validate(); err != nil {
+		log.Fatalf("invalid configuration: %v", err)
+	}
 
 	db := database.NewPostgres(cfg)
 	_ = database.NewRedis(cfg)
 
-	if err := db.AutoMigrate(
-		&business.Business{},
-		&auth.User{},
-		&products.Product{},
-		&inventory.StockLevel{},
-		&inventory.StockMovement{},
-		&sales.Sale{},
-		&sales.SaleLineItem{},
-		&customers.Customer{},
-	); err != nil {
-		log.Fatalf("failed to run auto-migration: %v", err)
+	if len(os.Args) >= 3 && os.Args[1] == "migrate" {
+		switch os.Args[2] {
+		case "up":
+			if err := migrations.Up(db); err != nil {
+				log.Fatalf("failed to run migrations: %v", err)
+			}
+		case "down":
+			if err := migrations.Down(db); err != nil {
+				log.Fatalf("failed to roll back migration: %v", err)
+			}
+		default:
+			log.Fatalf("unknown migration command %q (expected up or down)", os.Args[2])
+		}
+		return
+	}
+
+	if err := migrations.Up(db); err != nil {
+		log.Fatalf("failed to run migrations: %v", err)
 	}
 
 	r := router.New(db, cfg)

@@ -18,8 +18,14 @@ func NewHandler(service Service) *Handler {
 	return &Handler{service: service}
 }
 
+type historyMessage struct {
+	Role string `json:"role"`
+	Text string `json:"text"`
+}
+
 type interpretRequest struct {
-	Text string `json:"text" binding:"required"`
+	Text    string           `json:"text" binding:"required"`
+	History []historyMessage `json:"history"`
 }
 
 func (h *Handler) Interpret(c *gin.Context) {
@@ -35,7 +41,15 @@ func (h *Handler) Interpret(c *gin.Context) {
 		return
 	}
 
-	preview, err := h.service.Interpret(businessID, req.Text)
+	history := make([]Message, 0, len(req.History))
+	for _, m := range req.History {
+		history = append(history, Message{Role: m.Role, Text: m.Text})
+	}
+	if len(history) > 8 {
+		history = history[len(history)-8:]
+	}
+
+	preview, err := h.service.Interpret(businessID, req.Text, history)
 	if err != nil {
 		log.Printf("assistant: interpret failed: %v", err)
 		response.Error(c, http.StatusInternalServerError, "failed to interpret message")

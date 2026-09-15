@@ -58,10 +58,10 @@ func Load() *Config {
 		JWTSecret:      getEnv("JWT_SECRET", "dev_secret_change_me"),
 		JWTExpiryHours: getEnvInt("JWT_EXPIRY_HOURS", 24),
 
-		AIProvider: getEnv("AI_PROVIDER", "openai"),
+		AIProvider: getEnv("AI_PROVIDER", "gemini"),
 		AIAPIKey:   getEnv("AI_API_KEY", ""),
-		AIModel:    getEnv("AI_MODEL", "gpt-4o-mini"),
-		AIBaseURL:  getEnv("AI_BASE_URL", "https://api.openai.com/v1"),
+		AIModel:    getEnv("AI_MODEL", "gemini-3.6-flash"),
+		AIBaseURL:  getEnv("AI_BASE_URL", "https://generativelanguage.googleapis.com/v1beta/openai"),
 	}
 }
 

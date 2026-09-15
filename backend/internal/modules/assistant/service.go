@@ -66,6 +66,12 @@ type AnalyticsReader interface {
 	SlowMoving(businessID uuid.UUID, days int) ([]SlowMovingInfo, error)
 }
 
+// InventoryReader is read-only too: it can look up stock but cannot move it.
+type InventoryReader interface {
+	Quantity(businessID, productID uuid.UUID) (int64, error)
+	TotalQuantity(businessID uuid.UUID) (int64, error)
+}
+
 // Preview is the single response shape for /interpret.
 //
 // Kind is "sale" when the owner is recording a sale (then the frontend shows
@@ -92,14 +98,18 @@ type service struct {
 	products  ProductLister
 	sales     SaleCreator
 	analytics AnalyticsReader
+	inventory InventoryReader
 }
 
-func NewService(ai AIClient, products ProductLister, sales SaleCreator, analytics AnalyticsReader) Service {
-	return &service{ai: ai, products: products, sales: sales, analytics: analytics}
+func NewService(ai AIClient, products ProductLister, sales SaleCreator, analytics AnalyticsReader, inventory InventoryReader) Service {
+	return &service{ai: ai, products: products, sales: sales, analytics: analytics, inventory: inventory}
 }
 
 const (
 	intentRecordSale     = "record_sale"
+	intentProductStock   = "product_stock"
+	intentTotalStock     = "total_stock"
+	intentProductPrice   = "product_price"
 	intentProfitToday    = "profit_today"
 	intentRevenueToday   = "revenue_today"
 	intentSalesToday     = "sales_today"
@@ -111,7 +121,7 @@ const (
 	intentSlowMoving     = "slow_moving"
 )
 
-const unknownAnswer = "I can record a sale (try \"sold 3 cement\") or answer questions about today's profit and revenue, your product and category counts, low stock, customer credit, top sellers and slow-moving items."
+const unknownAnswer = "I can record a sale (try \"sold 3 cement\") or answer questions about stock levels, prices, today's profit and revenue, product and category counts, low stock, customer credit, top sellers and slow-moving items."
 
 type parsedMessage struct {
 	Intent      string `json:"intent"`
@@ -134,7 +144,7 @@ func (s *service) Interpret(businessID uuid.UUID, text string) (*Preview, error)
 	if intent == intentRecordSale {
 		return s.previewSale(businessID, parsed)
 	}
-	return s.answerQuestion(businessID, intent)
+	return s.answerQuestion(businessID, intent, parsed.ProductName)
 }
 
 // previewSale is the only path that can lead to a write, and only after the
@@ -182,11 +192,40 @@ func (s *service) previewSale(businessID uuid.UUID, parsed *parsedMessage) (*Pre
 
 // answerQuestion answers from data the code computes. The LLM only chooses the
 // intent; it never supplies the numbers and never writes anything.
-func (s *service) answerQuestion(businessID uuid.UUID, intent string) (*Preview, error) {
+func (s *service) answerQuestion(businessID uuid.UUID, intent, productName string) (*Preview, error) {
 	now := time.Now()
 	startOfDay := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
 
 	switch intent {
+	case intentProductStock:
+		p, notFound, err := s.resolveProduct(businessID, productName)
+		if err != nil || notFound != nil {
+			return notFound, err
+		}
+		quantity, err := s.inventory.Quantity(businessID, p.ID)
+		if err != nil {
+			return nil, fmt.Errorf("failed to load stock level: %w", err)
+		}
+		return answer(fmt.Sprintf("%s: %d %s left in stock.", p.Name, quantity, pluralize(p.Unit, quantity))), nil
+
+	case intentTotalStock:
+		products, err := s.products.List(businessID)
+		if err != nil {
+			return nil, fmt.Errorf("failed to load products: %w", err)
+		}
+		total, err := s.inventory.TotalQuantity(businessID)
+		if err != nil {
+			return nil, fmt.Errorf("failed to load total stock: %w", err)
+		}
+		return answer(fmt.Sprintf("You have %d %s in stock across %d product(s).", total, pluralize("unit", total), len(products))), nil
+
+	case intentProductPrice:
+		p, notFound, err := s.resolveProduct(businessID, productName)
+		if err != nil || notFound != nil {
+			return notFound, err
+		}
+		return answer(fmt.Sprintf("%s costs %s per %s.", p.Name, money(p.Price), unitOr(p.Unit, "unit"))), nil
+
 	case intentProfitToday:
 		o, err := s.analytics.Overview(businessID, startOfDay, now)
 		if err != nil {
@@ -290,19 +329,68 @@ func answer(message string) *Preview {
 	return &Preview{Kind: "answer", Understood: true, Message: message}
 }
 
+// resolveProduct finds the single product matching a name. When it cannot, it
+// returns a ready-to-send answer explaining why instead of an error.
+func (s *service) resolveProduct(businessID uuid.UUID, name string) (*ProductInfo, *Preview, error) {
+	if strings.TrimSpace(name) == "" {
+		return nil, answer("Which product do you mean? Try naming it, like \"cement\"."), nil
+	}
+
+	products, err := s.products.List(businessID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to load products: %w", err)
+	}
+
+	matches := matchProducts(products, name)
+	switch len(matches) {
+	case 0:
+		return nil, answer(fmt.Sprintf("I couldn't find a product matching %q. Check the name and try again.", name)), nil
+	case 1:
+		return &matches[0], nil, nil
+	default:
+		names := make([]string, len(matches))
+		for i, p := range matches {
+			names[i] = p.Name
+		}
+		return nil, answer(fmt.Sprintf("That matches more than one product: %s. Be more specific.", strings.Join(names, ", "))), nil
+	}
+}
+
+func unitOr(unit, fallback string) string {
+	if strings.TrimSpace(unit) == "" {
+		return fallback
+	}
+	return unit
+}
+
+func pluralize(unit string, count int64) string {
+	unit = unitOr(unit, "unit")
+	if count == 1 || strings.HasSuffix(unit, "s") {
+		return unit
+	}
+	return unit + "s"
+}
+
 func classifyPrompt(text string) string {
 	return fmt.Sprintf(`You route a message from a hardware store owner to one of these intents:
 
 - record_sale: the owner reports a sale. Also extract product_name and quantity.
+- product_stock: asking how much of one specific product is left. Extract product_name.
+- total_stock: asking how many items or units are left in total, across everything.
+- product_price: asking the price of one specific product. Extract product_name.
 - profit_today, revenue_today, sales_today: questions about today's numbers.
-- product_count, category_count: questions about how many products or categories exist.
-- low_stock: questions about items running low.
+- product_count: asking how many products exist in total.
+- category_count: asking how many product categories exist.
+- low_stock: asking how many products are running low / below their threshold.
 - customer_credit: questions about money customers owe.
 - top_products, slow_moving: questions about best or slow-selling items.
 - unknown: anything else.
 
+For product_name, return only the product noun (for example "cement"), never units or quantities.
+For total_stock, product_count, category_count and low_stock, leave product_name empty.
+
 Respond with ONLY a JSON object, no markdown fences, no explanation, in exactly this shape:
-{"intent": "<one of the intents above>", "product_name": "<item being sold, or empty string>", "quantity": <number, or 0>}
+{"intent": "<one of the intents above>", "product_name": "<product noun, or empty string>", "quantity": <number, or 0>}
 
 Message: %q`, text)
 }
@@ -323,13 +411,75 @@ func parseMessageJSON(raw string) (*parsedMessage, error) {
 
 func matchProducts(products []ProductInfo, query string) []ProductInfo {
 	query = strings.ToLower(strings.TrimSpace(query))
+	if query == "" {
+		return nil
+	}
+
 	var matches []ProductInfo
 	for _, p := range products {
 		if strings.Contains(strings.ToLower(p.Name), query) {
 			matches = append(matches, p)
 		}
 	}
-	return matches
+	if len(matches) > 0 {
+		return matches
+	}
+
+	// Fall back to matching significant words, so "bags of cement" still finds
+	// "Cement 50kg" when the model returns the whole phrase as product_name.
+	tokens := significantTokens(query)
+	if len(tokens) == 0 {
+		return nil
+	}
+
+	bestScore := 0
+	var best []ProductInfo
+	for _, p := range products {
+		name := strings.ToLower(p.Name)
+		score := 0
+		for _, token := range tokens {
+			if strings.Contains(name, token) {
+				score++
+			}
+		}
+		if score == 0 {
+			continue
+		}
+		switch {
+		case score > bestScore:
+			bestScore = score
+			best = []ProductInfo{p}
+		case score == bestScore:
+			best = append(best, p)
+		}
+	}
+	return best
+}
+
+var matchStopwords = map[string]bool{
+	"a": true, "an": true, "the": true, "of": true, "is": true, "are": true,
+	"how": true, "many": true, "much": true, "left": true, "stock": true,
+	"have": true, "do": true, "i": true, "we": true, "in": true, "on": true,
+	"at": true, "for": true, "price": true, "cost": true, "each": true,
+	"per": true, "single": true, "item": true, "items": true, "unit": true,
+	"units": true, "my": true, "what": true, "which": true, "bag": true,
+	"bags": true, "box": true, "boxes": true, "piece": true, "pieces": true,
+	"pcs": true,
+}
+
+func significantTokens(query string) []string {
+	fields := strings.FieldsFunc(query, func(r rune) bool {
+		return r == ' ' || r == ',' || r == '.' || r == '?' || r == '!' || r == '\'' || r == '"'
+	})
+	tokens := make([]string, 0, len(fields))
+	for _, field := range fields {
+		field = strings.TrimSpace(field)
+		if len(field) < 2 || matchStopwords[field] {
+			continue
+		}
+		tokens = append(tokens, field)
+	}
+	return tokens
 }
 
 func distinctCategories(products []ProductInfo) []string {

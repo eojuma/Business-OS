@@ -11,6 +11,7 @@ import (
 	"github.com/businessos/backend/internal/modules/inventory"
 	"github.com/businessos/backend/internal/modules/products"
 	"github.com/businessos/backend/internal/modules/sales"
+	"github.com/businessos/backend/internal/modules/suppliers"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
@@ -139,11 +140,60 @@ func (a *inventoryAdapter) TotalQuantity(businessID uuid.UUID) (int64, error) {
 	return a.repo.TotalStock(businessID)
 }
 
+func (a *inventoryAdapter) LowStock(businessID uuid.UUID) ([]StockLevelInfo, error) {
+	levels, err := a.repo.ListLowStock(businessID)
+	if err != nil {
+		return nil, err
+	}
+	infos := make([]StockLevelInfo, len(levels))
+	for i, l := range levels {
+		infos[i] = StockLevelInfo{ProductID: l.ProductID, Quantity: l.Quantity, Threshold: l.LowStockThreshold}
+	}
+	return infos, nil
+}
+
+// receivablesAdapter is read-only: it can list debtors but never change balances.
+type receivablesAdapter struct {
+	repo customers.Repository
+}
+
+func (a *receivablesAdapter) Debtors(businessID uuid.UUID) ([]DebtorInfo, error) {
+	list, err := a.repo.ListAboveBalance(businessID, 0)
+	if err != nil {
+		return nil, err
+	}
+	infos := make([]DebtorInfo, len(list))
+	for i, c := range list {
+		infos[i] = DebtorInfo{Name: c.Name, Balance: c.Balance}
+	}
+	return infos, nil
+}
+
+// payablesAdapter is read-only: it can list supplier balances but never pay them.
+type payablesAdapter struct {
+	repo suppliers.Repository
+}
+
+func (a *payablesAdapter) SuppliersOwed(businessID uuid.UUID) ([]SupplierDebtInfo, error) {
+	list, err := a.repo.List(businessID)
+	if err != nil {
+		return nil, err
+	}
+	infos := make([]SupplierDebtInfo, 0, len(list))
+	for _, s := range list {
+		if s.OutstandingBalance > 0 {
+			infos = append(infos, SupplierDebtInfo{Name: s.Name, Balance: s.OutstandingBalance})
+		}
+	}
+	return infos, nil
+}
+
 func RegisterRoutes(rg *gin.RouterGroup, db *gorm.DB, cfg *config.Config) {
 	productsRepo := products.NewRepository(db)
 	salesRepo := sales.NewRepository(db)
 	inventoryRepo := inventory.NewRepository(db)
 	customersRepo := customers.NewRepository(db)
+	suppliersRepo := suppliers.NewRepository(db)
 	customersSvc := customers.NewService(customersRepo)
 
 	inventoryMover := sales.NewInventoryAdapter(inventoryRepo)
@@ -156,8 +206,10 @@ func RegisterRoutes(rg *gin.RouterGroup, db *gorm.DB, cfg *config.Config) {
 	saleCreator := &saleAdapter{svc: salesSvc}
 	analyticsReader := &analyticsAdapter{svc: analytics.NewService(analytics.NewRepository(db))}
 	inventoryReader := &inventoryAdapter{repo: inventoryRepo}
+	receivablesReader := &receivablesAdapter{repo: customersRepo}
+	payablesReader := &payablesAdapter{repo: suppliersRepo}
 
-	svc := NewService(ai, productLister, saleCreator, analyticsReader, inventoryReader)
+	svc := NewService(ai, productLister, saleCreator, analyticsReader, inventoryReader, receivablesReader, payablesReader)
 	handler := NewHandler(svc)
 
 	group := rg.Group("/assistant")

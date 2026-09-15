@@ -4,14 +4,16 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 
 	"github.com/joho/godotenv"
 )
 
 type Config struct {
-	AppEnv      string
-	AppPort     string
-	FrontendURL string
+	AppEnv         string
+	AppPort        string
+	FrontendURL    string
+	AllowedOrigins []string
 
 	DBHost     string
 	DBPort     string
@@ -37,9 +39,10 @@ func Load() *Config {
 	_ = godotenv.Load()
 
 	return &Config{
-		AppEnv:      getEnv("APP_ENV", "development"),
-		AppPort:     getEnv("APP_PORT", "8080"),
-		FrontendURL: getEnv("FRONTEND_URL", "http://localhost:3000"),
+		AppEnv:         getEnv("APP_ENV", "development"),
+		AppPort:        getEnv("APP_PORT", "8080"),
+		FrontendURL:    getEnv("FRONTEND_URL", "http://localhost:3000"),
+		AllowedOrigins: parseOrigins(getEnv("FRONTEND_URL", "http://localhost:3000")),
 
 		DBHost:     getEnv("DB_HOST", "localhost"),
 		DBPort:     getEnv("DB_PORT", "5432"),
@@ -80,6 +83,28 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("DB_SSLMODE must enable TLS in production")
 	}
 	return nil
+}
+
+// parseOrigins splits a comma-separated FRONTEND_URL into an allowlist and
+// always includes the local development origins so `npm run dev` keeps working.
+func parseOrigins(raw string) []string {
+	seen := make(map[string]bool)
+	origins := make([]string, 0)
+	add := func(origin string) {
+		origin = strings.TrimSpace(origin)
+		if origin != "" && !seen[origin] {
+			seen[origin] = true
+			origins = append(origins, origin)
+		}
+	}
+
+	for _, origin := range strings.Split(raw, ",") {
+		add(origin)
+	}
+	add("http://localhost:3000")
+	add("http://127.0.0.1:3000")
+
+	return origins
 }
 
 func getEnv(key, fallback string) string {

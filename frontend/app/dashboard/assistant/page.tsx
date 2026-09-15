@@ -36,11 +36,14 @@ export default function AssistantPage() {
 
     const text = input.trim();
     setInput("");
+    const history = entries
+      .slice(-6)
+      .map((entry) => ({ role: entry.role, text: entry.text }));
     setEntries((prev) => [...prev, { role: "user", text }]);
     setLoading(true);
 
     try {
-      const res = await api.post("/assistant/interpret", { text });
+      const res = await api.post("/assistant/interpret", { text, history });
       const preview: Preview = res.data.data;
 
       setEntries((prev) => [

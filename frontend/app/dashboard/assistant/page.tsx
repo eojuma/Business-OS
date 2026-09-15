@@ -4,6 +4,7 @@ import { useState } from "react";
 import { api } from "@/lib/api";
 
 interface Preview {
+  Kind: "sale" | "answer";
   Understood: boolean;
   ProductID: string;
   ProductName: string;
@@ -47,7 +48,7 @@ export default function AssistantPage() {
         {
           role: "assistant",
           text: preview.Message,
-          preview: preview.Understood ? preview : undefined,
+          preview: preview.Kind === "sale" && preview.Understood ? preview : undefined,
         },
       ]);
     } catch (err: any) {
@@ -108,7 +109,8 @@ export default function AssistantPage() {
     <main className="flex min-h-screen flex-col p-8">
       <h1 className="mb-2 text-2xl font-semibold">Assistant</h1>
       <p className="mb-6 text-sm text-gray-500">
-        Try: &quot;sold 3 cement&quot; — nothing is recorded until you confirm.
+        Try &quot;sold 3 cement&quot; to record a sale, or ask &quot;what&apos;s my
+        profit today?&quot;. Nothing is saved until you confirm.
       </p>
 
       <div className="mb-4 max-w-2xl flex-1 space-y-3">

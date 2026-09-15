@@ -1,6 +1,7 @@
 package assistant
 
 import (
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -41,21 +42,51 @@ func (f *fakeAnalytics) SlowMoving(uuid.UUID, int) ([]SlowMovingInfo, error) {
 type fakeInventory struct {
 	byProduct map[uuid.UUID]int64
 	total     int64
+	low       []StockLevelInfo
 }
 
 func (f *fakeInventory) Quantity(_ uuid.UUID, productID uuid.UUID) (int64, error) {
 	return f.byProduct[productID], nil
 }
 func (f *fakeInventory) TotalQuantity(uuid.UUID) (int64, error) { return f.total, nil }
+func (f *fakeInventory) LowStock(uuid.UUID) ([]StockLevelInfo, error) {
+	return f.low, nil
+}
 
-func newTestService(reply string, products []ProductInfo, sales *fakeSales) Service {
+type fakeReceivables struct{ debtors []DebtorInfo }
+
+func (f *fakeReceivables) Debtors(uuid.UUID) ([]DebtorInfo, error) { return f.debtors, nil }
+
+type fakePayables struct{ owed []SupplierDebtInfo }
+
+func (f *fakePayables) SuppliersOwed(uuid.UUID) ([]SupplierDebtInfo, error) { return f.owed, nil }
+
+func buildService(reply string, products []ProductInfo, sales *fakeSales, inventory *fakeInventory, receivables *fakeReceivables, payables *fakePayables) Service {
+	if sales == nil {
+		sales = &fakeSales{}
+	}
+	if inventory == nil {
+		inventory = &fakeInventory{}
+	}
+	if receivables == nil {
+		receivables = &fakeReceivables{}
+	}
+	if payables == nil {
+		payables = &fakePayables{}
+	}
 	return NewService(
 		&fakeAI{reply: reply},
 		&fakeProducts{items: products},
 		sales,
 		&fakeAnalytics{overview: OverviewInfo{Revenue: 50000, Profit: 12000, SaleCount: 4, UnitsSold: 9, CustomerCredit: 7500, LowStockCount: 2}},
-		&fakeInventory{total: 42},
+		inventory,
+		receivables,
+		payables,
 	)
+}
+
+func newTestService(reply string, products []ProductInfo, sales *fakeSales) Service {
+	return buildService(reply, products, sales, nil, nil, nil)
 }
 
 func TestInterpretSalePreviewDoesNotWrite(t *testing.T) {
@@ -66,7 +97,7 @@ func TestInterpretSalePreviewDoesNotWrite(t *testing.T) {
 		sales,
 	)
 
-	preview, err := svc.Interpret(uuid.New(), "sold 3 cement")
+	preview, err := svc.Interpret(uuid.New(), "sold 3 cement", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -96,7 +127,7 @@ func TestConfirmPerformsWrite(t *testing.T) {
 func TestAnswerProfitToday(t *testing.T) {
 	svc := newTestService(`{"intent":"profit_today"}`, nil, &fakeSales{})
 
-	preview, err := svc.Interpret(uuid.New(), "what is the profit today")
+	preview, err := svc.Interpret(uuid.New(), "what is the profit today", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -119,7 +150,7 @@ func TestAnswerCategoryCount(t *testing.T) {
 		&fakeSales{},
 	)
 
-	preview, err := svc.Interpret(uuid.New(), "how many product categories do i have?")
+	preview, err := svc.Interpret(uuid.New(), "how many product categories do i have?", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -131,7 +162,7 @@ func TestAnswerCategoryCount(t *testing.T) {
 func TestUnknownIntentGivesHelp(t *testing.T) {
 	svc := newTestService(`{"intent":"unknown"}`, nil, &fakeSales{})
 
-	preview, err := svc.Interpret(uuid.New(), "hello there")
+	preview, err := svc.Interpret(uuid.New(), "hello there", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -142,15 +173,15 @@ func TestUnknownIntentGivesHelp(t *testing.T) {
 
 func TestAnswerProductStockWithPhrase(t *testing.T) {
 	cementID := uuid.New()
-	svc := NewService(
-		&fakeAI{reply: `{"intent":"product_stock","product_name":"bags of cement"}`},
-		&fakeProducts{items: []ProductInfo{{ID: cementID, Name: "Cement 50kg", Unit: "bag", Price: 45050}}},
-		&fakeSales{},
-		&fakeAnalytics{},
+	svc := buildService(
+		`{"intent":"product_stock","product_name":"bags of cement"}`,
+		[]ProductInfo{{ID: cementID, Name: "Cement 50kg", Unit: "bag", Price: 45050}},
+		nil,
 		&fakeInventory{byProduct: map[uuid.UUID]int64{cementID: 17}, total: 30},
+		nil, nil,
 	)
 
-	preview, err := svc.Interpret(uuid.New(), "how many bags of cement are left?")
+	preview, err := svc.Interpret(uuid.New(), "how many bags of cement are left?", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -160,15 +191,15 @@ func TestAnswerProductStockWithPhrase(t *testing.T) {
 }
 
 func TestAnswerTotalStock(t *testing.T) {
-	svc := NewService(
-		&fakeAI{reply: `{"intent":"total_stock"}`},
-		&fakeProducts{items: []ProductInfo{{Name: "Cement 50kg"}, {Name: "Hammer"}}},
-		&fakeSales{},
-		&fakeAnalytics{},
+	svc := buildService(
+		`{"intent":"total_stock"}`,
+		[]ProductInfo{{Name: "Cement 50kg"}, {Name: "Hammer"}},
+		nil,
 		&fakeInventory{total: 42},
+		nil, nil,
 	)
 
-	preview, err := svc.Interpret(uuid.New(), "how many items are left?")
+	preview, err := svc.Interpret(uuid.New(), "how many items are left?", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -178,19 +209,101 @@ func TestAnswerTotalStock(t *testing.T) {
 }
 
 func TestAnswerProductPrice(t *testing.T) {
-	svc := NewService(
-		&fakeAI{reply: `{"intent":"product_price","product_name":"cement"}`},
-		&fakeProducts{items: []ProductInfo{{ID: uuid.New(), Name: "Cement 50kg", Unit: "bag", Price: 45050}}},
-		&fakeSales{},
-		&fakeAnalytics{},
-		&fakeInventory{},
+	svc := buildService(
+		`{"intent":"product_price","product_name":"cement"}`,
+		[]ProductInfo{{ID: uuid.New(), Name: "Cement 50kg", Unit: "bag", Price: 45050}},
+		nil, nil, nil, nil,
 	)
 
-	preview, err := svc.Interpret(uuid.New(), "what is the price a single bag of cement?")
+	preview, err := svc.Interpret(uuid.New(), "what is the price a single bag of cement?", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if !strings.Contains(preview.Message, "450.50") || !strings.Contains(preview.Message, "bag") {
 		t.Fatalf("got %q, want the cement price per bag", preview.Message)
+	}
+}
+
+func TestFollowUpResolvesSingleProduct(t *testing.T) {
+	svc := buildService(
+		`{"intent":"product_price"}`,
+		[]ProductInfo{{ID: uuid.New(), Name: "Cement 50kg", Unit: "bag", Price: 45050}},
+		nil, nil, nil, nil,
+	)
+
+	preview, err := svc.Interpret(uuid.New(), "what is the price of each?", []Message{{Role: "assistant", Text: "Cement 50kg: 17 bags left in stock."}})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(preview.Message, "Cement 50kg") || !strings.Contains(preview.Message, "450.50") {
+		t.Fatalf("got %q, want the single product's price", preview.Message)
+	}
+}
+
+func TestAnswerProductList(t *testing.T) {
+	svc := newTestService(
+		`{"intent":"product_list"}`,
+		[]ProductInfo{{Name: "Cement 50kg"}, {Name: "Hammer"}},
+		nil,
+	)
+
+	preview, err := svc.Interpret(uuid.New(), "what products do i have?", nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(preview.Message, "Cement 50kg") || !strings.Contains(preview.Message, "Hammer") {
+		t.Fatalf("got %q, want both product names", preview.Message)
+	}
+}
+
+func TestAnswerLowStockItems(t *testing.T) {
+	hammerID := uuid.New()
+	svc := buildService(
+		`{"intent":"low_stock_items"}`,
+		[]ProductInfo{{ID: hammerID, Name: "Hammer"}},
+		nil,
+		&fakeInventory{low: []StockLevelInfo{{ProductID: hammerID, Quantity: 1, Threshold: 3}}},
+		nil, nil,
+	)
+
+	preview, err := svc.Interpret(uuid.New(), "which items are running low?", nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(preview.Message, "Hammer") || !strings.Contains(preview.Message, "1 left") {
+		t.Fatalf("got %q, want Hammer flagged as low", preview.Message)
+	}
+}
+
+func TestAnswerCustomerDebtList(t *testing.T) {
+	svc := buildService(
+		`{"intent":"customer_debt_list"}`,
+		nil, nil, nil,
+		&fakeReceivables{debtors: []DebtorInfo{{Name: "Jane", Balance: 25000}}},
+		nil,
+	)
+
+	preview, err := svc.Interpret(uuid.New(), "who owes me money?", nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(preview.Message, "Jane") || !strings.Contains(preview.Message, "250.00") {
+		t.Fatalf("got %q, want Jane owing 250.00", preview.Message)
+	}
+}
+
+func TestAIErrorReturnsFriendlyAnswer(t *testing.T) {
+	svc := NewService(
+		&fakeAI{err: errors.New("boom")},
+		&fakeProducts{}, &fakeSales{},
+		&fakeAnalytics{}, &fakeInventory{}, &fakeReceivables{}, &fakePayables{},
+	)
+
+	preview, err := svc.Interpret(uuid.New(), "sold 3 cement", nil)
+	if err != nil {
+		t.Fatalf("expected a friendly answer, got error: %v", err)
+	}
+	if preview.Kind != "answer" || !strings.Contains(preview.Message, "try again") {
+		t.Fatalf("got kind=%q message=%q, want a friendly retry answer", preview.Kind, preview.Message)
 	}
 }

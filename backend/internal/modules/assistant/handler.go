@@ -1,6 +1,7 @@
 package assistant
 
 import (
+	"log"
 	"net/http"
 
 	"github.com/businessos/backend/internal/shared/middleware"
@@ -36,6 +37,7 @@ func (h *Handler) Interpret(c *gin.Context) {
 
 	preview, err := h.service.Interpret(businessID, req.Text)
 	if err != nil {
+		log.Printf("assistant: interpret failed: %v", err)
 		response.Error(c, http.StatusInternalServerError, "failed to interpret message")
 		return
 	}
@@ -69,6 +71,7 @@ func (h *Handler) Confirm(c *gin.Context) {
 
 	result, err := h.service.Confirm(businessID, productID, req.Quantity)
 	if err != nil {
+		log.Printf("assistant: confirm failed: %v", err)
 		response.Error(c, http.StatusInternalServerError, "failed to record sale")
 		return
 	}

@@ -2,8 +2,10 @@ package assistant
 
 import (
 	"log"
+	"time"
 
 	"github.com/businessos/backend/internal/config"
+	"github.com/businessos/backend/internal/modules/analytics"
 	"github.com/businessos/backend/internal/modules/customers"
 	"github.com/businessos/backend/internal/modules/inventory"
 	"github.com/businessos/backend/internal/modules/products"
@@ -26,10 +28,11 @@ func (a *productAdapter) List(businessID uuid.UUID) ([]ProductInfo, error) {
 	infos := make([]ProductInfo, len(list))
 	for i, p := range list {
 		infos[i] = ProductInfo{
-			ID:    p.ID,
-			Name:  p.Name,
-			Price: p.Price,
-			Unit:  p.Unit,
+			ID:       p.ID,
+			Name:     p.Name,
+			Price:    p.Price,
+			Unit:     p.Unit,
+			Category: p.Category,
 		}
 	}
 	return infos, nil
@@ -62,6 +65,59 @@ func (a *saleAdapter) CreateSale(businessID uuid.UUID, items []SaleItem) (*SaleR
 	}, nil
 }
 
+// analyticsAdapter exposes only the read-only aggregates the assistant uses.
+type analyticsAdapter struct {
+	svc analytics.Service
+}
+
+func (a *analyticsAdapter) Overview(businessID uuid.UUID, from, to time.Time) (*OverviewInfo, error) {
+	o, err := a.svc.Overview(businessID, from, to)
+	if err != nil {
+		return nil, err
+	}
+	return &OverviewInfo{
+		Revenue:        o.Revenue,
+		Profit:         o.Profit,
+		SaleCount:      o.SaleCount,
+		UnitsSold:      o.UnitsSold,
+		CustomerCredit: o.CustomerCredit,
+		LowStockCount:  o.LowStockCount,
+	}, nil
+}
+
+func (a *analyticsAdapter) TopProducts(businessID uuid.UUID, from, to time.Time, limit int) ([]TopProductInfo, error) {
+	list, err := a.svc.TopProducts(businessID, from, to, limit)
+	if err != nil {
+		return nil, err
+	}
+	infos := make([]TopProductInfo, len(list))
+	for i, p := range list {
+		infos[i] = TopProductInfo{
+			ProductName:  p.ProductName,
+			QuantitySold: p.QuantitySold,
+			Revenue:      p.Revenue,
+			Profit:       p.Profit,
+		}
+	}
+	return infos, nil
+}
+
+func (a *analyticsAdapter) SlowMoving(businessID uuid.UUID, days int) ([]SlowMovingInfo, error) {
+	list, err := a.svc.SlowMoving(businessID, days)
+	if err != nil {
+		return nil, err
+	}
+	infos := make([]SlowMovingInfo, len(list))
+	for i, p := range list {
+		infos[i] = SlowMovingInfo{
+			ProductName:    p.ProductName,
+			QuantityOnHand: p.QuantityOnHand,
+			DaysSinceSale:  p.DaysSinceSale,
+		}
+	}
+	return infos, nil
+}
+
 func RegisterRoutes(rg *gin.RouterGroup, db *gorm.DB, cfg *config.Config) {
 	productsRepo := products.NewRepository(db)
 	salesRepo := sales.NewRepository(db)
@@ -77,8 +133,9 @@ func RegisterRoutes(rg *gin.RouterGroup, db *gorm.DB, cfg *config.Config) {
 	log.Printf("assistant: ai base_url=%s model=%s key_set=%t", cfg.AIBaseURL, cfg.AIModel, cfg.AIAPIKey != "")
 	productLister := &productAdapter{repo: productsRepo}
 	saleCreator := &saleAdapter{svc: salesSvc}
+	analyticsReader := &analyticsAdapter{svc: analytics.NewService(analytics.NewRepository(db))}
 
-	svc := NewService(ai, productLister, saleCreator)
+	svc := NewService(ai, productLister, saleCreator, analyticsReader)
 	handler := NewHandler(svc)
 
 	group := rg.Group("/assistant")

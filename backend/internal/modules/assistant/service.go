@@ -8,18 +8,16 @@ import (
 	"github.com/google/uuid"
 )
 
-
 type ProductInfo struct {
 	ID    uuid.UUID
 	Name  string
-	Price int64 
+	Price int64
 	Unit  string
 }
 
 type ProductLister interface {
 	List(businessID uuid.UUID) ([]ProductInfo, error)
 }
-
 
 type SaleItem struct {
 	ProductID uuid.UUID
@@ -35,14 +33,13 @@ type SaleCreator interface {
 	CreateSale(businessID uuid.UUID, items []SaleItem) (*SaleResult, error)
 }
 
-
 type Preview struct {
 	Understood  bool
 	ProductID   uuid.UUID
 	ProductName string
 	Quantity    int64
 	UnitPrice   int64
-	TotalAmount int64 
+	TotalAmount int64
 	Message     string
 }
 
@@ -60,7 +57,6 @@ type service struct {
 func NewService(ai AIClient, products ProductLister, sales SaleCreator) Service {
 	return &service{ai: ai, products: products, sales: sales}
 }
-
 
 type parsedIntent struct {
 	ProductName string `json:"product_name"`

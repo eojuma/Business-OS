@@ -1,6 +1,8 @@
 package assistant
 
 import (
+	"log"
+
 	"github.com/businessos/backend/internal/config"
 	"github.com/businessos/backend/internal/modules/customers"
 	"github.com/businessos/backend/internal/modules/inventory"
@@ -32,7 +34,6 @@ func (a *productAdapter) List(businessID uuid.UUID) ([]ProductInfo, error) {
 	}
 	return infos, nil
 }
-
 
 type saleAdapter struct {
 	svc sales.Service
@@ -73,6 +74,7 @@ func RegisterRoutes(rg *gin.RouterGroup, db *gorm.DB, cfg *config.Config) {
 	salesSvc := sales.NewService(salesRepo, inventoryMover, productsRepo, customerCharger)
 
 	ai := NewAIClient(cfg)
+	log.Printf("assistant: ai base_url=%s model=%s key_set=%t", cfg.AIBaseURL, cfg.AIModel, cfg.AIAPIKey != "")
 	productLister := &productAdapter{repo: productsRepo}
 	saleCreator := &saleAdapter{svc: salesSvc}
 

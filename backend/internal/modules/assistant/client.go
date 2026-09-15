@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
+	"time"
 
 	"github.com/businessos/backend/internal/config"
 )
@@ -21,13 +23,15 @@ type geminiClient struct {
 	apiKey  string
 	baseURL string
 	model   string
+	http    *http.Client
 }
 
 func NewAIClient(cfg *config.Config) AIClient {
 	return &geminiClient{
-		apiKey:  cfg.AIAPIKey,
-		baseURL: cfg.AIBaseURL,
+		apiKey:  strings.TrimSpace(cfg.AIAPIKey),
+		baseURL: strings.TrimRight(strings.TrimSpace(cfg.AIBaseURL), "/"),
 		model:   cfg.AIModel,
+		http:    &http.Client{Timeout: 30 * time.Second},
 	}
 }
 
@@ -50,6 +54,13 @@ type chatResponse struct {
 }
 
 func (c *geminiClient) Complete(prompt string) (string, error) {
+	if c.apiKey == "" {
+		return "", fmt.Errorf("AI_API_KEY is not configured")
+	}
+	if c.baseURL == "" {
+		return "", fmt.Errorf("AI_BASE_URL is not configured")
+	}
+
 	body, err := json.Marshal(chatRequest{
 		Model: c.model,
 		Messages: []chatMessage{
@@ -60,16 +71,17 @@ func (c *geminiClient) Complete(prompt string) (string, error) {
 		return "", err
 	}
 
-	req, err := http.NewRequest(http.MethodPost, c.baseURL+"/chat/completions", bytes.NewReader(body))
+	endpoint := c.baseURL + "/chat/completions"
+	req, err := http.NewRequest(http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
 		return "", err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+c.apiKey)
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := c.http.Do(req)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("ai request to %s failed: %w", endpoint, err)
 	}
 	defer resp.Body.Close()
 
@@ -79,7 +91,7 @@ func (c *geminiClient) Complete(prompt string) (string, error) {
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("ai request failed (%d): %s", resp.StatusCode, string(respBody))
+		return "", fmt.Errorf("ai request to %s with model %q failed (%d): %s", endpoint, c.model, resp.StatusCode, string(respBody))
 	}
 
 	var parsed chatResponse

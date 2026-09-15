@@ -1,6 +1,7 @@
 package assistant
 
 import (
+	"errors"
 	"log"
 	"time"
 
@@ -118,6 +119,26 @@ func (a *analyticsAdapter) SlowMoving(businessID uuid.UUID, days int) ([]SlowMov
 	return infos, nil
 }
 
+// inventoryAdapter is read-only: it can look up stock but never move it.
+type inventoryAdapter struct {
+	repo inventory.Repository
+}
+
+func (a *inventoryAdapter) Quantity(businessID, productID uuid.UUID) (int64, error) {
+	level, err := a.repo.GetStockLevel(productID, businessID)
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	return level.Quantity, nil
+}
+
+func (a *inventoryAdapter) TotalQuantity(businessID uuid.UUID) (int64, error) {
+	return a.repo.TotalStock(businessID)
+}
+
 func RegisterRoutes(rg *gin.RouterGroup, db *gorm.DB, cfg *config.Config) {
 	productsRepo := products.NewRepository(db)
 	salesRepo := sales.NewRepository(db)
@@ -134,8 +155,9 @@ func RegisterRoutes(rg *gin.RouterGroup, db *gorm.DB, cfg *config.Config) {
 	productLister := &productAdapter{repo: productsRepo}
 	saleCreator := &saleAdapter{svc: salesSvc}
 	analyticsReader := &analyticsAdapter{svc: analytics.NewService(analytics.NewRepository(db))}
+	inventoryReader := &inventoryAdapter{repo: inventoryRepo}
 
-	svc := NewService(ai, productLister, saleCreator, analyticsReader)
+	svc := NewService(ai, productLister, saleCreator, analyticsReader, inventoryReader)
 	handler := NewHandler(svc)
 
 	group := rg.Group("/assistant")

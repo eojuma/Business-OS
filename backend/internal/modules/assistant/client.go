@@ -31,7 +31,7 @@ func NewAIClient(cfg *config.Config) AIClient {
 		apiKey:  strings.TrimSpace(cfg.AIAPIKey),
 		baseURL: strings.TrimRight(strings.TrimSpace(cfg.AIBaseURL), "/"),
 		model:   cfg.AIModel,
-		http:    &http.Client{Timeout: 30 * time.Second},
+		http:    &http.Client{Timeout: 20 * time.Second},
 	}
 }
 
@@ -71,36 +71,57 @@ func (c *geminiClient) Complete(prompt string) (string, error) {
 		return "", err
 	}
 
+	// Transient provider hiccups (rate limits, 5xx) are common on the free
+	// tiers, so try twice before giving up.
+	var lastErr error
+	for attempt := 0; attempt < 2; attempt++ {
+		if attempt > 0 {
+			time.Sleep(600 * time.Millisecond)
+		}
+		content, retryable, err := c.do(body)
+		if err == nil {
+			return content, nil
+		}
+		lastErr = err
+		if !retryable {
+			break
+		}
+	}
+	return "", lastErr
+}
+
+func (c *geminiClient) do(body []byte) (content string, retryable bool, err error) {
 	endpoint := c.baseURL + "/chat/completions"
 	req, err := http.NewRequest(http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+c.apiKey)
 
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("ai request to %s failed: %w", endpoint, err)
+		return "", true, fmt.Errorf("ai request to %s failed: %w", endpoint, err)
 	}
 	defer resp.Body.Close()
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return "", err
+		return "", true, err
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("ai request to %s with model %q failed (%d): %s", endpoint, c.model, resp.StatusCode, string(respBody))
+		retryable = resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500
+		return "", retryable, fmt.Errorf("ai request to %s with model %q failed (%d): %s", endpoint, c.model, resp.StatusCode, string(respBody))
 	}
 
 	var parsed chatResponse
 	if err := json.Unmarshal(respBody, &parsed); err != nil {
-		return "", err
+		return "", false, err
 	}
 	if len(parsed.Choices) == 0 {
-		return "", fmt.Errorf("ai returned no choices")
+		return "", false, fmt.Errorf("ai returned no choices")
 	}
 
-	return parsed.Choices[0].Message.Content, nil
+	return parsed.Choices[0].Message.Content, false, nil
 }

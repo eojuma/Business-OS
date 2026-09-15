@@ -10,6 +10,7 @@ type Repository interface {
 	GetStockLevel(productID, businessID uuid.UUID) (*StockLevel, error)
 	ListLowStock(businessID uuid.UUID) ([]StockLevel, error)
 	ListMovements(productID, businessID uuid.UUID) ([]StockMovement, error)
+	TotalStock(businessID uuid.UUID) (int64, error)
 	RecordMovementTx(tx *gorm.DB, businessID, productID uuid.UUID, movementType string, quantity int64, note string) error
 }
 
@@ -101,6 +102,15 @@ func (r *repository) ListLowStock(businessID uuid.UUID) ([]StockLevel, error) {
 		return nil, err
 	}
 	return levels, nil
+}
+
+func (r *repository) TotalStock(businessID uuid.UUID) (int64, error) {
+	var total int64
+	err := r.db.Model(&StockLevel{}).
+		Where("business_id = ?", businessID).
+		Select("COALESCE(SUM(quantity), 0)").
+		Scan(&total).Error
+	return total, err
 }
 
 func (r *repository) ListMovements(productID, businessID uuid.UUID) ([]StockMovement, error) {

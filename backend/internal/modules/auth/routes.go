@@ -19,6 +19,7 @@ func RegisterRoutes(rg *gin.RouterGroup, db *gorm.DB, cfg *config.Config) {
 		authGroup.POST("/register", handler.Register)
 		authGroup.POST("/login", handler.Login)
 	}
+	authGroup.GET("/me", middleware.RequireAuth(cfg), handler.Me)
 	team := rg.Group("/users")
 	team.Use(middleware.RequireAuth(cfg), middleware.RequireRole("owner"))
 	team.GET("", handler.ListTeam)

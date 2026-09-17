@@ -44,6 +44,7 @@ type Service interface {
 	Login(input LoginInput) (*AuthResult, error)
 	CreateTeamUser(input RegisterInput) (*User, error)
 	ListTeam(businessID uuid.UUID) ([]User, error)
+	GetByID(id uuid.UUID) (*User, error)
 }
 
 func validRole(role string) bool { return role == "owner" || role == "manager" || role == "cashier" }
@@ -67,6 +68,10 @@ func (s *service) CreateTeamUser(input RegisterInput) (*User, error) {
 }
 func (s *service) ListTeam(businessID uuid.UUID) ([]User, error) {
 	return s.repo.ListByBusiness(businessID)
+}
+
+func (s *service) GetByID(id uuid.UUID) (*User, error) {
+	return s.repo.FindByID(id)
 }
 
 type service struct {

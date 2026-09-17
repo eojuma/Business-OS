@@ -65,6 +65,25 @@ func NewHandler(service Service) *Handler {
 	return &Handler{service: service}
 }
 
+func (h *Handler) Me(c *gin.Context) {
+	userIDStr, exists := c.Get(middleware.ContextUserIDKey)
+	if !exists {
+		response.Error(c, http.StatusUnauthorized, "user not found in context")
+		return
+	}
+	userID, err := uuid.Parse(userIDStr.(string))
+	if err != nil {
+		response.Error(c, http.StatusBadRequest, "invalid user id")
+		return
+	}
+	user, err := h.service.GetByID(userID)
+	if err != nil {
+		response.Error(c, http.StatusNotFound, "user not found")
+		return
+	}
+	response.Success(c, http.StatusOK, user)
+}
+
 type registerRequest struct {
 	BusinessID string `json:"business_id" binding:"required,uuid"`
 	Name       string `json:"name" binding:"required"`

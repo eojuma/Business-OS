@@ -3,8 +3,10 @@ package main
 import (
 	"log"
 	"os"
+	"time"
 
 	"github.com/businessos/backend/internal/config"
+	"github.com/businessos/backend/internal/modules/notifications"
 	"github.com/businessos/backend/internal/router"
 	"github.com/businessos/backend/internal/shared/database"
 	"github.com/businessos/backend/internal/shared/migrations"
@@ -38,6 +40,10 @@ func main() {
 	if err := migrations.Up(db); err != nil {
 		log.Fatalf("failed to run migrations: %v", err)
 	}
+
+	// Background alerts: low stock and credit limits. Runs once at startup
+	// and then every 15 minutes.
+	notifications.StartScheduler(db, 15*time.Minute)
 
 	r := router.New(db, cfg)
 

@@ -13,6 +13,8 @@ var (
 	ErrCreditLimitExceeded = errors.New("this sale would exceed the customer's credit limit")
 	ErrInvalidSaleItem     = errors.New("sale quantities must be positive")
 	ErrInvalidDiscount     = errors.New("discount cannot be negative or exceed the sale subtotal")
+	ErrInvalidSaleType     = errors.New("sale_type must be cash, credit or quotation")
+	ErrCreditNeedsCustomer = errors.New("a credit sale requires a customer")
 )
 
 type ProductLookup interface {
@@ -27,6 +29,7 @@ type SaleItemInput struct {
 type CreateSaleInput struct {
 	BusinessID uuid.UUID
 	CustomerID *uuid.UUID
+	SaleType   SaleType
 	Discount   int64
 	Note       string
 	Items      []SaleItemInput
@@ -54,9 +57,21 @@ func (s *service) CreateSale(input CreateSaleInput) (*Sale, error) {
 		return nil, ErrEmptySale
 	}
 
+	saleType := input.SaleType
+	if saleType == "" {
+		saleType = SaleTypeCash
+	}
+	if !saleType.Valid() {
+		return nil, ErrInvalidSaleType
+	}
+	if saleType == SaleTypeCredit && input.CustomerID == nil {
+		return nil, ErrCreditNeedsCustomer
+	}
+
 	sale := &Sale{
 		BusinessID: input.BusinessID,
 		CustomerID: input.CustomerID,
+		SaleType:   saleType,
 		Discount:   input.Discount,
 		Note:       input.Note,
 	}
@@ -100,6 +115,9 @@ func (s *service) CreateSale(input CreateSaleInput) (*Sale, error) {
 		return nil, err
 	}
 
+	// Return the line items with the sale so the receipt can render them
+	// without a second round trip.
+	sale.LineItems = lineItems
 	return sale, nil
 }
 

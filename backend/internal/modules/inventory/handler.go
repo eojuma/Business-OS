@@ -19,10 +19,11 @@ func NewHandler(service Service) *Handler {
 }
 
 type recordMovementRequest struct {
-	ProductID string       `json:"product_id" binding:"required,uuid"`
-	Type      MovementType `json:"type" binding:"required"`
-	Quantity  int64        `json:"quantity" binding:"required,gt=0"`
-	Note      string       `json:"note"`
+	ProductID string            `json:"product_id" binding:"required,uuid"`
+	Type      MovementType      `json:"type" binding:"required"`
+	Direction MovementDirection `json:"direction"`
+	Quantity  int64             `json:"quantity" binding:"required,gt=0"`
+	Note      string            `json:"note"`
 }
 
 func (h *Handler) RecordMovement(c *gin.Context) {
@@ -48,6 +49,7 @@ func (h *Handler) RecordMovement(c *gin.Context) {
 		BusinessID: businessID,
 		ProductID:  productID,
 		Type:       req.Type,
+		Direction:  req.Direction,
 		Quantity:   req.Quantity,
 		Note:       req.Note,
 	})

@@ -39,6 +39,12 @@ func (r *repository) CreateSale(sale *Sale, lineItems []SaleLineItem, inventory 
 				return err
 			}
 
+			// A quotation is not a completed sale: it reserves nothing and
+			// moves no stock. Only cash and credit sales decrement inventory.
+			if sale.SaleType == SaleTypeQuotation {
+				continue
+			}
+
 			err := inventory.RecordMovementTx(
 				tx,
 				sale.BusinessID,
@@ -52,9 +58,10 @@ func (r *repository) CreateSale(sale *Sale, lineItems []SaleLineItem, inventory 
 			}
 		}
 
-		if sale.CustomerID != nil {
+		// Only a credit sale puts the balance on the customer's account.
+		if sale.SaleType == SaleTypeCredit && sale.CustomerID != nil {
 			if err := customers.ChargeCreditTx(tx, sale.BusinessID, *sale.CustomerID, sale.TotalAmount); err != nil {
-				return err 
+				return err
 			}
 		}
 

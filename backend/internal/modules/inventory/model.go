@@ -32,6 +32,32 @@ const (
 	MovementReturn     MovementType = "return"
 )
 
+// MovementDirection lets an adjustment (or return) move stock either way.
+// Restock is always incoming; sale is always outgoing.
+type MovementDirection string
+
+const (
+	DirectionIn  MovementDirection = "in"
+	DirectionOut MovementDirection = "out"
+)
+
+// SignedQuantity returns the signed stock delta for a movement. It is the
+// single place that decides whether a movement adds or removes stock, so the
+// HTTP path and the sales transaction path cannot disagree.
+func SignedQuantity(t MovementType, direction MovementDirection, quantity int64) int64 {
+	if quantity < 0 {
+		quantity = -quantity
+	}
+
+	outgoing := t == MovementSale ||
+		((t == MovementAdjustment || t == MovementReturn) && direction == DirectionOut)
+
+	if outgoing {
+		return -quantity
+	}
+	return quantity
+}
+
 type StockMovement struct {
 	ID         uuid.UUID    `gorm:"type:uuid;primaryKey;default:gen_random_uuid()" json:"id"`
 	BusinessID uuid.UUID    `gorm:"type:uuid;index;not null" json:"business_id"`

@@ -15,7 +15,8 @@ type RecordMovementInput struct {
 	BusinessID uuid.UUID
 	ProductID  uuid.UUID
 	Type       MovementType
-	Quantity   int64 
+	Direction  MovementDirection
+	Quantity   int64
 	Note       string
 }
 
@@ -34,21 +35,22 @@ func NewService(repo Repository) Service {
 	return &service{repo: repo}
 }
 
-func isOutgoing(t MovementType) bool {
-	return t == MovementSale
-}
-
 func (s *service) RecordMovement(input RecordMovementInput) (*StockLevel, error) {
-	quantity := input.Quantity
-	if isOutgoing(input.Type) {
-		quantity = -quantity
+	direction := input.Direction
+	if direction != DirectionOut {
+		direction = DirectionIn
+	}
 
+	// Pre-check so the caller gets a clean error before we open a transaction.
+	// recordMovementCore repeats the check as the authoritative guard.
+	signed := SignedQuantity(input.Type, direction, input.Quantity)
+	if signed < 0 {
 		current, err := s.repo.GetStockLevel(input.ProductID, input.BusinessID)
 		currentQty := int64(0)
 		if err == nil {
 			currentQty = current.Quantity
 		}
-		if currentQty+quantity < 0 {
+		if currentQty+signed < 0 {
 			return nil, ErrInsufficientStock
 		}
 	}
@@ -57,11 +59,11 @@ func (s *service) RecordMovement(input RecordMovementInput) (*StockLevel, error)
 		BusinessID: input.BusinessID,
 		ProductID:  input.ProductID,
 		Type:       input.Type,
-		Quantity:   quantity,
+		Quantity:   input.Quantity,
 		Note:       input.Note,
 	}
 
-	return s.repo.RecordMovement(movement)
+	return s.repo.RecordMovement(movement, direction)
 }
 
 func (s *service) GetStockLevel(productID, businessID uuid.UUID) (*StockLevel, error) {

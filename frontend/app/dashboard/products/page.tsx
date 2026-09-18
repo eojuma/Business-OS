@@ -29,6 +29,29 @@ export default function ProductsPage() {
   const [submitting, setSubmitting] = useState(false);
   const [formError, setFormError] = useState("");
 
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editPrice, setEditPrice] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  async function savePrice(id: string) {
+    const cents = Math.round(parseFloat(editPrice) * 100);
+    if (isNaN(cents) || cents < 0) {
+      setError("Enter a valid price");
+      return;
+    }
+    setSaving(true);
+    try {
+      await api.patch(`/products/${id}`, { price: cents });
+      setEditingId(null);
+      setEditPrice("");
+      await loadProducts();
+    } catch (err: any) {
+      setError(err.response?.data?.error || "Failed to update price");
+    } finally {
+      setSaving(false);
+    }
+  }
+
   async function loadProducts() {
     try {
       const res = await api.get("/products");
@@ -142,6 +165,7 @@ export default function ProductsPage() {
               <th className="py-2">Category</th>
               <th className="py-2">Unit</th>
               <th className="py-2 text-right">Price</th>
+              <th className="py-2 text-right">Adjust</th>
             </tr>
           </thead>
           <tbody>
@@ -151,6 +175,45 @@ export default function ProductsPage() {
                 <td className="py-2">{p.category || "—"}</td>
                 <td className="py-2">{p.unit}</td>
                 <td className="py-2 text-right">KSh {formatMoney(p.price)}</td>
+                <td className="py-2 text-right">
+                  {editingId === p.id ? (
+                    <span className="inline-flex items-center gap-2">
+                      <input
+                        type="text"
+                        value={editPrice}
+                        onChange={(e) => setEditPrice(e.target.value)}
+                        placeholder="New price"
+                        className="w-24 rounded border border-gray-300 px-2 py-1 text-sm"
+                      />
+                      <button
+                        onClick={() => savePrice(p.id)}
+                        disabled={saving}
+                        className="rounded bg-brand-600 px-2 py-1 text-xs text-white disabled:opacity-50"
+                      >
+                        Save
+                      </button>
+                      <button
+                        onClick={() => {
+                          setEditingId(null);
+                          setEditPrice("");
+                        }}
+                        className="text-xs text-gray-500"
+                      >
+                        Cancel
+                      </button>
+                    </span>
+                  ) : (
+                    <button
+                      onClick={() => {
+                        setEditingId(p.id);
+                        setEditPrice((p.price / 100).toString());
+                      }}
+                      className="text-xs font-semibold text-brand-600"
+                    >
+                      Adjust price
+                    </button>
+                  )}
+                </td>
               </tr>
             ))}
           </tbody>

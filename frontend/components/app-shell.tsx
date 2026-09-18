@@ -16,6 +16,7 @@ const nav = [
   { href: "/dashboard/finance", label: "Finance", icon: CircleDollarSign },
   { href: "/dashboard/analytics", label: "Analytics", icon: BarChart3 },
   { href: "/dashboard/reports", label: "Reports", icon: Contact },
+  { href: "/dashboard/notifications", label: "Notifications", icon: Bell },
   { href: "/dashboard/assistant", label: "AI assistant", icon: Brain },
 ];
 

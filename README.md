@@ -6,7 +6,7 @@ An operating system for hardware stores in Africa. Replaces notebooks, spreadshe
 
 ## What works right now
 
-Milestones 1–3 are done and tested live end to end — not just compiling, actually running against a real Postgres database and a real browser. Signup, products, inventory, sales, customer credit, and daily reports all work through the actual frontend.
+Milestones 1–3 are done and tested live end to end — not just compiling, actually running against a real Postgres database and a real browser. Signup, products, inventory, sales, customer credit, daily reports, suppliers, purchases, finance, and analytics all work through the actual frontend.
 
 | Module | Backend | Frontend | Notes |
 |---|---|---|---|
@@ -18,11 +18,11 @@ Milestones 1–3 are done and tested live end to end — not just compiling, act
 | Customers | ✅ | ✅ | Profiles, credit limit enforcement, balance queries |
 | Reports | ✅ | ✅ | Daily sales aggregated via Postgres `SUM`/`GROUP BY` |
 | Dashboard | — | ✅ | Today's sales, low-stock count, calls real endpoints |
-| Suppliers | ✅ | — | Profiles, outstanding balances, payments |
-| Purchases | ✅ | — | Draft purchases, goods receipt, stock & supplier debt |
-| Finance | ✅ | — | Expenses, profit, cash flow, date-filtered summaries |
+| Suppliers | ✅ | ✅ | Profiles, outstanding balances, payments, CRUD |
+| Purchases | ✅ | ✅ | Draft POs, goods receipt, stock & supplier debt updates |
+| Finance | ✅ | ✅ | Expenses, profit, cash flow, date-filtered summaries |
 | Notifications | ✅ | — | Low-stock alerts with severity & product context |
-| Analytics | ✅ | — | Overview, top-profit & slow-moving products |
+| Analytics | ✅ | ✅ | Overview, top-profit & slow-moving products |
 | Assistant | ✅ | ✅ | Natural-language sale preview + explicit confirmation |
 
 ---
@@ -59,8 +59,14 @@ Business-OS/
 │           ├── inventory/
 │           ├── sales/           # calls into inventory + products + customers
 │           ├── customers/
+│           ├── suppliers/
+│           ├── purchases/
+│           ├── finance/
 │           ├── reports/         # read-only, aggregates via SQL
-│           └── ...              # stubs for remaining modules
+│           ├── analytics/
+│           ├── notifications/
+│           ├── assistant/
+│           └── ...              # remaining modules
 ├── frontend/
 │   ├── app/
 │   │   ├── login/
@@ -72,7 +78,13 @@ Business-OS/
 │   │       ├── inventory/
 │   │       ├── sales/
 │   │       ├── customers/
-│   │       └── reports/
+│   │       ├── suppliers/
+│   │       ├── purchases/
+│   │       ├── finance/
+│   │       ├── analytics/
+│   │       ├── assistant/
+│   │       ├── reports/
+│   │       └── settings/
 │   ├── lib/api.ts               # single axios client, JWT auto-attached
 │   └── Dockerfile
 ├── docker-compose.yml
@@ -204,6 +216,10 @@ Matches the MVP scope in the product vision doc:
 6. Frontend (signup, dashboard, products, inventory, sales, customers) ✅
 7. `reports` ✅
 8. `assistant` sale entry flow ✅
+9. `suppliers` + frontend ✅
+10. `purchases` + frontend ✅
+11. `finance` + frontend ✅
+12. `analytics` + frontend ✅
 
 ---
 
@@ -211,6 +227,6 @@ Matches the MVP scope in the product vision doc:
 
 - Test coverage is still limited; migration discovery is covered and CI runs backend tests plus the frontend production build
 - CORS origin is configurable via `FRONTEND_URL` but still assumes one single allowed origin — fine for one environment, will need revisiting for staging + production
-- The frontend does not yet have dedicated supplier, purchasing, finance, notifications, or analytics screens; the authenticated APIs are available for the next UI milestone
+- The frontend does not yet have a dedicated notifications screen; the authenticated API is available
 - The assistant currently handles sale entry only; business Q&A, report generation, forecasting, and anomaly detection remain future work
 - Not yet hardened for hosting: default JWT secret, default DB password, `GIN_MODE=debug` — see hosting checklist (tracked separately, not yet in this README)

@@ -2,6 +2,7 @@ package inventory
 
 import (
 	"errors"
+	"log"
 
 	"github.com/google/uuid"
 )
@@ -10,6 +11,13 @@ var (
 	ErrInsufficientStock = errors.New("insufficient stock for this movement")
 	ErrProductNotFound   = errors.New("product not found in inventory")
 )
+
+// LowStockNotifier is the narrow hook inventory needs from the notifications
+// module. It is satisfied by the notifications generator and wired in
+// routes.go, so inventory never imports notifications directly.
+type LowStockNotifier interface {
+	NotifyProductLowStock(businessID, productID uuid.UUID) error
+}
 
 type RecordMovementInput struct {
 	BusinessID uuid.UUID
@@ -28,11 +36,12 @@ type Service interface {
 }
 
 type service struct {
-	repo Repository
+	repo     Repository
+	notifier LowStockNotifier
 }
 
-func NewService(repo Repository) Service {
-	return &service{repo: repo}
+func NewService(repo Repository, notifier LowStockNotifier) Service {
+	return &service{repo: repo, notifier: notifier}
 }
 
 func (s *service) RecordMovement(input RecordMovementInput) (*StockLevel, error) {
@@ -63,7 +72,21 @@ func (s *service) RecordMovement(input RecordMovementInput) (*StockLevel, error)
 		Note:       input.Note,
 	}
 
-	return s.repo.RecordMovement(movement, direction)
+	level, err := s.repo.RecordMovement(movement, direction)
+	if err != nil {
+		return nil, err
+	}
+
+	// Fire the alert immediately so the notifications page updates without
+	// waiting for the scheduled sweep. Best effort: a notification failure
+	// must never roll back a stock movement that already committed.
+	if s.notifier != nil {
+		if nerr := s.notifier.NotifyProductLowStock(input.BusinessID, input.ProductID); nerr != nil {
+			log.Printf("inventory: low-stock notification failed: %v", nerr)
+		}
+	}
+
+	return level, nil
 }
 
 func (s *service) GetStockLevel(productID, businessID uuid.UUID) (*StockLevel, error) {

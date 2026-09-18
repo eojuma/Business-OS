@@ -45,7 +45,7 @@ export default function InventoryPage() {
             .catch(() => ({
               product_id: p.id,
               quantity: 0,
-              low_stock_threshold: 0,
+              low_stock_threshold: 200,
             }))
         )
       );
@@ -198,7 +198,7 @@ export default function InventoryPage() {
                   <td className="py-2 text-right">{qty}</td>
                   <td className="py-2 text-right">
                     {isLow ? (
-                      <span className="text-red-600">Low stock</span>
+                      <span className="text-red-600">Low stock (≤ {threshold})</span>
                     ) : (
                       <span className="text-gray-400">OK</span>
                     )}

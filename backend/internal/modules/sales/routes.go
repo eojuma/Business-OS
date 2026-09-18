@@ -6,6 +6,7 @@ import (
 	"github.com/businessos/backend/internal/config"
 	"github.com/businessos/backend/internal/modules/customers"
 	"github.com/businessos/backend/internal/modules/inventory"
+	"github.com/businessos/backend/internal/modules/notifications"
 	"github.com/businessos/backend/internal/modules/products"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -26,7 +27,6 @@ func (a *inventoryAdapter) RecordMovementTx(tx *gorm.DB, businessID, productID u
 	}
 	return err
 }
-
 
 type customerAdapter struct {
 	svc customers.Service
@@ -50,7 +50,7 @@ func RegisterRoutes(rg *gin.RouterGroup, db *gorm.DB, cfg *config.Config) {
 	inventoryMover := &inventoryAdapter{repo: inventoryRepo}
 	customerCharger := &customerAdapter{svc: customersSvc}
 
-	svc := NewService(repo, inventoryMover, productsRepo, customerCharger)
+	svc := NewService(repo, inventoryMover, productsRepo, customerCharger, notifications.NewGenerator(db))
 	handler := NewHandler(svc)
 
 	group := rg.Group("/sales")

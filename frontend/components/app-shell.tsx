@@ -3,7 +3,8 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { BarChart3, Bell, Boxes, Brain, ChevronRight, CircleDollarSign, ClipboardList, Contact, LayoutDashboard, LogOut, Menu, Package, Settings, ShoppingCart, Truck, Users, X } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { api } from "@/lib/api";
 
 const nav = [
   { href: "/dashboard", label: "Overview", icon: LayoutDashboard },
@@ -22,6 +23,18 @@ const nav = [
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname(); const router = useRouter(); const [open, setOpen] = useState(false);
+  const [unread, setUnread] = useState(0);
+  useEffect(() => {
+    let active = true;
+    const fetchUnread = () => {
+      api.get("/notifications/unread-count")
+        .then((r) => { if (active) setUnread(r.data.data?.unread || 0); })
+        .catch(() => {});
+    };
+    fetchUnread();
+    const id = setInterval(fetchUnread, 60000);
+    return () => { active = false; clearInterval(id); };
+  }, []);
   function logout() { localStorage.removeItem("token"); router.push("/login"); }
   return <div className="min-h-screen bg-[#f7f9f6]">
     <header className="sticky top-0 z-30 flex h-16 items-center justify-between border-b border-[#e5e9e4] bg-white/95 px-4 backdrop-blur md:hidden">
@@ -30,7 +43,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     </header>
     <aside className={`fixed inset-y-0 left-0 z-40 flex w-64 flex-col border-r border-[#e5e9e4] bg-white px-4 py-5 transition-transform md:translate-x-0 ${open ? "translate-x-0" : "-translate-x-full"}`}>
       <div className="mb-8 flex items-center justify-between px-2"><Link href="/dashboard" className="text-lg font-bold tracking-tight">Business <span className="text-[#16794c]">OS</span></Link><button className="p-1 md:hidden" onClick={() => setOpen(false)} aria-label="Close navigation"><X size={19}/></button></div>
-      <p className="eyebrow px-2 pb-2">Workspace</p><nav className="space-y-0.5">{nav.map(({href,label,icon:Icon}) => { const active = href === "/dashboard" ? pathname === href : pathname.startsWith(href); return <Link key={href} href={href} onClick={() => setOpen(false)} className={`flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition ${active ? "bg-[#e7f4ec] text-[#12633e]" : "text-[#647168] hover:bg-[#f2f5f1] hover:text-[#17211b]"}`}><Icon size={17}/><span>{label}</span>{active && <ChevronRight size={15} className="ml-auto"/>}</Link>})}</nav>
+      <p className="eyebrow px-2 pb-2">Workspace</p><nav className="space-y-0.5">{nav.map(({href,label,icon:Icon}) => { const active = href === "/dashboard" ? pathname === href : pathname.startsWith(href); return <Link key={href} href={href} onClick={() => setOpen(false)} className={`flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition ${active ? "bg-[#e7f4ec] text-[#12633e]" : "text-[#647168] hover:bg-[#f2f5f1] hover:text-[#17211b]"}`}><Icon size={17}/><span>{label}</span>{href === "/dashboard/notifications" && unread > 0 && <span className="ml-auto rounded-full bg-[#16794c] px-1.5 py-0.5 text-[10px] font-bold text-white">{unread > 99 ? "99+" : unread}</span>}{active && <ChevronRight size={15} className={href === "/dashboard/notifications" && unread > 0 ? "" : "ml-auto"}/>}</Link>})}</nav>
       <div className="mt-auto space-y-1 border-t border-[#eef1ed] pt-4"><Link href="/dashboard/settings" className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-sm text-[#647168] hover:bg-[#f2f5f1]"><Settings size={17}/> Settings</Link><button onClick={logout} className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-sm text-[#647168] hover:bg-[#f2f5f1]"><LogOut size={17}/> Sign out</button></div>
     </aside><div className="md:pl-64"><main className="mx-auto min-h-screen max-w-[1480px] p-4 sm:p-6 lg:p-8">{children}</main></div>
     {open && <button aria-label="Close navigation overlay" className="fixed inset-0 z-30 bg-black/20 md:hidden" onClick={() => setOpen(false)}/>} 

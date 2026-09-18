@@ -9,6 +9,7 @@ import (
 	"github.com/businessos/backend/internal/modules/analytics"
 	"github.com/businessos/backend/internal/modules/customers"
 	"github.com/businessos/backend/internal/modules/inventory"
+	"github.com/businessos/backend/internal/modules/notifications"
 	"github.com/businessos/backend/internal/modules/products"
 	"github.com/businessos/backend/internal/modules/sales"
 	"github.com/businessos/backend/internal/modules/suppliers"
@@ -198,7 +199,7 @@ func RegisterRoutes(rg *gin.RouterGroup, db *gorm.DB, cfg *config.Config) {
 
 	inventoryMover := sales.NewInventoryAdapter(inventoryRepo)
 	customerCharger := sales.NewCustomerAdapter(customersSvc)
-	salesSvc := sales.NewService(salesRepo, inventoryMover, productsRepo, customerCharger)
+	salesSvc := sales.NewService(salesRepo, inventoryMover, productsRepo, customerCharger, notifications.NewGenerator(db))
 
 	ai := NewAIClient(cfg)
 	log.Printf("assistant: ai base_url=%s model=%s key_set=%t", cfg.AIBaseURL, cfg.AIModel, cfg.AIAPIKey != "")

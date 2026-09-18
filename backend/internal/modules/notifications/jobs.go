@@ -154,6 +154,64 @@ func (g *Generator) GenerateCreditAlerts() (int, error) {
 	return created, nil
 }
 
+// NotifyProductLowStock is the real-time path. It is called right after a
+// stock movement (a sale or an adjustment) so the alert appears on the
+// notifications page immediately instead of waiting for the next sweep.
+// When stock is replenished above the threshold, any stale unread low-stock
+// alert for that product is cleared.
+func (g *Generator) NotifyProductLowStock(businessID, productID uuid.UUID) error {
+	var row lowStockRow
+	err := g.db.Raw(`
+		SELECT sl.business_id,
+		       sl.product_id,
+		       p.name AS product_name,
+		       p.unit,
+		       sl.quantity,
+		       sl.low_stock_threshold AS threshold,
+		       COALESCE((SELECT u.email FROM users u
+		                 WHERE u.business_id = sl.business_id AND u.role = 'owner'
+		                 ORDER BY u.created_at ASC LIMIT 1), '') AS recipient
+		FROM stock_levels sl
+		JOIN products p ON p.id = sl.product_id
+		WHERE sl.business_id = ? AND sl.product_id = ?
+	`, businessID, productID).Scan(&row).Error
+	if err != nil {
+		return err
+	}
+	if row.ProductID == uuid.Nil {
+		return nil
+	}
+
+	if row.Quantity > row.Threshold {
+		return g.repo.MarkReadByEntity(businessID, TypeLowStock, productID)
+	}
+
+	exists, err := g.repo.ExistsUnread(businessID, TypeLowStock, productID)
+	if err != nil {
+		return err
+	}
+	if exists {
+		return nil
+	}
+
+	severity := SeverityWarning
+	if row.Quantity <= 0 {
+		severity = SeverityCritical
+	}
+
+	entityID := row.ProductID
+	return g.repo.Create(&Notification{
+		BusinessID: row.BusinessID,
+		Type:       TypeLowStock,
+		Severity:   severity,
+		Recipient:  row.Recipient,
+		Title:      "Low stock: " + row.ProductName,
+		Message:    fmt.Sprintf("%s has %d %s remaining (threshold %d).", row.ProductName, row.Quantity, row.Unit, row.Threshold),
+		EntityID:   &entityID,
+		EntityName: row.ProductName,
+	})
+}
+
 // Run executes every generation pass once and logs a summary.
 func (g *Generator) Run() {
 	if n, err := g.GenerateLowStock(); err != nil {

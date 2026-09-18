@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import { PageHeader } from "@/components/app-shell";
-import { AlertTriangle, Bell, BellOff, CheckCheck, CreditCard, Package } from "lucide-react";
+import { AlertTriangle, Bell, BellOff, CheckCheck, CreditCard, Package, RefreshCw } from "lucide-react";
 
 type Notification = {
   id: string;
@@ -35,20 +35,24 @@ export default function NotificationsPage() {
   const [error, setError] = useState("");
   const [unreadOnly, setUnreadOnly] = useState(false);
 
-  async function load(onlyUnread: boolean) {
-    setLoading(true);
+  async function load(onlyUnread: boolean, silent = false) {
+    if (!silent) setLoading(true);
     try {
       const res = await api.get(`/notifications${onlyUnread ? "?unread=true" : ""}`);
       setItems(res.data.data || []);
+      setError("");
     } catch (err: any) {
-      setError(err.response?.data?.error || "Failed to load notifications");
+      if (!silent) setError(err.response?.data?.error || "Failed to load notifications");
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   }
 
   useEffect(() => {
     load(unreadOnly);
+    // Poll so new alerts show up on their own without a manual refresh.
+    const id = setInterval(() => load(unreadOnly, true), 20000);
+    return () => clearInterval(id);
   }, [unreadOnly]);
 
   async function markRead(id: string) {
@@ -79,6 +83,9 @@ export default function NotificationsPage() {
         description="Low-stock alerts and credit-limit reminders, refreshed automatically."
         action={
           <div className="flex items-center gap-2">
+            <button className="btn-secondary" onClick={() => load(unreadOnly)} aria-label="Refresh">
+              <RefreshCw size={15} />
+            </button>
             <button className="btn-secondary" onClick={() => setUnreadOnly((v) => !v)}>
               {unreadOnly ? <Bell size={15} /> : <BellOff size={15} />}
               {unreadOnly ? "Showing unread" : "Show unread only"}

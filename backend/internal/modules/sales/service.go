@@ -2,6 +2,7 @@ package sales
 
 import (
 	"errors"
+	"log"
 
 	"github.com/google/uuid"
 )
@@ -41,15 +42,22 @@ type Service interface {
 	List(businessID uuid.UUID) ([]Sale, error)
 }
 
+// LowStockNotifier is the narrow hook sales needs from the notifications
+// module. Satisfied by the notifications generator, wired in routes.go.
+type LowStockNotifier interface {
+	NotifyProductLowStock(businessID, productID uuid.UUID) error
+}
+
 type service struct {
 	repo      Repository
 	inventory InventoryMover
 	products  ProductLookup
 	customers CustomerCharger
+	notifier  LowStockNotifier
 }
 
-func NewService(repo Repository, inventory InventoryMover, products ProductLookup, customers CustomerCharger) Service {
-	return &service{repo: repo, inventory: inventory, products: products, customers: customers}
+func NewService(repo Repository, inventory InventoryMover, products ProductLookup, customers CustomerCharger, notifier LowStockNotifier) Service {
+	return &service{repo: repo, inventory: inventory, products: products, customers: customers, notifier: notifier}
 }
 
 func (s *service) CreateSale(input CreateSaleInput) (*Sale, error) {
@@ -118,6 +126,18 @@ func (s *service) CreateSale(input CreateSaleInput) (*Sale, error) {
 	// Return the line items with the sale so the receipt can render them
 	// without a second round trip.
 	sale.LineItems = lineItems
+
+	// A completed cash or credit sale may have pushed products to low stock.
+	// Alert right away rather than waiting for the scheduled sweep. A
+	// quotation moves no stock, so it is skipped. Best effort only.
+	if s.notifier != nil && saleType != SaleTypeQuotation {
+		for _, item := range input.Items {
+			if nerr := s.notifier.NotifyProductLowStock(input.BusinessID, item.ProductID); nerr != nil {
+				log.Printf("sales: low-stock notification failed: %v", nerr)
+			}
+		}
+	}
+
 	return sale, nil
 }
 

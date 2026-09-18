@@ -11,7 +11,7 @@ type StockLevel struct {
 	BusinessID        uuid.UUID `gorm:"type:uuid;index;not null" json:"business_id"`
 	ProductID         uuid.UUID `gorm:"type:uuid;uniqueIndex;not null" json:"product_id"`
 	Quantity          int64     `gorm:"not null;default:0" json:"quantity"`
-	LowStockThreshold int64     `gorm:"not null;default:0" json:"low_stock_threshold"`
+	LowStockThreshold int64     `gorm:"not null;default:200" json:"low_stock_threshold"`
 	UpdatedAt         time.Time `json:"updated_at"`
 }
 

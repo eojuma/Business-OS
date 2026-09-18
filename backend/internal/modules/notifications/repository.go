@@ -14,6 +14,7 @@ type Repository interface {
 	UnreadCount(businessID uuid.UUID) (int64, error)
 	MarkRead(id, businessID uuid.UUID) error
 	MarkAllRead(businessID uuid.UUID) error
+	MarkReadByEntity(businessID uuid.UUID, notificationType string, entityID uuid.UUID) error
 	Create(n *Notification) error
 	ExistsUnread(businessID uuid.UUID, notificationType string, entityID uuid.UUID) (bool, error)
 }
@@ -56,6 +57,12 @@ func (r *repository) MarkRead(id, businessID uuid.UUID) error {
 func (r *repository) MarkAllRead(businessID uuid.UUID) error {
 	return r.db.Model(&Notification{}).
 		Where("business_id = ? AND is_read = ?", businessID, false).
+		Update("is_read", true).Error
+}
+
+func (r *repository) MarkReadByEntity(businessID uuid.UUID, notificationType string, entityID uuid.UUID) error {
+	return r.db.Model(&Notification{}).
+		Where("business_id = ? AND type = ? AND entity_id = ? AND is_read = ?", businessID, notificationType, entityID, false).
 		Update("is_read", true).Error
 }
 

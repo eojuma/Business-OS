@@ -25,6 +25,7 @@ type saleItemRequest struct {
 
 type createSaleRequest struct {
 	CustomerID *string           `json:"customer_id"`
+	SaleType   string            `json:"sale_type"`
 	Discount   int64             `json:"discount"`
 	Note       string            `json:"note"`
 	Items      []saleItemRequest `json:"items" binding:"required,min=1"`
@@ -69,6 +70,7 @@ func (h *Handler) Create(c *gin.Context) {
 	sale, err := h.service.CreateSale(CreateSaleInput{
 		BusinessID: businessID,
 		CustomerID: customerID,
+		SaleType:   SaleType(req.SaleType),
 		Discount:   req.Discount,
 		Note:       req.Note,
 		Items:      items,
@@ -81,7 +83,7 @@ func (h *Handler) Create(c *gin.Context) {
 			response.Error(c, http.StatusBadRequest, err.Error())
 		case errors.Is(err, ErrInsufficientStock):
 			response.Error(c, http.StatusBadRequest, err.Error())
-		case errors.Is(err, ErrCreditLimitExceeded), errors.Is(err, ErrInvalidSaleItem), errors.Is(err, ErrInvalidDiscount):
+		case errors.Is(err, ErrCreditLimitExceeded), errors.Is(err, ErrInvalidSaleItem), errors.Is(err, ErrInvalidDiscount), errors.Is(err, ErrInvalidSaleType), errors.Is(err, ErrCreditNeedsCustomer):
 			response.Error(c, http.StatusBadRequest, err.Error())
 		default:
 			response.Error(c, http.StatusInternalServerError, "failed to record sale")

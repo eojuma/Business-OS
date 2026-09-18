@@ -6,12 +6,25 @@ import (
 	"github.com/google/uuid"
 )
 
+type SaleType string
+
+const (
+	SaleTypeCash      SaleType = "cash"
+	SaleTypeCredit    SaleType = "credit"
+	SaleTypeQuotation SaleType = "quotation"
+)
+
+func (t SaleType) Valid() bool {
+	return t == SaleTypeCash || t == SaleTypeCredit || t == SaleTypeQuotation
+}
+
 type Sale struct {
 	ID          uuid.UUID  `gorm:"type:uuid;primaryKey;default:gen_random_uuid()" json:"id"`
 	BusinessID  uuid.UUID  `gorm:"type:uuid;index;not null" json:"business_id"`
-	CustomerID  *uuid.UUID `gorm:"type:uuid;index" json:"customer_id,omitempty"` // nil = walk-in/cash sale; customers module doesn't exist yet, so this stays optional
-	TotalAmount int64      `gorm:"not null" json:"total_amount"`                 // cents, sum of line items
-	Discount    int64      `gorm:"not null;default:0" json:"discount"`           // cents
+	CustomerID  *uuid.UUID `gorm:"type:uuid;index" json:"customer_id,omitempty"` // nil = walk-in/cash sale
+	SaleType    SaleType   `gorm:"not null;default:cash" json:"sale_type"`
+	TotalAmount int64      `gorm:"not null" json:"total_amount"`       // cents, sum of line items
+	Discount    int64      `gorm:"not null;default:0" json:"discount"` // cents
 	Note        string     `json:"note,omitempty"`
 	CreatedAt   time.Time  `json:"created_at"`
 

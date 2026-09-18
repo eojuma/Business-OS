@@ -6,7 +6,7 @@ import (
 )
 
 type Repository interface {
-	RecordMovement(movement *StockMovement) (*StockLevel, error)
+	RecordMovement(movement *StockMovement, direction MovementDirection) (*StockLevel, error)
 	GetStockLevel(productID, businessID uuid.UUID) (*StockLevel, error)
 	ListLowStock(businessID uuid.UUID) ([]StockLevel, error)
 	ListMovements(productID, businessID uuid.UUID) ([]StockMovement, error)
@@ -30,15 +30,15 @@ func (r *repository) RecordMovementTx(tx *gorm.DB, businessID, productID uuid.UU
 		Quantity:   quantity,
 		Note:       note,
 	}
-	_, err := recordMovementCore(tx, movement)
+	_, err := recordMovementCore(tx, movement, DirectionIn)
 	return err
 }
 
-func (r *repository) RecordMovement(movement *StockMovement) (*StockLevel, error) {
+func (r *repository) RecordMovement(movement *StockMovement, direction MovementDirection) (*StockLevel, error) {
 	var level StockLevel
 	err := r.db.Transaction(func(tx *gorm.DB) error {
 		var err error
-		level, err = recordMovementCore(tx, movement)
+		level, err = recordMovementCore(tx, movement, direction)
 		return err
 	})
 	if err != nil {
@@ -47,7 +47,7 @@ func (r *repository) RecordMovement(movement *StockMovement) (*StockLevel, error
 	return &level, nil
 }
 
-func recordMovementCore(tx *gorm.DB, movement *StockMovement) (StockLevel, error) {
+func recordMovementCore(tx *gorm.DB, movement *StockMovement, direction MovementDirection) (StockLevel, error) {
 	var level StockLevel
 
 	err := tx.Where("product_id = ? AND business_id = ?", movement.ProductID, movement.BusinessID).
@@ -65,12 +65,9 @@ func recordMovementCore(tx *gorm.DB, movement *StockMovement) (StockLevel, error
 		return level, err
 	}
 
-	signedQty := movement.Quantity
-	if movement.Type == MovementSale {
-		signedQty = -signedQty
-		if level.Quantity+signedQty < 0 {
-			return level, ErrInsufficientStock
-		}
+	signedQty := SignedQuantity(movement.Type, direction, movement.Quantity)
+	if level.Quantity+signedQty < 0 {
+		return level, ErrInsufficientStock
 	}
 
 	level.Quantity += signedQty

@@ -8,5 +8,11 @@ import (
 
 func RegisterRoutes(rg *gin.RouterGroup, db *gorm.DB, cfg *config.Config) {
 	h := NewHandler(NewService(NewRepository(db)))
-	rg.GET("/notifications", h.List)
+	group := rg.Group("/notifications")
+	{
+		group.GET("", h.List)
+		group.GET("/unread-count", h.UnreadCount)
+		group.POST("/read-all", h.MarkAllRead)
+		group.POST("/:id/read", h.MarkRead)
+	}
 }

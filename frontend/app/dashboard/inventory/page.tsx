@@ -24,6 +24,7 @@ export default function InventoryPage() {
   // movement form state
   const [productId, setProductId] = useState("");
   const [type, setType] = useState("restock");
+  const [direction, setDirection] = useState("in");
   const [quantity, setQuantity] = useState("");
   const [note, setNote] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -86,6 +87,7 @@ export default function InventoryPage() {
       await api.post("/inventory/movements", {
         product_id: productId,
         type,
+        direction: type === "adjustment" ? direction : "in",
         quantity: qty,
         note,
       });
@@ -130,9 +132,19 @@ export default function InventoryPage() {
           className="rounded border border-gray-300 px-3 py-2"
         >
           <option value="restock">Restock (+)</option>
-          <option value="adjustment">Adjustment</option>
+          <option value="adjustment">Adjustment (+/−)</option>
           <option value="return">Return (+)</option>
         </select>
+        {type === "adjustment" && (
+          <select
+            value={direction}
+            onChange={(e) => setDirection(e.target.value)}
+            className="rounded border border-gray-300 px-3 py-2"
+          >
+            <option value="in">Add stock (+)</option>
+            <option value="out">Remove stock (−)</option>
+          </select>
+        )}
         <input
           type="text"
           placeholder="Quantity"

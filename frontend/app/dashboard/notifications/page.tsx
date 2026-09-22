@@ -35,10 +35,10 @@ export default function NotificationsPage() {
   const [error, setError] = useState("");
   const [unreadOnly, setUnreadOnly] = useState(false);
 
-  async function load(onlyUnread: boolean, silent = false) {
+  async function load(silent = false) {
     if (!silent) setLoading(true);
     try {
-      const res = await api.get(`/notifications${onlyUnread ? "?unread=true" : ""}`);
+      const res = await api.get("/notifications");
       setItems(res.data.data || []);
       setError("");
     } catch (err: any) {
@@ -49,16 +49,16 @@ export default function NotificationsPage() {
   }
 
   useEffect(() => {
-    load(unreadOnly);
+    load();
     // Poll so new alerts show up on their own without a manual refresh.
-    const id = setInterval(() => load(unreadOnly, true), 20000);
+    const id = setInterval(() => load(true), 20000);
     return () => clearInterval(id);
-  }, [unreadOnly]);
+  }, []);
 
   async function markRead(id: string) {
     try {
       await api.post(`/notifications/${id}/read`);
-      setItems((prev) => (unreadOnly ? prev.filter((n) => n.id !== id) : prev.map((n) => (n.id === id ? { ...n, read: true } : n))));
+      setItems((prev) => prev.map((n) => (n.id === id ? { ...n, read: true } : n)));
     } catch (err: any) {
       setError(err.response?.data?.error || "Failed to update notification");
     }
@@ -67,23 +67,25 @@ export default function NotificationsPage() {
   async function markAllRead() {
     try {
       await api.post("/notifications/read-all");
-      setItems((prev) => (unreadOnly ? [] : prev.map((n) => ({ ...n, read: true }))));
+      setItems((prev) => prev.map((n) => ({ ...n, read: true })));
     } catch (err: any) {
       setError(err.response?.data?.error || "Failed to update notifications");
     }
   }
 
   const unreadCount = items.filter((n) => !n.read).length;
+  const totalCount = items.length;
+  const visible = unreadOnly ? items.filter((n) => !n.read) : items;
 
   return (
     <>
       <PageHeader
         eyebrow="Workspace"
         title="Notifications"
-        description="Low-stock alerts and credit-limit reminders, refreshed automatically."
+        description={`${unreadCount} unread · ${totalCount} total`}
         action={
           <div className="flex items-center gap-2">
-            <button className="btn-secondary" onClick={() => load(unreadOnly)} aria-label="Refresh">
+            <button className="btn-secondary" onClick={() => load()} aria-label="Refresh">
               <RefreshCw size={15} />
             </button>
             <button className="btn-secondary" onClick={() => setUnreadOnly((v) => !v)}>
@@ -102,7 +104,7 @@ export default function NotificationsPage() {
       <div className="panel overflow-hidden">
         {loading ? (
           <p className="p-6 text-sm text-[#718078]">Loading notifications...</p>
-        ) : items.length === 0 ? (
+        ) : visible.length === 0 ? (
           <div className="p-12 text-center">
             <Bell className="mx-auto text-[#9aa59d]" />
             <p className="mt-3 font-semibold">You are all caught up</p>
@@ -112,7 +114,7 @@ export default function NotificationsPage() {
           </div>
         ) : (
           <div className="divide-y divide-[#eef1ed]">
-            {items.map((n) => {
+            {visible.map((n) => {
               const Icon = typeIcon(n.type);
               return (
                 <div key={n.id} className={`flex items-start gap-3 p-4 ${n.read ? "opacity-70" : ""}`}>

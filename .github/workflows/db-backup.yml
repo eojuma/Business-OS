@@ -1,0 +1,75 @@
+name: Database Backup
+
+on:
+  schedule:
+    # Every day at 02:00 UTC.
+    - cron: "0 2 * * *"
+  # Allow a manual run from the Actions tab.
+  workflow_dispatch:
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Dump database
+        env:
+          DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
+        run: |
+          set -euo pipefail
+          if [ -z "${DATABASE_URL:-}" ]; then
+            echo "::error::NEON_DATABASE_URL secret is not set"
+            exit 1
+          fi
+          STAMP="$(date -u +%Y-%m-%d)"
+          FILE="businessos-${STAMP}.sql.gz"
+          # Use the postgres:18 image so pg_dump matches the Neon server major
+          # version (the runner's built-in pg_dump is older and would refuse).
+          docker run --rm -e PGURL="$DATABASE_URL" postgres:18 \
+            sh -c 'pg_dump "$PGURL" --no-owner --no-privileges --clean --if-exists' \
+            | gzip > "$FILE"
+          ls -lh "$FILE"
+          echo "FILE=$FILE" >> "$GITHUB_ENV"
+
+      - name: Configure object storage credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_DEFAULT_REGION }}
+
+      - name: Upload backup
+        env:
+          S3_BUCKET: ${{ secrets.S3_BUCKET }}
+          S3_ENDPOINT_URL: ${{ secrets.S3_ENDPOINT_URL }}
+        run: |
+          set -euo pipefail
+          ENDPOINT_ARG=""
+          if [ -n "${S3_ENDPOINT_URL:-}" ]; then
+            ENDPOINT_ARG="--endpoint-url $S3_ENDPOINT_URL"
+          fi
+          aws s3 cp "$FILE" "s3://$S3_BUCKET/backups/$FILE" $ENDPOINT_ARG
+
+      - name: Prune backups older than 30 days
+        env:
+          S3_BUCKET: ${{ secrets.S3_BUCKET }}
+          S3_ENDPOINT_URL: ${{ secrets.S3_ENDPOINT_URL }}
+          RETENTION_DAYS: "30"
+        run: |
+          set -euo pipefail
+          ENDPOINT_ARG=""
+          if [ -n "${S3_ENDPOINT_URL:-}" ]; then
+            ENDPOINT_ARG="--endpoint-url $S3_ENDPOINT_URL"
+          fi
+          CUTOFF="$(date -u -d "$RETENTION_DAYS days ago" +%s)"
+          aws s3 ls "s3://$S3_BUCKET/backups/" $ENDPOINT_ARG | while read -r line; do
+            FILE_DATE="$(echo "$line" | awk '{print $1}')"
+            FILE_NAME="$(echo "$line" | awk '{print $4}')"
+            [ -z "$FILE_NAME" ] && continue
+            FILE_TS="$(date -u -d "$FILE_DATE" +%s)"
+            if [ "$FILE_TS" -lt "$CUTOFF" ]; then
+              echo "Deleting $FILE_NAME"
+              aws s3 rm "s3://$S3_BUCKET/backups/$FILE_NAME" $ENDPOINT_ARG
+            fi
+          done

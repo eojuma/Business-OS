@@ -204,6 +204,44 @@ Run them explicitly with `make migrate-up`. `make migrate-down` rolls back only 
 
 ---
 
+## Production database and backups
+
+Production runs on [Neon](https://neon.tech) Postgres. Set these on the backend host (the direct endpoint, not the `-pooler` one, since the API keeps a long-lived connection pool):
+
+    DB_HOST=ep-xxxx.<region>.aws.neon.tech
+    DB_PORT=5432
+    DB_USER=<neon-user>
+    DB_PASSWORD=<neon-password>
+    DB_NAME=neondb
+    DB_SSLMODE=require
+
+Migrations apply automatically on startup. A local `.env` (gitignored) can point at Neon, but the Docker Compose database stays available for offline development.
+
+### Scheduled backups
+
+`.github/workflows/db-backup.yml` dumps the database daily (02:00 UTC) with `pg_dump`, gzips it, and uploads it to S3-compatible storage (AWS S3 or Cloudflare R2). Backups older than 30 days are pruned. It can also be run on demand from the Actions tab.
+
+Configure these repository secrets (Settings → Secrets and variables → Actions):
+
+| Secret | Purpose |
+|---|---|
+| `NEON_DATABASE_URL` | Full direct connection string, e.g. `postgresql://user:pass@ep-xxxx.aws.neon.tech/neondb?sslmode=require` |
+| `S3_BUCKET` | Target bucket name |
+| `S3_ENDPOINT_URL` | S3-compatible endpoint (R2 only; leave unset for AWS S3) |
+| `AWS_ACCESS_KEY_ID` | Storage access key |
+| `AWS_SECRET_ACCESS_KEY` | Storage secret key |
+| `AWS_DEFAULT_REGION` | Region (e.g. `us-east-2`, or `auto` for R2) |
+
+### Restore a backup
+
+Download a dump from the bucket, then load it into the target database:
+
+    gunzip -c businessos-YYYY-MM-DD.sql.gz | psql "postgresql://user:pass@host/db?sslmode=require"
+
+The dump uses `--clean --if-exists`, so restoring over an existing database drops and recreates objects first.
+
+---
+
 ## Build order
 
 Matches the MVP scope in the product vision doc:

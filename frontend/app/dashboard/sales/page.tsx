@@ -38,6 +38,7 @@ type SaleType = "cash" | "credit" | "quotation";
 interface RecordedSale {
   id: string;
   sale_type: SaleType;
+  customer_id?: string;
   total_amount: number;
   discount: number;
   created_at: string;
@@ -61,6 +62,9 @@ export default function SalesPage() {
   const [items, setItems] = useState<LineItem[]>([]);
   const [saleType, setSaleType] = useState<SaleType>("cash");
   const [customerId, setCustomerId] = useState("");
+  const [walkInName, setWalkInName] = useState("");
+  const [walkInPhone, setWalkInPhone] = useState("");
+  const [walkInEmail, setWalkInEmail] = useState("");
   const [note, setNote] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [formError, setFormError] = useState("");
@@ -150,13 +154,27 @@ export default function SalesPage() {
         note,
         items: items.map((i) => ({ product_id: i.productId, quantity: i.quantity })),
       };
-      if (customerId) payload.customer_id = customerId;
+      if (customerId) {
+        payload.customer_id = customerId;
+      } else if (walkInName.trim() || walkInPhone.trim()) {
+        payload.walk_in = { name: walkInName.trim(), phone: walkInPhone.trim(), email: walkInEmail.trim() };
+      }
 
       const res = await api.post("/sales", payload);
-      setReceiptCustomer(selectedCustomer);
-      setReceipt(res.data.data as RecordedSale);
+      const saved = res.data.data as RecordedSale;
+      if (selectedCustomer) {
+        setReceiptCustomer(selectedCustomer);
+      } else if (walkInName.trim() || walkInPhone.trim()) {
+        setReceiptCustomer({ id: saved.customer_id || "", name: walkInName.trim(), phone: walkInPhone.trim(), email: walkInEmail.trim() });
+      } else {
+        setReceiptCustomer(null);
+      }
+      setReceipt(saved);
       setItems([]);
       setCustomerId("");
+      setWalkInName("");
+      setWalkInPhone("");
+      setWalkInEmail("");
       setNote("");
     } catch (err: any) {
       setFormError(err.response?.data?.error || "Failed to record sale");
@@ -310,6 +328,16 @@ export default function SalesPage() {
                 <p className="font-semibold text-[#17211b]">{selectedCustomer.name}</p>
                 {selectedCustomer.phone && <p className="mt-0.5">{selectedCustomer.phone}</p>}
                 {selectedCustomer.email && <p className="mt-0.5">{selectedCustomer.email}</p>}
+              </div>
+            )}
+
+            {!customerId && saleType !== "credit" && (
+              <div className="mt-3 space-y-2 rounded-lg border border-dashed border-[#cfd8d0] p-3">
+                <p className="text-xs font-semibold text-[#526057]">Walk-in customer details</p>
+                <p className="text-[11px] text-[#8a958d]">Optional — saved to your customer list so you can reach them later.</p>
+                <input className="field" placeholder="Full name" value={walkInName} onChange={(e) => setWalkInName(e.target.value)} />
+                <input className="field" placeholder="Phone number" value={walkInPhone} onChange={(e) => setWalkInPhone(e.target.value)} />
+                <input className="field" type="email" placeholder="Email (optional)" value={walkInEmail} onChange={(e) => setWalkInEmail(e.target.value)} />
               </div>
             )}
           </div>

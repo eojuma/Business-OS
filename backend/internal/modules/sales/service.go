@@ -3,19 +3,21 @@ package sales
 import (
 	"errors"
 	"log"
+	"strings"
 
 	"github.com/google/uuid"
 )
 
 var (
-	ErrEmptySale           = errors.New("a sale must have at least one line item")
-	ErrProductNotFound     = errors.New("one or more products not found")
-	ErrInsufficientStock   = errors.New("insufficient stock for this sale")
-	ErrCreditLimitExceeded = errors.New("this sale would exceed the customer's credit limit")
-	ErrInvalidSaleItem     = errors.New("sale quantities must be positive")
-	ErrInvalidDiscount     = errors.New("discount cannot be negative or exceed the sale subtotal")
-	ErrInvalidSaleType     = errors.New("sale_type must be cash, credit or quotation")
-	ErrCreditNeedsCustomer = errors.New("a credit sale requires a customer")
+	ErrEmptySale             = errors.New("a sale must have at least one line item")
+	ErrProductNotFound       = errors.New("one or more products not found")
+	ErrInsufficientStock     = errors.New("insufficient stock for this sale")
+	ErrCreditLimitExceeded   = errors.New("this sale would exceed the customer's credit limit")
+	ErrInvalidSaleItem       = errors.New("sale quantities must be positive")
+	ErrInvalidDiscount       = errors.New("discount cannot be negative or exceed the sale subtotal")
+	ErrInvalidSaleType       = errors.New("sale_type must be cash, credit or quotation")
+	ErrCreditNeedsCustomer   = errors.New("a credit sale requires a customer")
+	ErrCustomerResolveFailed = errors.New("failed to save the walk-in customer details")
 )
 
 type ProductLookup interface {
@@ -27,9 +29,19 @@ type SaleItemInput struct {
 	Quantity  int64
 }
 
+// WalkInCustomerInput carries the details a cashier captures for a customer
+// who is not yet on file. It is turned into a real customer record so the
+// business can follow up later.
+type WalkInCustomerInput struct {
+	Name  string
+	Phone string
+	Email string
+}
+
 type CreateSaleInput struct {
 	BusinessID uuid.UUID
 	CustomerID *uuid.UUID
+	WalkIn     *WalkInCustomerInput
 	SaleType   SaleType
 	Discount   int64
 	Note       string
@@ -48,16 +60,23 @@ type LowStockNotifier interface {
 	NotifyProductLowStock(businessID, productID uuid.UUID) error
 }
 
+// CustomerResolver is the narrow hook sales needs from the customers module
+// to persist walk-in details. Satisfied by an adapter over customers.Service.
+type CustomerResolver interface {
+	ResolveWalkIn(businessID uuid.UUID, name, phone, email string) (uuid.UUID, error)
+}
+
 type service struct {
 	repo      Repository
 	inventory InventoryMover
 	products  ProductLookup
 	customers CustomerCharger
 	notifier  LowStockNotifier
+	resolver  CustomerResolver
 }
 
-func NewService(repo Repository, inventory InventoryMover, products ProductLookup, customers CustomerCharger, notifier LowStockNotifier) Service {
-	return &service{repo: repo, inventory: inventory, products: products, customers: customers, notifier: notifier}
+func NewService(repo Repository, inventory InventoryMover, products ProductLookup, customers CustomerCharger, notifier LowStockNotifier, resolver CustomerResolver) Service {
+	return &service{repo: repo, inventory: inventory, products: products, customers: customers, notifier: notifier, resolver: resolver}
 }
 
 func (s *service) CreateSale(input CreateSaleInput) (*Sale, error) {
@@ -72,13 +91,34 @@ func (s *service) CreateSale(input CreateSaleInput) (*Sale, error) {
 	if !saleType.Valid() {
 		return nil, ErrInvalidSaleType
 	}
-	if saleType == SaleTypeCredit && input.CustomerID == nil {
+
+	// A cashier may capture walk-in details instead of picking an existing
+	// customer. Persist them so the business can follow up, then treat the
+	// resulting record as the sale's customer.
+	customerID := input.CustomerID
+	if customerID == nil && input.WalkIn != nil {
+		name := strings.TrimSpace(input.WalkIn.Name)
+		phone := strings.TrimSpace(input.WalkIn.Phone)
+		email := strings.TrimSpace(input.WalkIn.Email)
+		if name != "" || phone != "" {
+			if s.resolver == nil {
+				return nil, ErrCustomerResolveFailed
+			}
+			resolved, err := s.resolver.ResolveWalkIn(input.BusinessID, name, phone, email)
+			if err != nil {
+				return nil, ErrCustomerResolveFailed
+			}
+			customerID = &resolved
+		}
+	}
+
+	if saleType == SaleTypeCredit && customerID == nil {
 		return nil, ErrCreditNeedsCustomer
 	}
 
 	sale := &Sale{
 		BusinessID: input.BusinessID,
-		CustomerID: input.CustomerID,
+		CustomerID: customerID,
 		SaleType:   saleType,
 		Discount:   input.Discount,
 		Note:       input.Note,

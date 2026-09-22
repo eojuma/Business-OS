@@ -23,8 +23,15 @@ type saleItemRequest struct {
 	Quantity  int64  `json:"quantity" binding:"required,gt=0"`
 }
 
+type walkInRequest struct {
+	Name  string `json:"name"`
+	Phone string `json:"phone"`
+	Email string `json:"email"`
+}
+
 type createSaleRequest struct {
 	CustomerID *string           `json:"customer_id"`
+	WalkIn     *walkInRequest    `json:"walk_in"`
 	SaleType   string            `json:"sale_type"`
 	Discount   int64             `json:"discount"`
 	Note       string            `json:"note"`
@@ -67,9 +74,19 @@ func (h *Handler) Create(c *gin.Context) {
 		})
 	}
 
+	var walkIn *WalkInCustomerInput
+	if req.WalkIn != nil {
+		walkIn = &WalkInCustomerInput{
+			Name:  req.WalkIn.Name,
+			Phone: req.WalkIn.Phone,
+			Email: req.WalkIn.Email,
+		}
+	}
+
 	sale, err := h.service.CreateSale(CreateSaleInput{
 		BusinessID: businessID,
 		CustomerID: customerID,
+		WalkIn:     walkIn,
 		SaleType:   SaleType(req.SaleType),
 		Discount:   req.Discount,
 		Note:       req.Note,
@@ -83,7 +100,7 @@ func (h *Handler) Create(c *gin.Context) {
 			response.Error(c, http.StatusBadRequest, err.Error())
 		case errors.Is(err, ErrInsufficientStock):
 			response.Error(c, http.StatusBadRequest, err.Error())
-		case errors.Is(err, ErrCreditLimitExceeded), errors.Is(err, ErrInvalidSaleItem), errors.Is(err, ErrInvalidDiscount), errors.Is(err, ErrInvalidSaleType), errors.Is(err, ErrCreditNeedsCustomer):
+		case errors.Is(err, ErrCreditLimitExceeded), errors.Is(err, ErrInvalidSaleItem), errors.Is(err, ErrInvalidDiscount), errors.Is(err, ErrInvalidSaleType), errors.Is(err, ErrCreditNeedsCustomer), errors.Is(err, ErrCustomerResolveFailed):
 			response.Error(c, http.StatusBadRequest, err.Error())
 		default:
 			response.Error(c, http.StatusInternalServerError, "failed to record sale")

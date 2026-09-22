@@ -37,6 +37,8 @@ type Service interface {
 	ListAboveBalance(businessID uuid.UUID, threshold int64) ([]Customer, error)
 	RecordPayment(id, businessID uuid.UUID, amount int64, note string) (*Customer, error)
 	ListPayments(id, businessID uuid.UUID) ([]Payment, error)
+	// FindOrCreateByPhone resolves a walk-in customer from the sales flow.
+	FindOrCreateByPhone(businessID uuid.UUID, name, phone, email string) (*Customer, error)
 	// ChargeCreditTx increases a customer's balance for a credit sale,
 	// refusing if it would exceed their credit limit. Called from sales
 	// inside the same transaction as the sale itself.
@@ -75,6 +77,28 @@ func (s *service) Get(id, businessID uuid.UUID) (*Customer, error) {
 
 func (s *service) List(businessID uuid.UUID) ([]Customer, error) {
 	return s.repo.List(businessID)
+}
+
+// FindOrCreateByPhone resolves a walk-in customer captured at the point of
+// sale. If a customer with the same phone already exists for the business it
+// is reused; otherwise a new no-credit customer record is created so the
+// business can follow up later.
+func (s *service) FindOrCreateByPhone(businessID uuid.UUID, name, phone, email string) (*Customer, error) {
+	if phone != "" {
+		if existing, err := s.repo.FindByPhone(businessID, phone); err == nil {
+			return existing, nil
+		}
+	}
+	c := &Customer{
+		BusinessID: businessID,
+		Name:       name,
+		Phone:      phone,
+		Email:      email,
+	}
+	if err := s.repo.Create(c); err != nil {
+		return nil, err
+	}
+	return c, nil
 }
 
 func (s *service) Update(id, businessID uuid.UUID, input UpdateInput) (*Customer, error) {

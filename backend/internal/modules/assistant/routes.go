@@ -199,7 +199,7 @@ func RegisterRoutes(rg *gin.RouterGroup, db *gorm.DB, cfg *config.Config) {
 
 	inventoryMover := sales.NewInventoryAdapter(inventoryRepo)
 	customerCharger := sales.NewCustomerAdapter(customersSvc)
-	salesSvc := sales.NewService(salesRepo, inventoryMover, productsRepo, customerCharger, notifications.NewGenerator(db))
+	salesSvc := sales.NewService(salesRepo, inventoryMover, productsRepo, customerCharger, notifications.NewGenerator(db), sales.NewCustomerResolver(customersSvc))
 
 	ai := NewAIClient(cfg)
 	log.Printf("assistant: ai base_url=%s model=%s key_set=%t", cfg.AIBaseURL, cfg.AIModel, cfg.AIAPIKey != "")

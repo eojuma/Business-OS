@@ -8,6 +8,7 @@ import (
 type Repository interface {
 	Create(c *Customer) error
 	FindByID(id, businessID uuid.UUID) (*Customer, error)
+	FindByPhone(businessID uuid.UUID, phone string) (*Customer, error)
 	List(businessID uuid.UUID) ([]Customer, error)
 	Update(c *Customer) error
 	ListAboveBalance(businessID uuid.UUID, threshold int64) ([]Customer, error)
@@ -30,6 +31,14 @@ func (r *repository) Create(c *Customer) error {
 func (r *repository) FindByID(id, businessID uuid.UUID) (*Customer, error) {
 	var c Customer
 	if err := r.db.Where("id = ? AND business_id = ?", id, businessID).First(&c).Error; err != nil {
+		return nil, err
+	}
+	return &c, nil
+}
+
+func (r *repository) FindByPhone(businessID uuid.UUID, phone string) (*Customer, error) {
+	var c Customer
+	if err := r.db.Where("business_id = ? AND phone = ?", businessID, phone).First(&c).Error; err != nil {
 		return nil, err
 	}
 	return &c, nil

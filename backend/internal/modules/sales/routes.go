@@ -40,6 +40,20 @@ func (a *customerAdapter) ChargeCreditTx(tx *gorm.DB, businessID, customerID uui
 	return err
 }
 
+// customerResolverAdapter wraps customers.Service so sales can persist
+// walk-in customer details without importing the customers package.
+type customerResolverAdapter struct {
+	svc customers.Service
+}
+
+func (a *customerResolverAdapter) ResolveWalkIn(businessID uuid.UUID, name, phone, email string) (uuid.UUID, error) {
+	c, err := a.svc.FindOrCreateByPhone(businessID, name, phone, email)
+	if err != nil {
+		return uuid.Nil, err
+	}
+	return c.ID, nil
+}
+
 func RegisterRoutes(rg *gin.RouterGroup, db *gorm.DB, cfg *config.Config) {
 	repo := NewRepository(db)
 	inventoryRepo := inventory.NewRepository(db)
@@ -49,8 +63,9 @@ func RegisterRoutes(rg *gin.RouterGroup, db *gorm.DB, cfg *config.Config) {
 
 	inventoryMover := &inventoryAdapter{repo: inventoryRepo}
 	customerCharger := &customerAdapter{svc: customersSvc}
+	customerResolver := &customerResolverAdapter{svc: customersSvc}
 
-	svc := NewService(repo, inventoryMover, productsRepo, customerCharger, notifications.NewGenerator(db))
+	svc := NewService(repo, inventoryMover, productsRepo, customerCharger, notifications.NewGenerator(db), customerResolver)
 	handler := NewHandler(svc)
 
 	group := rg.Group("/sales")
@@ -67,4 +82,8 @@ func NewInventoryAdapter(repo inventory.Repository) InventoryMover {
 
 func NewCustomerAdapter(svc customers.Service) CustomerCharger {
 	return &customerAdapter{svc: svc}
+}
+
+func NewCustomerResolver(svc customers.Service) CustomerResolver {
+	return &customerResolverAdapter{svc: svc}
 }

@@ -553,11 +553,11 @@ If the owner's message is a follow-up about a product named earlier, put that pr
 			if m.Role == "assistant" {
 				role = "assistant"
 			}
-			b.WriteString(fmt.Sprintf("%s: %s\n", role, m.Text))
+			_, _ = fmt.Fprintf(&b, "%s: %s\n", role, m.Text) //nolint:staticcheck
 		}
 	}
 
-	b.WriteString(fmt.Sprintf("\n\nRespond with ONLY a JSON object, no markdown fences, no explanation, in exactly this shape:\n{\"intent\": \"<one of the intents above>\", \"product_name\": \"<product noun, or empty string>\", \"quantity\": <number, or 0>}\n\nMessage: %q", text))
+	_, _ = fmt.Fprintf(&b, "\n\nRespond with ONLY a JSON object, no markdown fences, no explanation, in exactly this shape:\n{\"intent\": \"<one of the intents above>\", \"product_name\": \"<product noun, or empty string>\", \"quantity\": <number, or 0>}\n\nMessage: %q", text) //nolint:staticcheck
 	return b.String()
 }
 

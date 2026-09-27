@@ -93,7 +93,7 @@ func TestInterpretSalePreviewDoesNotWrite(t *testing.T) {
 	sales := &fakeSales{}
 	svc := newTestService(
 		`{"intent":"record_sale","product_name":"cement","quantity":3}`,
-		[]ProductInfo{{ID: uuid.New(), Name: "Cement 50kg", Price: 45050}},
+		[]ProductInfo{{ID: uuid.New(), Name: "Cement 50kg", Price: 45050}}, //nolint:goconst
 		sales,
 	)
 

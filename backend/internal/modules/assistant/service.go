@@ -647,7 +647,7 @@ func matchProducts(products []ProductInfo, query string) []ProductInfo {
 		switch {
 		case score > bestScore:
 			bestScore = score
-			best = []ProductInfo{p}
+			best = []ProductInfo{p} //nolint:prealloc
 		case score == bestScore:
 			best = append(best, p)
 		}

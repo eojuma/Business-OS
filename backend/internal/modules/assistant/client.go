@@ -104,7 +104,7 @@ func (c *geminiClient) do(body []byte) (content string, retryable bool, err erro
 	if err != nil {
 		return "", true, fmt.Errorf("ai request to %s failed: %w", endpoint, err)
 	}
-	defer func() { _ = resp.Body.Close() }() //nolint:errcheck
+	defer func() { _ = resp.Body.Close() }()
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {

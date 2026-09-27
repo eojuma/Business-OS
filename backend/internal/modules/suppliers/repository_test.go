@@ -325,7 +325,7 @@ func TestConcurrentRecordPayment(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			payment := &Payment{Amount: paymentAmount}
-			repo.RecordPayment(supplier.ID, businessID, payment)
+			_ = repo.RecordPayment(supplier.ID, businessID, payment)
 		}()
 	}
 
@@ -355,7 +355,7 @@ func TestConcurrentAddOutstandingTx(t *testing.T) {
 	for i := 0; i < numGoroutines; i++ {
 		go func() {
 			defer wg.Done()
-			repo.AddOutstandingTx(db, supplier.ID, businessID, addAmount)
+			_ = repo.AddOutstandingTx(db, supplier.ID, businessID, addAmount)
 		}()
 	}
 

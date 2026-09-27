@@ -1,6 +1,6 @@
+// Package config holds application configuration loaded from environment variables.
 package config
 
-// Config holds application configuration loaded from environment variables.
 import (
 	"fmt"
 	"os"
@@ -68,10 +68,12 @@ func Load() *Config {
 	}
 }
 
+// IsProduction returns true if the application is running in production mode.
 func (c *Config) IsProduction() bool {
 	return c.AppEnv == "production"
 }
 
+// Validate validates the configuration for production readiness.
 func (c *Config) Validate() error {
 	if !c.IsProduction() {
 		return nil

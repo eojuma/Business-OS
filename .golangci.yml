@@ -1,0 +1,110 @@
+run:
+  timeout: 5m
+  issues-exit-code: 1
+  tests: true
+  build-tags: []
+
+linters:
+  enable:
+    - bodyclose
+    - copyloopvar
+    - errcheck
+    - exhaustive
+    - gochecknoinits
+    - gocognit
+    - goconst
+    - gocritic
+    - gocyclo
+    - gofmt
+    - goimports
+    - gomnd
+    - goprintffuncname
+    - gosec
+    - gosimple
+    - govet
+    - ineffassign
+    - misspell
+    - nakedret
+    - noctx
+    - nolintlint
+    - prealloc
+    - predeclared
+    - revive
+    - staticcheck
+    - stylecheck
+    - tenv
+    - typecheck
+    - unconvert
+    - unparam
+    - unused
+    - whitespace
+  disable:
+    - depguard
+    - exhaustruct
+    - gochecknoglobals
+    - lll
+    - wsl
+  fast: false
+
+linters-settings:
+  errcheck:
+    check-type-assertions: true
+    check-blank: true
+  gocyclo:
+    min-complexity: 15
+  gocognit:
+    min-complexity: 20
+  goconst:
+    min-len: 2
+    min-occurrences: 2
+  gocritic:
+    enabled-tags:
+      - diagnostic
+      - experimental
+      - opinionated
+      - performance
+      - style
+    disabled-checks:
+      - dupImport
+      - ifElseChain
+      - rangeExprCopy
+  govet:
+    check-shadowing: true
+  revive:
+    confidence: 0.8
+    rules:
+      - name: exported
+        severity: warning
+        disabled: false
+      - name: unexported-return
+        severity: warning
+        disabled: false
+  staticcheck:
+    checks:
+      - all
+      - "-ST1000"
+  stylecheck:
+    checks:
+      - all
+      - "-ST1000"
+
+issues:
+  exclude-rules:
+    - path: _test\.go
+      linters:
+        - gocognit
+        - goconst
+        - gocyclo
+        - mnd
+        - gomnd
+    - path: internal/modules/assistant/
+      linters:
+        - gocognit
+    - linters:
+        - gosec
+      text: "G104"
+
+output:
+  format: colored-line-number
+  print-issued-lines: true
+  print-linter-name: true

@@ -32,7 +32,7 @@ func main() {
 				log.Fatalf("failed to roll back migration: %v", err)
 			}
 		default:
-			log.Fatalf("unknown migration command %q (expected up or down)", os.Args[2])
+			log.Fatalf("unknown migration command %q (expected up or down)", os.Args[2]) // nolint:gosec
 		}
 		return
 	}

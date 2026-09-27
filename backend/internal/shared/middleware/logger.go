@@ -16,7 +16,7 @@ func RequestLogger() gin.HandlerFunc {
 		latency := time.Since(start)
 		status := c.Writer.Status()
 
-		_, _ = gin.DefaultWriter.Write([]byte( // nolint:errcheck
+		_, _ = gin.DefaultWriter.Write([]byte( //nolint:errcheck
 			gin.Mode() + " | " + c.Request.Method + " " + path +
 				" | " + itoa(status) + " | " + latency.String() + "\n",
 		))

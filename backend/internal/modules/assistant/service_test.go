@@ -93,7 +93,7 @@ func TestInterpretSalePreviewDoesNotWrite(t *testing.T) {
 	sales := &fakeSales{}
 	svc := newTestService(
 		`{"intent":"record_sale","product_name":"cement","quantity":3}`,
-		[]ProductInfo{{ID: uuid.New(), Name: "Cement 50kg", Price: 45050}}, // nolint:goconst
+		[]ProductInfo{{ID: uuid.New(), Name: "Cement 50kg", Price: 45050}}, //nolint:goconst
 		sales,
 	)
 
@@ -144,7 +144,7 @@ func TestAnswerCategoryCount(t *testing.T) {
 		`{"intent":"category_count"}`,
 		[]ProductInfo{
 			{Name: "Cement 50kg", Category: "Building"},
-			{Name: "Hammer", Category: "Tools"}, // nolint:goconst
+			{Name: "Hammer", Category: "Tools"}, //nolint:goconst
 			{Name: "Nails", Category: "Building"},
 		},
 		&fakeSales{},

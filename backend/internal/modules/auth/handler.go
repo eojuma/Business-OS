@@ -71,7 +71,7 @@ func (h *Handler) Me(c *gin.Context) {
 		response.Error(c, http.StatusUnauthorized, "user not found in context")
 		return
 	}
-	userID, err := uuid.Parse(userIDStr.(string)) // nolint:errcheck
+	userID, err := uuid.Parse(userIDStr.(string)) //nolint:errcheck
 	if err != nil {
 		response.Error(c, http.StatusBadRequest, "invalid user id")
 		return

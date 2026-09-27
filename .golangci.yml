@@ -51,3 +51,12 @@ linters:
     errcheck:
       check-type-assertions: true
       check-blank: false
+    revive:
+      confidence: 0.8
+      rules:
+        - name: exported
+          severity: warning
+          disabled: true
+        - name: unexported-return
+          severity: warning
+          disabled: false

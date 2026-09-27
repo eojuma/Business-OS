@@ -6,6 +6,8 @@ import (
 	"gorm.io/gorm"
 )
 
+// RegisterRoutes registers the reports module HTTP routes.
+// Authenticated: GET /reports/daily-sales
 func RegisterRoutes(rg *gin.RouterGroup, db *gorm.DB, cfg *config.Config) {
 	repo := NewRepository(db)
 	svc := NewService(repo)

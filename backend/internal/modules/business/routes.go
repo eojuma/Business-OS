@@ -7,6 +7,9 @@ import (
 	"gorm.io/gorm"
 )
 
+// RegisterRoutes registers the business module HTTP routes.
+// Public: POST /business (create)
+// Authenticated: GET /business, PATCH /business
 func RegisterRoutes(rg *gin.RouterGroup, db *gorm.DB, cfg *config.Config) {
 	repo := NewRepository(db)
 	svc := NewService(repo)

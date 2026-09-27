@@ -2,6 +2,7 @@ package response
 
 import "github.com/gin-gonic/gin"
 
+// Success writes a successful JSON response with the given status and data.
 func Success(c *gin.Context, status int, data interface{}) {
 	c.JSON(status, gin.H{
 		"success": true,
@@ -9,6 +10,7 @@ func Success(c *gin.Context, status int, data interface{}) {
 	})
 }
 
+// Error writes an error JSON response with the given status and message.
 func Error(c *gin.Context, status int, message string) {
 	c.JSON(status, gin.H{
 		"success": false,
@@ -16,6 +18,7 @@ func Error(c *gin.Context, status int, message string) {
 	})
 }
 
+// Paginated writes a paginated JSON response with the given data and pagination metadata.
 func Paginated(c *gin.Context, status int, data interface{}, page, perPage int, total int64) {
 	c.JSON(status, gin.H{
 		"success": true,

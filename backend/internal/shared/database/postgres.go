@@ -10,6 +10,8 @@ import (
 	"gorm.io/gorm/logger"
 )
 
+// NewPostgres creates a new PostgreSQL database connection using the provided configuration.
+// Configures connection pool settings and log level based on environment.
 func NewPostgres(cfg *config.Config) *gorm.DB {
 	dsn := fmt.Sprintf(
 		"host=%s port=%s user=%s password=%s dbname=%s sslmode=%s",

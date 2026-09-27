@@ -12,6 +12,9 @@ import (
 	"github.com/businessos/backend/internal/shared/migrations"
 )
 
+// main is the entry point for the business-os API server.
+// It loads configuration, connects to the database, runs migrations,
+// starts background schedulers, and launches the HTTP router.
 func main() {
 	cfg := config.Load()
 	if err := cfg.Validate(); err != nil {

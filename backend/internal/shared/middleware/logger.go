@@ -6,6 +6,7 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+// RequestLogger returns a Gin middleware that logs HTTP requests with timing.
 func RequestLogger() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		start := time.Now()
@@ -23,6 +24,7 @@ func RequestLogger() gin.HandlerFunc {
 	}
 }
 
+// itoa converts an integer to a string without using fmt.
 func itoa(i int) string {
 	if i == 0 {
 		return "0"

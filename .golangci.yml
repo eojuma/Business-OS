@@ -31,7 +31,6 @@ linters:
     - revive
     - staticcheck
     - unconvert
-    - unparam
     - unused
     - whitespace
   disable:
@@ -39,6 +38,7 @@ linters:
     - exhaustruct
     - gochecknoglobals
     - lll
+    - unparam
     - wsl
   settings:
     gocognit:

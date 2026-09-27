@@ -1,5 +1,6 @@
 package config
 
+// Config holds application configuration loaded from environment variables.
 import (
 	"fmt"
 	"os"
@@ -9,6 +10,7 @@ import (
 	"github.com/joho/godotenv"
 )
 
+// Config holds all application configuration.
 type Config struct {
 	AppEnv         string
 	AppPort        string
@@ -35,6 +37,7 @@ type Config struct {
 	AIBaseURL  string
 }
 
+// Load loads configuration from environment variables.
 func Load() *Config {
 	_ = godotenv.Load()
 

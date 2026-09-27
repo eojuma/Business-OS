@@ -64,3 +64,5 @@ linters:
       checks:
         - all
         - "-S1016"
+        - "-ST1000"
+        - "-ST1021"

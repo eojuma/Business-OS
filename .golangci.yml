@@ -90,17 +90,17 @@ linters-settings:
       - "-ST1000"
 
 issues:
-  exclude-rules:
+  exclude:
     - path: _test\.go
       linters:
         - gocognit
         - goconst
         - gocyclo
-        - mnd
         - gomnd
     - path: internal/modules/assistant/
       linters:
         - gocognit
+  exclude-rules:
     - linters:
         - gosec
       text: "G104"

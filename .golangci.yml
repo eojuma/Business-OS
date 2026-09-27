@@ -66,8 +66,3 @@ linters:
         - "-S1016"
         - "-ST1000"
         - "-ST1021"
-
-output:
-  format: colored-line-number
-  print-issued-lines: true
-  print-linter-name: true

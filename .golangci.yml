@@ -46,51 +46,50 @@ linters:
     - gochecknoglobals
     - lll
     - wsl
-
-linters-settings:
-  errcheck:
-    check-type-assertions: true
-    check-blank: true
-  gocyclo:
-    min-complexity: 15
-  gocognit:
-    min-complexity: 20
-  goconst:
-    min-len: 2
-    min-occurrences: 2
-  gocritic:
-    enabled-tags:
-      - diagnostic
-      - experimental
-      - opinionated
-      - performance
-      - style
-    disabled-checks:
-      - dupImport
-      - ifElseChain
-      - rangeExprCopy
-  govet:
-    check-shadowing: true
-  revive:
-    confidence: 0.8
-    rules:
-      - name: exported
-        severity: warning
-        disabled: false
-      - name: unexported-return
-        severity: warning
-        disabled: false
-  staticcheck:
-    checks:
-      - all
-      - "-ST1000"
-  stylecheck:
-    checks:
-      - all
-      - "-ST1000"
+  settings:
+    errcheck:
+      check-type-assertions: true
+      check-blank: true
+    gocyclo:
+      min-complexity: 15
+    gocognit:
+      min-complexity: 20
+    goconst:
+      min-len: 2
+      min-occurrences: 2
+    gocritic:
+      enabled-tags:
+        - diagnostic
+        - experimental
+        - opinionated
+        - performance
+        - style
+      disabled-checks:
+        - dupImport
+        - ifElseChain
+        - rangeExprCopy
+    govet:
+      check-shadowing: true
+    revive:
+      confidence: 0.8
+      rules:
+        - name: exported
+          severity: warning
+          disabled: false
+        - name: unexported-return
+          severity: warning
+          disabled: false
+    staticcheck:
+      checks:
+        - all
+        - "-ST1000"
+    stylecheck:
+      checks:
+        - all
+        - "-ST1000"
 
 issues:
-  exclude:
+  exclude-rules:
     - path: _test\.go
       linters:
         - gocognit
@@ -100,12 +99,9 @@ issues:
     - path: internal/modules/assistant/
       linters:
         - gocognit
-  exclude-rules:
     - linters:
         - gosec
       text: "G104"
 
 output:
   format: colored-line-number
-  print-issued-lines: true
-  print-linter-name: true

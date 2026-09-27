@@ -142,7 +142,7 @@ func (h *Handler) Login(c *gin.Context) {
 		return
 	}
 
-	result, err := h.service.Login(LoginInput{ //nolint:staticcheck
+	result, err := h.service.Login(LoginInput{
 		Email:    req.Email,
 		Password: req.Password,
 	})

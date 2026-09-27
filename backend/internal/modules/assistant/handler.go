@@ -43,7 +43,7 @@ func (h *Handler) Interpret(c *gin.Context) {
 
 	history := make([]Message, 0, len(req.History))
 	for _, m := range req.History {
-		history = append(history, Message{Role: m.Role, Text: m.Text}) //nolint:staticcheck
+		history = append(history, Message{Role: m.Role, Text: m.Text})
 	}
 	if len(history) > 8 {
 		history = history[len(history)-8:]

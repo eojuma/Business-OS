@@ -60,3 +60,7 @@ linters:
         - name: unexported-return
           severity: warning
           disabled: false
+    staticcheck:
+      checks:
+        - all
+        - "-S1016"

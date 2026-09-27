@@ -325,7 +325,7 @@ func TestConcurrentRecordPayment(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			payment := &Payment{Amount: paymentAmount}
-			_ = repo.RecordPayment(supplier.ID, businessID, payment)
+			_, _ = repo.RecordPayment(supplier.ID, businessID, payment)
 		}()
 	}
 

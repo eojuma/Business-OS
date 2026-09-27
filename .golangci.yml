@@ -18,10 +18,8 @@ linters:
     - goconst
     - gocritic
     - gocyclo
-    - gomnd
     - goprintffuncname
     - gosec
-    - gosimple
     - govet
     - ineffassign
     - misspell
@@ -32,8 +30,6 @@ linters:
     - predeclared
     - revive
     - staticcheck
-    - stylecheck
-    - tenv
     - unconvert
     - unparam
     - unused

@@ -33,7 +33,6 @@ linters:
     - staticcheck
     - stylecheck
     - tenv
-    - typecheck
     - unconvert
     - unparam
     - unused

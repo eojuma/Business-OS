@@ -69,7 +69,7 @@ linters:
         - "-ST1021"
 
 issues:
-  exclude:
+  exclude-rules:
     # Suppress errcheck on existing codebase files
     - path: internal/modules/assistant/client\.go
       linters:

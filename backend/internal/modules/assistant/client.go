@@ -2,6 +2,7 @@ package assistant
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -92,7 +93,7 @@ func (c *geminiClient) Complete(prompt string) (string, error) {
 
 func (c *geminiClient) do(body []byte) (content string, retryable bool, err error) {
 	endpoint := c.baseURL + "/chat/completions"
-	req, err := http.NewRequest(http.MethodPost, endpoint, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
 		return "", false, err
 	}
@@ -103,7 +104,7 @@ func (c *geminiClient) do(body []byte) (content string, retryable bool, err erro
 	if err != nil {
 		return "", true, fmt.Errorf("ai request to %s failed: %w", endpoint, err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {

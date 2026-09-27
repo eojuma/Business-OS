@@ -1,3 +1,4 @@
+// Package config holds application configuration loaded from environment variables.
 package config
 
 import (
@@ -9,6 +10,7 @@ import (
 	"github.com/joho/godotenv"
 )
 
+// Config holds all application configuration.
 type Config struct {
 	AppEnv         string
 	AppPort        string
@@ -35,6 +37,7 @@ type Config struct {
 	AIBaseURL  string
 }
 
+// Load loads configuration from environment variables.
 func Load() *Config {
 	_ = godotenv.Load()
 
@@ -65,10 +68,12 @@ func Load() *Config {
 	}
 }
 
+// IsProduction returns true if the application is running in production mode.
 func (c *Config) IsProduction() bool {
 	return c.AppEnv == "production"
 }
 
+// Validate validates the configuration for production readiness.
 func (c *Config) Validate() error {
 	if !c.IsProduction() {
 		return nil

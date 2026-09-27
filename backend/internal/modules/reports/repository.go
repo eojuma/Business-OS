@@ -7,7 +7,6 @@ import (
 	"gorm.io/gorm"
 )
 
-
 type DailySalesSummary struct {
 	Date         time.Time `json:"date"`
 	TotalRevenue int64     `json:"total_revenue"` // cents
@@ -22,10 +21,12 @@ type repository struct {
 	db *gorm.DB
 }
 
+// NewRepository creates a new reports repository with the given database.
 func NewRepository(db *gorm.DB) Repository {
 	return &repository{db: db}
 }
 
+// DailySalesSummaries returns daily sales summaries for the given business and date range.
 func (r *repository) DailySalesSummaries(businessID uuid.UUID, from, to time.Time) ([]DailySalesSummary, error) {
 	var results []DailySalesSummary
 

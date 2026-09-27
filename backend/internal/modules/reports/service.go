@@ -22,10 +22,13 @@ type service struct {
 	repo Repository
 }
 
+// NewService creates a new reports service with the given repository.
 func NewService(repo Repository) Service {
 	return &service{repo: repo}
 }
 
+// DailySalesReport returns daily sales summaries for the given business and date range.
+// If From/To are not provided, defaults to the last 30 days.
 func (s *service) DailySalesReport(input DailySalesReportInput) ([]DailySalesSummary, error) {
 	to := time.Now()
 	if input.To != nil {

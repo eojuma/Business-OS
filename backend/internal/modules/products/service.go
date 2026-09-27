@@ -40,10 +40,12 @@ type service struct {
 	repo Repository
 }
 
+// NewService creates a new product service with the given repository.
 func NewService(repo Repository) Service {
 	return &service{repo: repo}
 }
 
+// Create creates a new product with the given input.
 func (s *service) Create(input CreateInput) (*Product, error) {
 	if input.Price < 0 {
 		return nil, ErrInvalidPrice
@@ -64,6 +66,7 @@ func (s *service) Create(input CreateInput) (*Product, error) {
 	return p, nil
 }
 
+// Get retrieves a product by ID for the given business.
 func (s *service) Get(id, businessID uuid.UUID) (*Product, error) {
 	p, err := s.repo.FindByID(id, businessID)
 	if err != nil {
@@ -72,10 +75,12 @@ func (s *service) Get(id, businessID uuid.UUID) (*Product, error) {
 	return p, nil
 }
 
+// List returns all products for the given business.
 func (s *service) List(businessID uuid.UUID) ([]Product, error) {
 	return s.repo.List(businessID)
 }
 
+// Update updates a product with the given input.
 func (s *service) Update(id, businessID uuid.UUID, input UpdateInput) (*Product, error) {
 	p, err := s.repo.FindByID(id, businessID)
 	if err != nil {
@@ -107,6 +112,7 @@ func (s *service) Update(id, businessID uuid.UUID, input UpdateInput) (*Product,
 	return p, nil
 }
 
+// Delete deletes a product by ID for the given business.
 func (s *service) Delete(id, businessID uuid.UUID) error {
 	if err := s.repo.Delete(id, businessID); err != nil {
 		return err

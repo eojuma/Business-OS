@@ -553,11 +553,11 @@ If the owner's message is a follow-up about a product named earlier, put that pr
 			if m.Role == "assistant" {
 				role = "assistant"
 			}
-			b.WriteString(fmt.Sprintf("%s: %s\n", role, m.Text))
+			_, _ = fmt.Fprintf(&b, "%s: %s\n", role, m.Text)
 		}
 	}
 
-	b.WriteString(fmt.Sprintf("\n\nRespond with ONLY a JSON object, no markdown fences, no explanation, in exactly this shape:\n{\"intent\": \"<one of the intents above>\", \"product_name\": \"<product noun, or empty string>\", \"quantity\": <number, or 0>}\n\nMessage: %q", text))
+	_, _ = fmt.Fprintf(&b, "\n\nRespond with ONLY a JSON object, no markdown fences, no explanation, in exactly this shape:\n{\"intent\": \"<one of the intents above>\", \"product_name\": \"<product noun, or empty string>\", \"quantity\": <number, or 0>}\n\nMessage: %q", text)
 	return b.String()
 }
 
@@ -647,7 +647,7 @@ func matchProducts(products []ProductInfo, query string) []ProductInfo {
 		switch {
 		case score > bestScore:
 			bestScore = score
-			best = []ProductInfo{p}
+			best = []ProductInfo{p} //nolint:prealloc
 		case score == bestScore:
 			best = append(best, p)
 		}

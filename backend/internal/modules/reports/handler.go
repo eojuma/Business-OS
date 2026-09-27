@@ -15,10 +15,14 @@ type Handler struct {
 	service Service
 }
 
+// NewHandler creates a new reports handler with the given service.
 func NewHandler(service Service) *Handler {
 	return &Handler{service: service}
 }
 
+// DailySales handles GET /reports/daily-sales.
+// Query params: from (YYYY-MM-DD), to (YYYY-MM-DD).
+// Returns daily sales summaries for the business.
 func (h *Handler) DailySales(c *gin.Context) {
 	businessID, err := middleware.CurrentBusinessID(c)
 	if err != nil {

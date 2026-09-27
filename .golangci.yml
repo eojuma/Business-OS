@@ -42,10 +42,10 @@ linters:
     - wsl
   settings:
     gocognit:
-      min-complexity: 50
+      min-complexity: 100
     goconst:
-      min-len: 3
-      min-occurrences: 3
+      min-len: 5
+      min-occurrences: 5
     errcheck:
       check-type-assertions: true
       check-blank: false

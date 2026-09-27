@@ -7,7 +7,6 @@ import (
 	"gorm.io/gorm"
 )
 
-
 type DailySalesSummary struct {
 	Date         time.Time `json:"date"`
 	TotalRevenue int64     `json:"total_revenue"` // cents

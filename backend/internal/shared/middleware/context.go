@@ -7,7 +7,6 @@ import (
 	"github.com/google/uuid"
 )
 
-
 func CurrentBusinessID(c *gin.Context) (uuid.UUID, error) {
 	raw, exists := c.Get(ContextBusinessIDKey)
 	if !exists {

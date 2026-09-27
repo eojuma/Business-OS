@@ -31,7 +31,6 @@ linters:
     - revive
     - staticcheck
     - unconvert
-    - unparam
     - unused
     - whitespace
   disable:
@@ -68,29 +67,7 @@ linters:
         - "-ST1000"
         - "-ST1021"
 
-issues:
-  exclude-rules:
-    # Suppress errcheck on existing codebase files
-    - path: internal/modules/assistant/client\.go
-      linters:
-        - errcheck
-        - noctx
-    - path: internal/modules/auth/handler\.go
-      linters:
-        - errcheck
-    - path: internal/shared/middleware/logger\.go
-      linters:
-        - errcheck
-    - path: cmd/api/main\.go
-      linters:
-        - gosec
-    - path: internal/modules/assistant/service\.go
-      linters:
-        - prealloc
-        - staticcheck
-    - path: internal/modules/assistant/service_test\.go
-      linters:
-        - goconst
-    - path: internal/modules/assistant/client\.go
-      linters:
-        - noctx
+output:
+  format: colored-line-number
+  print-issued-lines: true
+  print-linter-name: true

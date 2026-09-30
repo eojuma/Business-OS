@@ -33,6 +33,7 @@ Milestones 1–3 are done and tested live end to end — not just compiling, act
 - **Frontend:** Next.js 14 (App Router), React, Tailwind CSS
 - **Auth:** JWT
 - **Architecture:** Modular monolith
+- **CI/CD:** GitHub Actions (build, test, lint, race detector, coverage)
 - **Deployment:** Docker Compose (Postgres, Redis, backend, frontend all containerized)
 
 ---
@@ -114,6 +115,27 @@ Modules never import each other directly. When one module needs another (e.g. `s
 See `sales/repository.go` and `sales/routes.go` for the reference implementation.
 
 **Not every module needs all five files.** `reports` has no `model.go` — it queries other modules' tables directly rather than owning any data of its own. `assistant` calls into other modules' services rather than a database at all.
+
+---
+
+## CI/CD Pipeline
+
+GitHub Actions workflow (`.github/workflows/ci.yml`) runs on every push and PR:
+
+| Job | Purpose |
+|-----|---------|
+| `backend-build` | `go build ./...`, `go mod verify`, `go mod tidy -diff` |
+| `backend-vet` | `go vet ./...` |
+| `backend-fmt` | `gofmt -l .` |
+| `backend-lint` | `golangci-lint` (25+ linters) |
+| `backend-test` | `go test -race -coverprofile` (race detector + coverage) |
+| `frontend-lint` | `npm run lint` (ESLint) |
+| `frontend-typecheck` | `tsc --noEmit` |
+| `frontend-build` | `npm run build` (Next.js production build) |
+| `docker-build` | Verifies Docker images build on `main` pushes |
+| `ci-summary` | Aggregates all job statuses, fails fast if any check fails |
+
+Coverage uploaded to Codecov (non-blocking). Docker images verified on `main` pushes.
 
 ---
 
@@ -263,7 +285,8 @@ Matches the MVP scope in the product vision doc:
 
 ## Known gaps
 
-- Test coverage is still limited; migration discovery is covered and CI runs backend tests plus the frontend production build
+- CI/CD pipeline is in place with comprehensive checks (build, test, lint, race detector, coverage)
+- Test coverage improving: supplier module now has comprehensive unit & integration tests (≥80% coverage)
 - CORS origin is configurable via `FRONTEND_URL` but still assumes one single allowed origin — fine for one environment, will need revisiting for staging + production
 - The frontend does not yet have a dedicated notifications screen; the authenticated API is available
 - The assistant currently handles sale entry only; business Q&A, report generation, forecasting, and anomaly detection remain future work

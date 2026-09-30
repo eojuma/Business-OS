@@ -61,6 +61,14 @@ func setupTestDB(t *testing.T) (*gorm.DB, uuid.UUID) {
 		t.Fatalf("failed to create test schema: %v", err)
 	}
 
+	// Register cleanup immediately after schema creation
+	t.Cleanup(func() {
+		// Drop the test schema instead of public schema
+		if err := db.Exec(fmt.Sprintf("DROP SCHEMA IF EXISTS %s CASCADE", schemaName)).Error; err != nil {
+			t.Logf("cleanup warning: failed to drop test schema %s: %v", schemaName, err)
+		}
+	})
+
 	// Set search path to test schema
 	db = db.Session(&gorm.Session{NewDB: true})
 	if err := db.Exec(fmt.Sprintf("SET search_path TO %s", schemaName)).Error; err != nil {
@@ -79,13 +87,6 @@ func setupTestDB(t *testing.T) (*gorm.DB, uuid.UUID) {
 	if err := db.Create(&testBusinessSchema).Error; err != nil {
 		t.Fatalf("failed to create test business in schema: %v", err)
 	}
-
-	t.Cleanup(func() {
-		// Drop the test schema instead of public schema
-		if err := db.Exec(fmt.Sprintf("DROP SCHEMA IF EXISTS %s CASCADE", schemaName)).Error; err != nil {
-			t.Logf("cleanup warning: failed to drop test schema %s: %v", schemaName, err)
-		}
-	})
 
 	return db, testBusinessSchema.ID
 }
@@ -172,7 +173,9 @@ func TestRepositoryFindByIDWrongBusiness(t *testing.T) {
 
 	otherBusinessID := uuid.New()
 	product := &Product{BusinessID: businessID, Name: "Test", Price: 1000}
-	db.Create(product)
+	if err := db.Create(product).Error; err != nil {
+		t.Fatalf("fixture creation failed: %v", err)
+	}
 
 	_, err := repo.FindByID(product.ID, otherBusinessID)
 	if err != gorm.ErrRecordNotFound {
@@ -229,7 +232,9 @@ func TestRepositoryDelete(t *testing.T) {
 	repo := NewRepository(db)
 
 	product := &Product{BusinessID: businessID, Name: "To Delete", Price: 100}
-	db.Create(product)
+	if err := db.Create(product).Error; err != nil {
+		t.Fatalf("fixture creation failed: %v", err)
+	}
 
 	err := repo.Delete(product.ID, businessID)
 	if err != nil {
@@ -237,7 +242,9 @@ func TestRepositoryDelete(t *testing.T) {
 	}
 
 	var count int64
-	db.Model(&Product{}).Where("id = ?", product.ID).Count(&count)
+	if err := db.Model(&Product{}).Where("id = ?", product.ID).Count(&count).Error; err != nil {
+		t.Fatalf("count query failed: %v", err)
+	}
 	if count != 0 {
 		t.Fatal("product should be deleted")
 	}

@@ -77,6 +77,7 @@ func (r *testRepository) UpdateCostPriceTx(tx *gorm.DB, businessID, productID uu
 	return nil
 }
 
+// TestCreateProduct verifies that a valid product is created with all fields set correctly.
 func TestCreateProduct(t *testing.T) {
 	repo := newTestRepository()
 	svc := NewService(repo)
@@ -116,6 +117,7 @@ func TestCreateProduct(t *testing.T) {
 	}
 }
 
+// TestCreateProductRejectsNegativePrice verifies that creating a product with a negative price returns ErrInvalidPrice.
 func TestCreateProductRejectsNegativePrice(t *testing.T) {
 	repo := newTestRepository()
 	svc := NewService(repo)
@@ -131,6 +133,7 @@ func TestCreateProductRejectsNegativePrice(t *testing.T) {
 	}
 }
 
+// TestGetProduct verifies retrieving an existing product by ID and business ID.
 func TestGetProduct(t *testing.T) {
 	repo := newTestRepository()
 	svc := NewService(repo)
@@ -160,6 +163,7 @@ func TestGetProduct(t *testing.T) {
 	}
 }
 
+// TestGetProductNotFound verifies that retrieving a non-existent product returns ErrProductNotFound.
 func TestGetProductNotFound(t *testing.T) {
 	repo := newTestRepository()
 	svc := NewService(repo)
@@ -170,6 +174,7 @@ func TestGetProductNotFound(t *testing.T) {
 	}
 }
 
+// TestGetProductWrongBusiness verifies that retrieving a product with wrong business ID returns ErrProductNotFound.
 func TestGetProductWrongBusiness(t *testing.T) {
 	repo := newTestRepository()
 	svc := NewService(repo)
@@ -184,6 +189,7 @@ func TestGetProductWrongBusiness(t *testing.T) {
 	}
 }
 
+// TestListProducts verifies listing products returns only those belonging to the business.
 func TestListProducts(t *testing.T) {
 	repo := newTestRepository()
 	svc := NewService(repo)
@@ -202,6 +208,7 @@ func TestListProducts(t *testing.T) {
 	}
 }
 
+// TestUpdateProduct verifies updating a product with new name and price preserves other fields.
 func TestUpdateProduct(t *testing.T) {
 	repo := newTestRepository()
 	svc := NewService(repo)
@@ -227,6 +234,7 @@ func TestUpdateProduct(t *testing.T) {
 	}
 }
 
+// TestUpdateProductNotFound verifies updating a non-existent product returns ErrProductNotFound.
 func TestUpdateProductNotFound(t *testing.T) {
 	repo := newTestRepository()
 	svc := NewService(repo)
@@ -237,6 +245,7 @@ func TestUpdateProductNotFound(t *testing.T) {
 	}
 }
 
+// TestUpdateProductRejectsNegativePrice verifies updating with negative price returns ErrInvalidPrice.
 func TestUpdateProductRejectsNegativePrice(t *testing.T) {
 	repo := newTestRepository()
 	svc := NewService(repo)
@@ -252,6 +261,7 @@ func TestUpdateProductRejectsNegativePrice(t *testing.T) {
 	}
 }
 
+// TestDeleteProduct verifies deleting a product removes it from the repository.
 func TestDeleteProduct(t *testing.T) {
 	repo := newTestRepository()
 	svc := NewService(repo)
@@ -269,6 +279,7 @@ func TestDeleteProduct(t *testing.T) {
 	}
 }
 
+// TestDeleteProductNotFound verifies deleting a non-existent product returns ErrRecordNotFound.
 func TestDeleteProductNotFound(t *testing.T) {
 	repo := newTestRepository()
 	svc := NewService(repo)

@@ -90,6 +90,7 @@ func setupTestDB(t *testing.T) (*gorm.DB, uuid.UUID) {
 	return db, testBusinessSchema.ID
 }
 
+// TestRepositoryCreate verifies creating a product persists all fields correctly in the database.
 func TestRepositoryCreate(t *testing.T) {
 	db, businessID := setupTestDB(t)
 	repo := NewRepository(db)
@@ -125,6 +126,7 @@ func TestRepositoryCreate(t *testing.T) {
 	}
 }
 
+// TestRepositoryFindByID verifies retrieving a product by ID and business ID.
 func TestRepositoryFindByID(t *testing.T) {
 	db, businessID := setupTestDB(t)
 	repo := NewRepository(db)
@@ -152,6 +154,7 @@ func TestRepositoryFindByID(t *testing.T) {
 	}
 }
 
+// TestRepositoryFindByIDNotFound verifies FindByID returns ErrRecordNotFound for non-existent products.
 func TestRepositoryFindByIDNotFound(t *testing.T) {
 	db, _ := setupTestDB(t)
 	repo := NewRepository(db)
@@ -162,6 +165,7 @@ func TestRepositoryFindByIDNotFound(t *testing.T) {
 	}
 }
 
+// TestRepositoryFindByIDWrongBusiness verifies FindByID returns ErrRecordNotFound for products in other businesses.
 func TestRepositoryFindByIDWrongBusiness(t *testing.T) {
 	db, businessID := setupTestDB(t)
 	repo := NewRepository(db)
@@ -176,6 +180,7 @@ func TestRepositoryFindByIDWrongBusiness(t *testing.T) {
 	}
 }
 
+// TestRepositoryList verifies listing products returns only those belonging to the business.
 func TestRepositoryList(t *testing.T) {
 	db, businessID := setupTestDB(t)
 	repo := NewRepository(db)
@@ -193,6 +198,7 @@ func TestRepositoryList(t *testing.T) {
 	}
 }
 
+// TestRepositoryUpdate verifies updating a product persists changes to the database.
 func TestRepositoryUpdate(t *testing.T) {
 	db, businessID := setupTestDB(t)
 	repo := NewRepository(db)
@@ -217,6 +223,7 @@ func TestRepositoryUpdate(t *testing.T) {
 	}
 }
 
+// TestRepositoryDelete verifies deleting a product removes it from the database.
 func TestRepositoryDelete(t *testing.T) {
 	db, businessID := setupTestDB(t)
 	repo := NewRepository(db)
@@ -236,6 +243,7 @@ func TestRepositoryDelete(t *testing.T) {
 	}
 }
 
+// TestRepositoryGetPricing verifies retrieving price and cost price for a product.
 func TestRepositoryGetPricing(t *testing.T) {
 	db, businessID := setupTestDB(t)
 	repo := NewRepository(db)
@@ -260,6 +268,7 @@ func TestRepositoryGetPricing(t *testing.T) {
 	}
 }
 
+// TestRepositoryGetPricingNotFound verifies GetPricing returns ErrRecordNotFound for non-existent products.
 func TestRepositoryGetPricingNotFound(t *testing.T) {
 	db, _ := setupTestDB(t)
 	repo := NewRepository(db)
@@ -289,6 +298,7 @@ func TestRepositoryUpdateCostPriceTx(t *testing.T) {
 	}
 }
 
+// TestUpdateCostPriceTxNotFound verifies UpdateCostPriceTx returns ErrRecordNotFound for non-existent products.
 func TestUpdateCostPriceTxNotFound(t *testing.T) {
 	db, _ := setupTestDB(t)
 	repo := NewRepository(db)
@@ -299,6 +309,7 @@ func TestUpdateCostPriceTxNotFound(t *testing.T) {
 	}
 }
 
+// TestMigrationLoad verifies migrations create the products table with correct indexes.
 func TestMigrationLoad(t *testing.T) {
 	db, _ := setupTestDB(t)
 
@@ -318,6 +329,7 @@ func TestMigrationLoad(t *testing.T) {
 	}
 }
 
+// TestRepositoryContextCancellation verifies context cancellation is respected during queries.
 func TestRepositoryContextCancellation(t *testing.T) {
 	db, _ := setupTestDB(t)
 	repo := NewRepository(db)
@@ -340,6 +352,7 @@ func TestRepositoryContextCancellation(t *testing.T) {
 	}
 }
 
+// TestProductNameIndex verifies list performance and ordering for 100 products.
 func TestProductNameIndex(t *testing.T) {
 	db, businessID := setupTestDB(t)
 	repo := NewRepository(db)

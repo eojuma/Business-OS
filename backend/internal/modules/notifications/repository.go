@@ -11,11 +11,14 @@ var ErrNotFound = errors.New("notification not found")
 
 type Repository interface {
 	List(businessID uuid.UUID, unreadOnly bool) ([]Notification, error)
+	FindByID(id, businessID uuid.UUID) (*Notification, error)
 	UnreadCount(businessID uuid.UUID) (int64, error)
 	MarkRead(id, businessID uuid.UUID) error
 	MarkAllRead(businessID uuid.UUID) error
 	MarkReadByEntity(businessID uuid.UUID, notificationType string, entityID uuid.UUID) error
 	Create(n *Notification) error
+	Update(n *Notification) error
+	Delete(id, businessID uuid.UUID) error
 	ExistsUnread(businessID uuid.UUID, notificationType string, entityID uuid.UUID) (bool, error)
 }
 
@@ -68,6 +71,30 @@ func (r *repository) MarkReadByEntity(businessID uuid.UUID, notificationType str
 
 func (r *repository) Create(n *Notification) error {
 	return r.db.Create(n).Error
+}
+
+func (r *repository) FindByID(id, businessID uuid.UUID) (*Notification, error) {
+	var notification Notification
+	err := r.db.Where("id = ? AND business_id = ?", id, businessID).First(&notification).Error
+	if err != nil {
+		return nil, err
+	}
+	return &notification, nil
+}
+
+func (r *repository) Update(n *Notification) error {
+	return r.db.Save(n).Error
+}
+
+func (r *repository) Delete(id, businessID uuid.UUID) error {
+	res := r.db.Where("id = ? AND business_id = ?", id, businessID).Delete(&Notification{})
+	if res.Error != nil {
+		return res.Error
+	}
+	if res.RowsAffected == 0 {
+		return ErrNotFound
+	}
+	return nil
 }
 
 func (r *repository) ExistsUnread(businessID uuid.UUID, notificationType string, entityID uuid.UUID) (bool, error) {

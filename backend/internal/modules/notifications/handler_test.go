@@ -10,11 +10,15 @@ import (
 	"github.com/google/uuid"
 )
 
+const (
+	testUnreadTitle = "Unread"
+)
+
 type mockService struct {
-	listFunc       func(businessID uuid.UUID, unreadOnly bool) ([]Notification, error)
-	unreadCount    func(businessID uuid.UUID) (int64, error)
-	markRead       func(id, businessID uuid.UUID) error
-	markAllRead    func(businessID uuid.UUID) error
+	listFunc    func(businessID uuid.UUID, unreadOnly bool) ([]Notification, error)
+	unreadCount func(businessID uuid.UUID) (int64, error)
+	markRead    func(id, businessID uuid.UUID) error
+	markAllRead func(businessID uuid.UUID) error
 }
 
 func (m *mockService) List(businessID uuid.UUID, unreadOnly bool) ([]Notification, error) {
@@ -76,7 +80,7 @@ func TestHandlerList(t *testing.T) {
 	router, _ := setupHandler(mock)
 
 	w := httptest.NewRecorder()
-	req, _ := http.NewRequest("GET", "/notifications", nil)
+	req := httptest.NewRequest(http.MethodGet, "/notifications", nil)
 	router.ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {
@@ -97,7 +101,7 @@ func TestHandlerListUnreadOnly(t *testing.T) {
 	router, _ := setupHandler(mock)
 
 	w := httptest.NewRecorder()
-	req, _ := http.NewRequest("GET", "/notifications?unread=true", nil)
+	req := httptest.NewRequest(http.MethodGet, "/notifications?unread=true", nil)
 	router.ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {
@@ -115,7 +119,7 @@ func TestHandlerListUnauthorized(t *testing.T) {
 	r.GET("/notifications", h.List)
 
 	w := httptest.NewRecorder()
-	req, _ := http.NewRequest("GET", "/notifications", nil)
+	req := httptest.NewRequest(http.MethodGet, "/notifications", nil)
 	r.ServeHTTP(w, req)
 
 	if w.Code != http.StatusUnauthorized {
@@ -133,7 +137,7 @@ func TestHandlerUnreadCount(t *testing.T) {
 	router, _ := setupHandler(mock)
 
 	w := httptest.NewRecorder()
-	req, _ := http.NewRequest("GET", "/notifications/unread-count", nil)
+	req := httptest.NewRequest(http.MethodGet, "/notifications/unread-count", nil)
 	router.ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {
@@ -145,9 +149,9 @@ func TestHandlerUnreadCount(t *testing.T) {
 func TestHandlerMarkRead(t *testing.T) {
 	id := uuid.New()
 	mock := &mockService{
-		markRead: func(id, businessID uuid.UUID) error {
-			if id != id {
-				t.Fatalf("expected id %v, got %v", id, id)
+		markRead: func(reqID, businessID uuid.UUID) error {
+			if reqID != id {
+				t.Fatalf("expected id %v, got %v", id, reqID)
 			}
 			return nil
 		},
@@ -155,7 +159,7 @@ func TestHandlerMarkRead(t *testing.T) {
 	router, _ := setupHandler(mock)
 
 	w := httptest.NewRecorder()
-	req, _ := http.NewRequest("POST", "/notifications/"+id.String()+"/read", nil)
+	req := httptest.NewRequest(http.MethodPost, "/notifications/"+id.String()+"/read", nil)
 	router.ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {
@@ -246,4 +250,3 @@ func TestHandlerMarkAllReadUnauthorized(t *testing.T) {
 		t.Fatalf("expected 401, got %d", w.Code)
 	}
 }
-

@@ -38,9 +38,9 @@ func createTestProduct(db *gorm.DB, businessID uuid.UUID) *products.Product {
 
 func createTestStockLevel(db *gorm.DB, businessID, productID uuid.UUID, quantity, threshold int64) {
 	stock := map[string]interface{}{
-		"business_id":        businessID,
-		"product_id":         productID,
-		"quantity":           quantity,
+		"business_id":         businessID,
+		"product_id":          productID,
+		"quantity":            quantity,
 		"low_stock_threshold": threshold,
 	}
 	db.Table("stock_levels").Create(stock)
@@ -57,10 +57,10 @@ func createTestSupplier(db *gorm.DB, businessID uuid.UUID) *suppliers.Supplier {
 
 func createTestCustomer(db *gorm.DB, businessID uuid.UUID) *customers.Customer {
 	customer := &customers.Customer{
-		BusinessID:   businessID,
-		Name:         "Test Customer",
-		CreditLimit:  100000,
-		Balance:      90000,
+		BusinessID:  businessID,
+		Name:        "Test Customer",
+		CreditLimit: 100000,
+		Balance:     90000,
 	}
 	db.Create(customer)
 	return customer

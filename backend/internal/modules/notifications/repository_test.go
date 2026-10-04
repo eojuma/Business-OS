@@ -98,14 +98,14 @@ func TestRepositoryCreate(t *testing.T) {
 
 	entityID := uuid.New()
 	notification := &Notification{
-		BusinessID:  businessID,
-		Type:        TypeLowStock,
-		Severity:    SeverityWarning,
-		Recipient:   "test@example.com",
-		Title:       "Low stock: Test Product",
-		Message:     "Test Product has 5 units remaining (threshold 10).",
-		EntityID:    &entityID,
-		EntityName:  "Test Product",
+		BusinessID: businessID,
+		Type:       TypeLowStock,
+		Severity:   SeverityWarning,
+		Recipient:  "test@example.com",
+		Title:      "Low stock: Test Product",
+		Message:    "Test Product has 5 units remaining (threshold 10).",
+		EntityID:   &entityID,
+		EntityName: "Test Product",
 	}
 
 	err := repo.Create(notification)
@@ -140,14 +140,14 @@ func TestRepositoryFindByID(t *testing.T) {
 
 	entityID := uuid.New()
 	notification := &Notification{
-		BusinessID:  businessID,
-		Type:        TypeLowStock,
-		Severity:    SeverityWarning,
-		Recipient:   "test@example.com",
-		Title:       "Find Me",
-		Message:     "Test message",
-		EntityID:    &entityID,
-		EntityName:  "Test Product",
+		BusinessID: businessID,
+		Type:       TypeLowStock,
+		Severity:   SeverityWarning,
+		Recipient:  "test@example.com",
+		Title:      "Find Me",
+		Message:    "Test message",
+		EntityID:   &entityID,
+		EntityName: "Test Product",
 	}
 	db.Create(notification)
 

@@ -11,10 +11,10 @@ import (
 )
 
 type mockService struct {
-	listFunc       func(businessID uuid.UUID, unreadOnly bool) ([]Notification, error)
-	unreadCount    func(businessID uuid.UUID) (int64, error)
-	markRead       func(id, businessID uuid.UUID) error
-	markAllRead    func(businessID uuid.UUID) error
+	listFunc    func(businessID uuid.UUID, unreadOnly bool) ([]Notification, error)
+	unreadCount func(businessID uuid.UUID) (int64, error)
+	markRead    func(id, businessID uuid.UUID) error
+	markAllRead func(businessID uuid.UUID) error
 }
 
 func (m *mockService) List(businessID uuid.UUID, unreadOnly bool) ([]Notification, error) {
@@ -246,4 +246,3 @@ func TestHandlerMarkAllReadUnauthorized(t *testing.T) {
 		t.Fatalf("expected 401, got %d", w.Code)
 	}
 }
-

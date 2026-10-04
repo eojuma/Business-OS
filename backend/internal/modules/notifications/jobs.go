@@ -1,6 +1,7 @@
 package notifications
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"time"
@@ -229,14 +230,22 @@ func (g *Generator) Run() {
 
 // StartScheduler runs generation immediately, then on every tick for the
 // lifetime of the process. Intended to be called from main as a goroutine.
-func StartScheduler(db *gorm.DB, interval time.Duration) {
+// Returns a stop function to gracefully shut down the scheduler.
+func StartScheduler(db *gorm.DB, interval time.Duration) func() {
+	ctx, cancel := context.WithCancel(context.Background())
 	g := NewGenerator(db)
 	go func() {
 		g.Run()
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
-		for range ticker.C {
-			g.Run()
+		for {
+			select {
+			case <-ticker.C:
+				g.Run()
+			case <-ctx.Done():
+				return
+			}
 		}
 	}()
+	return cancel
 }

@@ -137,7 +137,7 @@ func TestServiceListUnreadOnly(t *testing.T) {
 	svc := NewService(repo)
 
 	businessID := uuid.New()
-	repo.notifications[uuid.New()] = &Notification{BusinessID: businessID, Title: "Unread", Read: false}
+	repo.notifications[uuid.New()] = &Notification{BusinessID: businessID, Title: testUnreadTitle, Read: false}
 	repo.notifications[uuid.New()] = &Notification{BusinessID: businessID, Title: "Read", Read: true}
 	repo.notifications[uuid.New()] = &Notification{BusinessID: uuid.New(), Title: "Other Business", Read: false}
 

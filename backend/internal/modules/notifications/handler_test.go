@@ -10,6 +10,8 @@ import (
 	"github.com/google/uuid"
 )
 
+const testUnreadTitle = "Unread"
+
 type mockService struct {
 	listFunc    func(businessID uuid.UUID, unreadOnly bool) ([]Notification, error)
 	unreadCount func(businessID uuid.UUID) (int64, error)
@@ -50,7 +52,6 @@ func setupHandler(m *mockService) (*gin.Engine, *Handler) {
 	r := gin.New()
 	h := NewHandler(m)
 
-	// Mock middleware to inject business ID
 	r.Use(func(c *gin.Context) {
 		businessID := uuid.New()
 		c.Set(middleware.ContextBusinessIDKey, businessID.String())
@@ -68,15 +69,13 @@ func setupHandler(m *mockService) (*gin.Engine, *Handler) {
 func TestHandlerList(t *testing.T) {
 	mock := &mockService{
 		listFunc: func(businessID uuid.UUID, unreadOnly bool) ([]Notification, error) {
-			return []Notification{
-				{ID: uuid.New(), BusinessID: uuid.New(), Title: "Test", Read: false},
-			}, nil
+			return []Notification{{ID: uuid.New(), BusinessID: uuid.New(), Title: "Test", Read: false}}, nil
 		},
 	}
 	router, _ := setupHandler(mock)
 
 	w := httptest.NewRecorder()
-	req, _ := http.NewRequest("GET", "/notifications", nil)
+	req := httptest.NewRequest(http.MethodGet, "/notifications", nil)
 	router.ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {
@@ -91,13 +90,13 @@ func TestHandlerListUnreadOnly(t *testing.T) {
 			if !unreadOnly {
 				t.Fatal("expected unreadOnly=true")
 			}
-			return []Notification{{ID: uuid.New(), Title: "Unread"}}, nil
+			return []Notification{{ID: uuid.New(), Title: testUnreadTitle}}, nil
 		},
 	}
 	router, _ := setupHandler(mock)
 
 	w := httptest.NewRecorder()
-	req, _ := http.NewRequest("GET", "/notifications?unread=true", nil)
+	req := httptest.NewRequest(http.MethodGet, "/notifications?unread=true", nil)
 	router.ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {
@@ -133,7 +132,7 @@ func TestHandlerUnreadCount(t *testing.T) {
 	router, _ := setupHandler(mock)
 
 	w := httptest.NewRecorder()
-	req, _ := http.NewRequest("GET", "/notifications/unread-count", nil)
+	req := httptest.NewRequest(http.MethodGet, "/notifications/unread-count", nil)
 	router.ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {
@@ -145,9 +144,9 @@ func TestHandlerUnreadCount(t *testing.T) {
 func TestHandlerMarkRead(t *testing.T) {
 	id := uuid.New()
 	mock := &mockService{
-		markRead: func(id, businessID uuid.UUID) error {
-			if id != id {
-				t.Fatalf("expected id %v, got %v", id, id)
+		markRead: func(reqID, businessID uuid.UUID) error {
+			if reqID != id {
+				t.Fatalf("expected id %v, got %v", id, reqID)
 			}
 			return nil
 		},
@@ -155,7 +154,7 @@ func TestHandlerMarkRead(t *testing.T) {
 	router, _ := setupHandler(mock)
 
 	w := httptest.NewRecorder()
-	req, _ := http.NewRequest("POST", "/notifications/"+id.String()+"/read", nil)
+	req := httptest.NewRequest(http.MethodPost, "/notifications/"+id.String()+"/read", nil)
 	router.ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {
@@ -173,7 +172,7 @@ func TestHandlerMarkReadNotFound(t *testing.T) {
 	router, _ := setupHandler(mock)
 
 	w := httptest.NewRecorder()
-	req, _ := http.NewRequest("POST", "/notifications/"+uuid.New().String()+"/read", nil)
+	req := httptest.NewRequest(http.MethodPost, "/notifications/"+uuid.New().String()+"/read", nil)
 	router.ServeHTTP(w, req)
 
 	if w.Code != http.StatusNotFound {
@@ -187,7 +186,7 @@ func TestHandlerMarkReadInvalidID(t *testing.T) {
 	router, _ := setupHandler(mock)
 
 	w := httptest.NewRecorder()
-	req, _ := http.NewRequest("POST", "/notifications/invalid/read", nil)
+	req := httptest.NewRequest(http.MethodPost, "/notifications/invalid/read", nil)
 	router.ServeHTTP(w, req)
 
 	if w.Code != http.StatusBadRequest {
@@ -222,7 +221,7 @@ func TestHandlerMarkAllRead(t *testing.T) {
 	router, _ := setupHandler(mock)
 
 	w := httptest.NewRecorder()
-	req, _ := http.NewRequest("POST", "/notifications/read-all", nil)
+	req := httptest.NewRequest(http.MethodPost, "/notifications/read-all", nil)
 	router.ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {

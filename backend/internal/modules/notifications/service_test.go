@@ -107,11 +107,6 @@ func (r *testRepository) Update(n *Notification) error {
 	return nil
 }
 
-func newTestService() (Service, *testRepository) {
-	repo := newTestRepository()
-	return NewService(repo), repo
-}
-
 // TestServiceList verifies listing notifications returns only those belonging to the business.
 func TestServiceList(t *testing.T) {
 	repo := newTestRepository()
@@ -137,7 +132,7 @@ func TestServiceListUnreadOnly(t *testing.T) {
 	svc := NewService(repo)
 
 	businessID := uuid.New()
-	repo.notifications[uuid.New()] = &Notification{BusinessID: businessID, Title: "Unread", Read: false}
+	repo.notifications[uuid.New()] = &Notification{BusinessID: businessID, Title: testUnreadTitle, Read: false}
 	repo.notifications[uuid.New()] = &Notification{BusinessID: businessID, Title: "Read", Read: true}
 	repo.notifications[uuid.New()] = &Notification{BusinessID: uuid.New(), Title: "Other Business", Read: false}
 

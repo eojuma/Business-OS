@@ -12,9 +12,32 @@ import (
 
 	"github.com/businessos/backend/internal/config"
 	"github.com/businessos/backend/internal/modules/business"
+	"github.com/businessos/backend/internal/modules/products"
 	"github.com/businessos/backend/internal/shared/database"
 	"github.com/businessos/backend/internal/shared/migrations"
 )
+
+func createTestProduct(db *gorm.DB, businessID uuid.UUID) *products.Product {
+	product := &products.Product{
+		BusinessID: businessID,
+		Name:       "Test Product",
+		Unit:       "pcs",
+		Price:      10000,
+		CostPrice:  5000,
+	}
+	db.Create(product)
+	return product
+}
+
+func createTestStockLevel(db *gorm.DB, businessID, productID uuid.UUID, quantity, threshold int64) {
+	stock := map[string]interface{}{
+		"business_id":         businessID,
+		"product_id":          productID,
+		"quantity":            quantity,
+		"low_stock_threshold": threshold,
+	}
+	db.Table("stock_levels").Create(stock)
+}
 
 func setupTestDB(t *testing.T) (*gorm.DB, uuid.UUID) {
 	t.Helper()
@@ -125,11 +148,8 @@ func TestRepositoryCreate(t *testing.T) {
 	if found.Title != notification.Title {
 		t.Fatalf("title mismatch: got %v, want %v", found.Title, notification.Title)
 	}
-	if !found.CreatedAt.IsZero() {
-		// CreatedAt should be set
-	}
 	if found.Read {
-		t.Fatalf("is_read should default to false")
+		t.Fatalf("is_read should default to false, got %v", found.Read)
 	}
 }
 
@@ -180,7 +200,7 @@ func TestRepositoryFindByIDWrongBusiness(t *testing.T) {
 	repo := NewRepository(db)
 
 	otherBusinessID := uuid.New()
-	notification := &Notification{BusinessID: businessID, Title: "Test", Message: "Test"}
+	notification := &Notification{BusinessID: businessID, Title: "Test"}
 	if err := db.Create(notification).Error; err != nil {
 		t.Fatalf("fixture creation failed: %v", err)
 	}
@@ -214,10 +234,8 @@ func TestRepositoryListUnreadOnly(t *testing.T) {
 	db, businessID := setupTestDB(t)
 	repo := NewRepository(db)
 
-	n1 := &Notification{BusinessID: businessID, Title: "Unread", Message: "msg", Read: false}
-	n2 := &Notification{BusinessID: businessID, Title: "Read", Message: "msg", Read: true}
-	db.Create(n1)
-	db.Create(n2)
+	db.Create(&Notification{BusinessID: businessID, Title: "Unread", Message: "msg", Read: false})
+	db.Create(&Notification{BusinessID: businessID, Title: "Read", Message: "msg", Read: true})
 
 	list, err := repo.List(businessID, true)
 	if err != nil {
@@ -437,7 +455,7 @@ func TestRepositoryContextCancellation(t *testing.T) {
 	}
 }
 
-// TestNotificationListPerformance verifies list performance for 100 notifications.
+// TestNotificationListPerformance verifies list performance and ordering for 100 notifications.
 func TestNotificationListPerformance(t *testing.T) {
 	db, businessID := setupTestDB(t)
 	repo := NewRepository(db)
@@ -445,9 +463,7 @@ func TestNotificationListPerformance(t *testing.T) {
 	for i := 0; i < 100; i++ {
 		n := &Notification{
 			BusinessID: businessID,
-			Type:       TypeLowStock,
 			Title:      fmt.Sprintf("Notification %03d", i),
-			Message:    "Test message",
 		}
 		db.Create(n)
 	}

@@ -1,6 +1,7 @@
 package notifications
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -75,7 +76,7 @@ func TestHandlerList(t *testing.T) {
 	router, _ := setupHandler(mock)
 
 	w := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/notifications", nil)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/notifications", nil)
 	router.ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {
@@ -96,7 +97,7 @@ func TestHandlerListUnreadOnly(t *testing.T) {
 	router, _ := setupHandler(mock)
 
 	w := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/notifications?unread=true", nil)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/notifications?unread=true", nil)
 	router.ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {
@@ -114,7 +115,7 @@ func TestHandlerListUnauthorized(t *testing.T) {
 	r.GET("/notifications", h.List)
 
 	w := httptest.NewRecorder()
-	req, _ := http.NewRequest("GET", "/notifications", nil)
+	req, _ := http.NewRequestWithContext(context.Background(), http.MethodGet, "/notifications", nil)
 	r.ServeHTTP(w, req)
 
 	if w.Code != http.StatusUnauthorized {
@@ -132,7 +133,7 @@ func TestHandlerUnreadCount(t *testing.T) {
 	router, _ := setupHandler(mock)
 
 	w := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/notifications/unread-count", nil)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/notifications/unread-count", nil)
 	router.ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {
@@ -154,7 +155,7 @@ func TestHandlerMarkRead(t *testing.T) {
 	router, _ := setupHandler(mock)
 
 	w := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/notifications/"+id.String()+"/read", nil)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/notifications/"+id.String()+"/read", nil)
 	router.ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {
@@ -172,7 +173,7 @@ func TestHandlerMarkReadNotFound(t *testing.T) {
 	router, _ := setupHandler(mock)
 
 	w := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/notifications/"+uuid.New().String()+"/read", nil)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/notifications/"+uuid.New().String()+"/read", nil)
 	router.ServeHTTP(w, req)
 
 	if w.Code != http.StatusNotFound {
@@ -186,7 +187,7 @@ func TestHandlerMarkReadInvalidID(t *testing.T) {
 	router, _ := setupHandler(mock)
 
 	w := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/notifications/invalid/read", nil)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/notifications/invalid/read", nil)
 	router.ServeHTTP(w, req)
 
 	if w.Code != http.StatusBadRequest {
@@ -203,7 +204,7 @@ func TestHandlerMarkReadUnauthorized(t *testing.T) {
 	r.POST("/notifications/:id/read", h.MarkRead)
 
 	w := httptest.NewRecorder()
-	req, _ := http.NewRequest("POST", "/notifications/"+uuid.New().String()+"/read", nil)
+	req, _ := http.NewRequestWithContext(context.Background(), http.MethodPost, "/notifications/"+uuid.New().String()+"/read", nil)
 	r.ServeHTTP(w, req)
 
 	if w.Code != http.StatusUnauthorized {
@@ -221,7 +222,7 @@ func TestHandlerMarkAllRead(t *testing.T) {
 	router, _ := setupHandler(mock)
 
 	w := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/notifications/read-all", nil)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/notifications/read-all", nil)
 	router.ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {
@@ -238,7 +239,7 @@ func TestHandlerMarkAllReadUnauthorized(t *testing.T) {
 	r.POST("/notifications/read-all", h.MarkAllRead)
 
 	w := httptest.NewRecorder()
-	req, _ := http.NewRequest("POST", "/notifications/read-all", nil)
+	req, _ := http.NewRequestWithContext(context.Background(), http.MethodPost, "/notifications/read-all", nil)
 	r.ServeHTTP(w, req)
 
 	if w.Code != http.StatusUnauthorized {

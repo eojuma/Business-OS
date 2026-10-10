@@ -12,9 +12,7 @@ import (
 
 	"github.com/businessos/backend/internal/config"
 	"github.com/businessos/backend/internal/modules/business"
-	"github.com/businessos/backend/internal/modules/customers"
 	"github.com/businessos/backend/internal/modules/products"
-	"github.com/businessos/backend/internal/modules/suppliers"
 	"github.com/businessos/backend/internal/shared/database"
 	"github.com/businessos/backend/internal/shared/migrations"
 )
@@ -39,26 +37,6 @@ func createTestStockLevel(db *gorm.DB, businessID, productID uuid.UUID, quantity
 		"low_stock_threshold": threshold,
 	}
 	db.Table("stock_levels").Create(stock)
-}
-
-func createTestSupplier(db *gorm.DB, businessID uuid.UUID) *suppliers.Supplier {
-	supplier := &suppliers.Supplier{
-		BusinessID: businessID,
-		Name:       "Test Supplier",
-	}
-	db.Create(supplier)
-	return supplier
-}
-
-func createTestCustomer(db *gorm.DB, businessID uuid.UUID) *customers.Customer {
-	customer := &customers.Customer{
-		BusinessID:  businessID,
-		Name:        "Test Customer",
-		CreditLimit: 100000,
-		Balance:     90000,
-	}
-	db.Create(customer)
-	return customer
 }
 
 func setupTestDB(t *testing.T) (*gorm.DB, uuid.UUID) {

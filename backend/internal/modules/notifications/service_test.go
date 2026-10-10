@@ -107,11 +107,6 @@ func (r *testRepository) Update(n *Notification) error {
 	return nil
 }
 
-func newTestService() (Service, *testRepository) {
-	repo := newTestRepository()
-	return NewService(repo), repo
-}
-
 // TestServiceList verifies listing notifications returns only those belonging to the business.
 func TestServiceList(t *testing.T) {
 	repo := newTestRepository()

@@ -235,7 +235,7 @@ func TestGeneratorNotifyProductLowStockDeduplication(t *testing.T) {
 	product := createTestProduct(db, businessID)
 	createTestStockLevel(db, businessID, product.ID, 5, 10)
 
-err := gen.NotifyProductLowStock(businessID, product.ID)
+	err := gen.NotifyProductLowStock(businessID, product.ID)
 	if err != nil {
 		t.Fatalf("NotifyProductLowStock failed: %v", err)
 	}

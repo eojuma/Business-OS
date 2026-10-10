@@ -198,8 +198,6 @@ func TestGeneratorNotifyProductLowStock(t *testing.T) {
 		t.Fatalf("expected severity warning, got %v", notifs[0].Severity)
 	}
 }
-
-// TestGeneratorNotifyProductLowStockRestocked verifies clearing alert when restocked.
 func TestGeneratorNotifyProductLowStockRestocked(t *testing.T) {
 	db, businessID := setupTestDB(t)
 	gen := NewGenerator(db)
@@ -237,9 +235,9 @@ func TestGeneratorNotifyProductLowStockDeduplication(t *testing.T) {
 	product := createTestProduct(db, businessID)
 	createTestStockLevel(db, businessID, product.ID, 5, 10)
 
-	err := gen.NotifyProductLowStock(businessID, product.ID)
+err := gen.NotifyProductLowStock(businessID, product.ID)
 	if err != nil {
-		t.Fatalf("first NotifyProductLowStock failed: %v", err)
+		t.Fatalf("NotifyProductLowStock failed: %v", err)
 	}
 
 	err = gen.NotifyProductLowStock(businessID, product.ID)

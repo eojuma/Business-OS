@@ -210,7 +210,9 @@ func TestGeneratorNotifyProductLowStockRestocked(t *testing.T) {
 		t.Fatalf("NotifyProductLowStock failed: %v", err)
 	}
 
-	db.Table("stock_levels").Where("product_id = ? AND business_id = ?", product.ID, businessID).Update("quantity", 20)
+	if err := db.Table("stock_levels").Where("product_id = ? AND business_id = ?", product.ID, businessID).Update("quantity", 20).Error; err != nil {
+		t.Fatalf("failed to restock: %v", err)
+	}
 
 	err = gen.NotifyProductLowStock(businessID, product.ID)
 	if err != nil {

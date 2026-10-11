@@ -481,4 +481,10 @@ func TestNotificationListPerformance(t *testing.T) {
 	if elapsed > 1*time.Second {
 		t.Logf("List took %v (may need index optimization)", elapsed)
 	}
+	for i := 1; i < len(list); i++ {
+		if list[i].CreatedAt.After(list[i-1].CreatedAt) {
+			t.Fatalf("notifications not in created_at desc order: index %d created_at %v is after index %d created_at %v",
+				i, list[i].CreatedAt, i-1, list[i-1].CreatedAt)
+		}
+	}
 }

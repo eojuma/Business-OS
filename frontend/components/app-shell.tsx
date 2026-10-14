@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { BarChart3, Bell, Boxes, Brain, ChevronRight, CircleDollarSign, ClipboardList, Contact, LayoutDashboard, LogOut, Menu, Package, Settings, ShoppingCart, Truck, Users, X } from "lucide-react";
+import { BarChart3, Bell, Boxes, Brain, ChevronRight, CircleDollarSign, ClipboardList, Contact, LayoutDashboard, LogOut, Menu, Package, ScanLine, Settings, ShoppingCart, Truck, Users, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 
@@ -14,6 +14,7 @@ const nav = [
   { href: "/dashboard/customers", label: "Customers", icon: Users },
   { href: "/dashboard/suppliers", label: "Suppliers", icon: Truck },
   { href: "/dashboard/purchases", label: "Purchases", icon: ClipboardList },
+  { href: "/dashboard/receipts", label: "Receipt OCR", icon: ScanLine },
   { href: "/dashboard/finance", label: "Finance", icon: CircleDollarSign },
   { href: "/dashboard/analytics", label: "Analytics", icon: BarChart3 },
   { href: "/dashboard/reports", label: "Reports", icon: Contact },

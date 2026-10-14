@@ -9,9 +9,9 @@ import (
 )
 
 type testRepository struct {
-	created   *Purchase
-	receiveErr error
-	findErr    error
+	created       *Purchase
+	receiveErr    error
+	findErr       error
 	listPurchases []Purchase
 }
 
@@ -41,16 +41,24 @@ func (r *testRepository) Receive(id, businessID uuid.UUID, inventory InventoryRe
 
 type testInventoryReceiver struct{}
 
-func (r *testInventoryReceiver) RecordMovementTx(tx *gorm.DB, businessID, productID uuid.UUID, movementType string, quantity int64, note string) error { return nil }
-func (r *testInventoryReceiver) RecordMovement(businessID, productID uuid.UUID, movementType string, quantity int64, note string) error { return nil }
+func (r *testInventoryReceiver) RecordMovementTx(tx *gorm.DB, businessID, productID uuid.UUID, movementType string, quantity int64, note string) error {
+	return nil
+}
+func (r *testInventoryReceiver) RecordMovement(businessID, productID uuid.UUID, movementType string, quantity int64, note string) error {
+	return nil
+}
 
 type testSupplierCharger struct{}
 
-func (r *testSupplierCharger) AddOutstandingTx(tx *gorm.DB, id, businessID uuid.UUID, amount int64) error { return nil }
+func (r *testSupplierCharger) AddOutstandingTx(tx *gorm.DB, id, businessID uuid.UUID, amount int64) error {
+	return nil
+}
 
 type testProductCostUpdater struct{}
 
-func (r *testProductCostUpdater) UpdateCostPriceTx(tx *gorm.DB, businessID, productID uuid.UUID, costPrice int64) error { return nil }
+func (r *testProductCostUpdater) UpdateCostPriceTx(tx *gorm.DB, businessID, productID uuid.UUID, costPrice int64) error {
+	return nil
+}
 
 func TestCreateWithMockedRepo(t *testing.T) {
 	repo := &testRepository{}
@@ -89,7 +97,7 @@ func TestCreateWithNote(t *testing.T) {
 
 	purchase, err := service.Create(CreateInput{
 		BusinessID: uuid.New(), SupplierID: uuid.New(), AmountPaid: 50,
-		Note: "Test purchase note",
+		Note:  "Test purchase note",
 		Items: []ItemInput{{ProductID: uuid.New(), Quantity: 1, UnitCost: 50}},
 	})
 	if err != nil {

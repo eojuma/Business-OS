@@ -1,6 +1,8 @@
 package receipts
 
 import (
+	"errors"
+
 	"github.com/businessos/backend/internal/config"
 	"github.com/businessos/backend/internal/modules/customers"
 	"github.com/businessos/backend/internal/modules/inventory"
@@ -15,7 +17,7 @@ import (
 )
 
 // productAdapter narrows products.Repository to the read-only view the
-// receipts module needs for best-effort matching.
+// receipts module needs for best-effort matching and ownership checks.
 type productAdapter struct {
 	repo products.Repository
 }
@@ -30,6 +32,38 @@ func (a *productAdapter) List(businessID uuid.UUID) ([]ProductInfo, error) {
 		infos[i] = ProductInfo{ID: p.ID, Name: p.Name}
 	}
 	return infos, nil
+}
+
+// supplierAdapter checks supplier ownership without importing the suppliers
+// package into the service layer.
+type supplierAdapter struct {
+	repo suppliers.Repository
+}
+
+func (a *supplierAdapter) Exists(businessID, supplierID uuid.UUID) (bool, error) {
+	if _, err := a.repo.FindByID(supplierID, businessID); err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
+}
+
+// customerAdapter checks customer ownership without importing the customers
+// package into the service layer.
+type customerAdapter struct {
+	repo customers.Repository
+}
+
+func (a *customerAdapter) Exists(businessID, customerID uuid.UUID) (bool, error) {
+	if _, err := a.repo.FindByID(customerID, businessID); err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
 }
 
 // purchaseAdapter wraps purchases.Service and translates inputs/results across
@@ -84,6 +118,7 @@ func (a *saleAdapter) CreateSale(input SaleInput) (*SaleCommitResult, error) {
 	return &SaleCommitResult{ID: sale.ID, TotalAmount: sale.TotalAmount}, nil
 }
 
+// RegisterRoutes wires the receipts module and mounts its endpoints.
 func RegisterRoutes(rg *gin.RouterGroup, db *gorm.DB, cfg *config.Config) {
 	productsRepo := products.NewRepository(db)
 	inventoryRepo := inventory.NewRepository(db)
@@ -104,6 +139,8 @@ func RegisterRoutes(rg *gin.RouterGroup, db *gorm.DB, cfg *config.Config) {
 	svc := NewService(
 		NewOCRClient(cfg),
 		&productAdapter{repo: productsRepo},
+		&supplierAdapter{repo: suppliersRepo},
+		&customerAdapter{repo: customersRepo},
 		&purchaseAdapter{svc: purchasesSvc},
 		&saleAdapter{svc: salesSvc},
 	)

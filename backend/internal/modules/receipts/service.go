@@ -8,6 +8,7 @@ import (
 	"github.com/google/uuid"
 )
 
+// Errors returned by the receipts service.
 var (
 	ErrEmptyImage        = errors.New("an image is required")
 	ErrUnsupportedImage  = errors.New("the image must be a JPEG, PNG or WebP file")
@@ -17,6 +18,9 @@ var (
 	ErrMissingSupplier   = errors.New("a purchase requires a supplier")
 	ErrMissingProduct    = errors.New("every line item requires a product")
 	ErrInvalidLineItem   = errors.New("line item quantities must be positive and prices cannot be negative")
+	ErrProductNotOwned   = errors.New("one or more products do not belong to this business")
+	ErrSupplierNotFound  = errors.New("the selected supplier does not belong to this business")
+	ErrCustomerNotFound  = errors.New("the selected customer does not belong to this business")
 )
 
 // MaxImageBytes caps an upload before it reaches the OCR provider.
@@ -48,8 +52,19 @@ type ProductInfo struct {
 	Name string
 }
 
+// ProductLister is the read-only view of a business's products.
 type ProductLister interface {
 	List(businessID uuid.UUID) ([]ProductInfo, error)
+}
+
+// SupplierReader checks that a supplier belongs to the business.
+type SupplierReader interface {
+	Exists(businessID, supplierID uuid.UUID) (bool, error)
+}
+
+// CustomerReader checks that a customer belongs to the business.
+type CustomerReader interface {
+	Exists(businessID, customerID uuid.UUID) (bool, error)
 }
 
 // ScannedLineItem is one extracted line returned to the owner, with a
@@ -112,6 +127,7 @@ type PurchaseInput struct {
 	Items      []CommitLineItem
 }
 
+// PurchaseCommitResult is the purchase created on commit.
 type PurchaseCommitResult struct {
 	ID          uuid.UUID
 	TotalAmount int64
@@ -133,6 +149,7 @@ type SaleInput struct {
 	Items      []CommitLineItem
 }
 
+// SaleCommitResult is the sale created on commit.
 type SaleCommitResult struct {
 	ID          uuid.UUID
 	TotalAmount int64
@@ -143,6 +160,7 @@ type SaleCreator interface {
 	CreateSale(input SaleInput) (*SaleCommitResult, error)
 }
 
+// Service scans receipt images and commits reviewed results.
 type Service interface {
 	Scan(ctx context.Context, businessID uuid.UUID, image []byte, contentType string) (*ScanResult, error)
 	Commit(businessID uuid.UUID, input CommitInput) (*CommitResult, error)
@@ -151,12 +169,23 @@ type Service interface {
 type service struct {
 	ocr       OCRClient
 	products  ProductLister
+	suppliers SupplierReader
+	customers CustomerReader
 	purchases PurchaseCreator
 	sales     SaleCreator
 }
 
-func NewService(ocr OCRClient, products ProductLister, purchases PurchaseCreator, sales SaleCreator) Service {
-	return &service{ocr: ocr, products: products, purchases: purchases, sales: sales}
+// NewService wires the OCR client and the narrow readers/creators the receipts
+// module needs from other modules.
+func NewService(ocr OCRClient, products ProductLister, suppliers SupplierReader, customers CustomerReader, purchases PurchaseCreator, sales SaleCreator) Service {
+	return &service{
+		ocr:       ocr,
+		products:  products,
+		suppliers: suppliers,
+		customers: customers,
+		purchases: purchases,
+		sales:     sales,
+	}
 }
 
 // Scan extracts line items from an image. It never writes: the owner must
@@ -216,9 +245,33 @@ func (s *service) Commit(businessID uuid.UUID, input CommitInput) (*CommitResult
 		}
 	}
 
+	// Never trust IDs from the request: every referenced product must belong
+	// to the authenticated business, so one store cannot write a record that
+	// points at another store's data.
+	products, err := s.products.List(businessID)
+	if err != nil {
+		return nil, err
+	}
+	owned := make(map[uuid.UUID]struct{}, len(products))
+	for _, product := range products {
+		owned[product.ID] = struct{}{}
+	}
+	for _, item := range input.LineItems {
+		if _, ok := owned[item.ProductID]; !ok {
+			return nil, ErrProductNotOwned
+		}
+	}
+
 	if recordType == RecordTypePurchase {
 		if input.SupplierID == nil || *input.SupplierID == uuid.Nil {
 			return nil, ErrMissingSupplier
+		}
+		ok, err := s.suppliers.Exists(businessID, *input.SupplierID)
+		if err != nil {
+			return nil, err
+		}
+		if !ok {
+			return nil, ErrSupplierNotFound
 		}
 		result, err := s.purchases.CreatePurchase(PurchaseInput{
 			BusinessID: businessID,
@@ -231,6 +284,16 @@ func (s *service) Commit(businessID uuid.UUID, input CommitInput) (*CommitResult
 			return nil, err
 		}
 		return &CommitResult{RecordType: RecordTypePurchase, ID: result.ID, TotalAmount: result.TotalAmount}, nil
+	}
+
+	if input.CustomerID != nil && *input.CustomerID != uuid.Nil {
+		ok, err := s.customers.Exists(businessID, *input.CustomerID)
+		if err != nil {
+			return nil, err
+		}
+		if !ok {
+			return nil, ErrCustomerNotFound
+		}
 	}
 
 	saleType := strings.ToLower(strings.TrimSpace(input.SaleType))

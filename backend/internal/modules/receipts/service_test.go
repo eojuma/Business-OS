@@ -43,10 +43,34 @@ func (f *fakeSales) CreateSale(input SaleInput) (*SaleCommitResult, error) {
 	return &SaleCommitResult{ID: uuid.New(), TotalAmount: 9900}, nil
 }
 
-func newTestService(ocr OCRClient, products ProductLister) (Service, *fakePurchases, *fakeSales) {
+// fakeSuppliers and fakeCustomers default to "exists" so tests that do not care
+// about ownership still reach the delegation path.
+type fakeSuppliers struct{ owners map[uuid.UUID]bool }
+
+func (f *fakeSuppliers) Exists(_, supplierID uuid.UUID) (bool, error) {
+	if f.owners == nil {
+		return true, nil
+	}
+	return f.owners[supplierID], nil
+}
+
+type fakeCustomers struct{ owners map[uuid.UUID]bool }
+
+func (f *fakeCustomers) Exists(_, customerID uuid.UUID) (bool, error) {
+	if f.owners == nil {
+		return true, nil
+	}
+	return f.owners[customerID], nil
+}
+
+func newTestServiceWith(ocr OCRClient, products ProductLister, suppliers SupplierReader, customers CustomerReader) (Service, *fakePurchases, *fakeSales) {
 	purchases := &fakePurchases{}
 	sales := &fakeSales{}
-	return NewService(ocr, products, purchases, sales), purchases, sales
+	return NewService(ocr, products, suppliers, customers, purchases, sales), purchases, sales
+}
+
+func newTestService(ocr OCRClient, products ProductLister) (Service, *fakePurchases, *fakeSales) {
+	return newTestServiceWith(ocr, products, &fakeSuppliers{}, &fakeCustomers{})
 }
 
 func TestScanReturnsLineItemsWithoutWriting(t *testing.T) {
@@ -126,9 +150,9 @@ func TestScanRejectsUnsupportedImage(t *testing.T) {
 }
 
 func TestCommitPurchaseDelegates(t *testing.T) {
-	svc, purchases, sales := newTestService(&fakeOCR{}, &fakeProducts{})
 	supplierID := uuid.New()
 	productID := uuid.New()
+	svc, purchases, sales := newTestService(&fakeOCR{}, &fakeProducts{items: []ProductInfo{{ID: productID}}})
 
 	result, err := svc.Commit(uuid.New(), CommitInput{
 		RecordType: RecordTypePurchase,
@@ -150,11 +174,12 @@ func TestCommitPurchaseDelegates(t *testing.T) {
 }
 
 func TestCommitSaleDelegates(t *testing.T) {
-	svc, purchases, sales := newTestService(&fakeOCR{}, &fakeProducts{})
+	productID := uuid.New()
+	svc, purchases, sales := newTestService(&fakeOCR{}, &fakeProducts{items: []ProductInfo{{ID: productID}}})
 
 	result, err := svc.Commit(uuid.New(), CommitInput{
 		RecordType: RecordTypeSale,
-		LineItems:  []CommitLineItem{{ProductID: uuid.New(), Quantity: 1, UnitPrice: 100}},
+		LineItems:  []CommitLineItem{{ProductID: productID, Quantity: 1, UnitPrice: 100}},
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -171,8 +196,8 @@ func TestCommitSaleDelegates(t *testing.T) {
 }
 
 func TestCommitRejectsInvalidInput(t *testing.T) {
-	svc, _, _ := newTestService(&fakeOCR{}, &fakeProducts{})
 	productID := uuid.New()
+	svc, _, _ := newTestService(&fakeOCR{}, &fakeProducts{items: []ProductInfo{{ID: productID}}})
 
 	cases := []struct {
 		name  string
@@ -212,5 +237,68 @@ func TestCommitRejectsInvalidInput(t *testing.T) {
 				t.Fatalf("got err %v, want %v", err, tc.want)
 			}
 		})
+	}
+}
+
+func TestCommitRejectsForeignProduct(t *testing.T) {
+	svc, purchases, _ := newTestService(&fakeOCR{}, &fakeProducts{items: []ProductInfo{{ID: uuid.New()}}})
+	supplierID := uuid.New()
+
+	_, err := svc.Commit(uuid.New(), CommitInput{
+		RecordType: RecordTypePurchase,
+		SupplierID: &supplierID,
+		LineItems:  []CommitLineItem{{ProductID: uuid.New(), Quantity: 1, UnitPrice: 100}},
+	})
+	if !errors.Is(err, ErrProductNotOwned) {
+		t.Fatalf("got err %v, want ErrProductNotOwned", err)
+	}
+	if purchases.calls != 0 {
+		t.Fatalf("got %d purchase calls, want none for an unowned product", purchases.calls)
+	}
+}
+
+func TestCommitRejectsForeignSupplier(t *testing.T) {
+	productID := uuid.New()
+	supplierID := uuid.New()
+	svc, purchases, _ := newTestServiceWith(
+		&fakeOCR{},
+		&fakeProducts{items: []ProductInfo{{ID: productID}}},
+		&fakeSuppliers{owners: map[uuid.UUID]bool{}},
+		&fakeCustomers{},
+	)
+
+	_, err := svc.Commit(uuid.New(), CommitInput{
+		RecordType: RecordTypePurchase,
+		SupplierID: &supplierID,
+		LineItems:  []CommitLineItem{{ProductID: productID, Quantity: 1, UnitPrice: 100}},
+	})
+	if !errors.Is(err, ErrSupplierNotFound) {
+		t.Fatalf("got err %v, want ErrSupplierNotFound", err)
+	}
+	if purchases.calls != 0 {
+		t.Fatalf("got %d purchase calls, want none for an unowned supplier", purchases.calls)
+	}
+}
+
+func TestCommitRejectsForeignCustomer(t *testing.T) {
+	productID := uuid.New()
+	customerID := uuid.New()
+	svc, _, sales := newTestServiceWith(
+		&fakeOCR{},
+		&fakeProducts{items: []ProductInfo{{ID: productID}}},
+		&fakeSuppliers{},
+		&fakeCustomers{owners: map[uuid.UUID]bool{}},
+	)
+
+	_, err := svc.Commit(uuid.New(), CommitInput{
+		RecordType: RecordTypeSale,
+		CustomerID: &customerID,
+		LineItems:  []CommitLineItem{{ProductID: productID, Quantity: 1, UnitPrice: 100}},
+	})
+	if !errors.Is(err, ErrCustomerNotFound) {
+		t.Fatalf("got err %v, want ErrCustomerNotFound for a cash sale with a foreign customer", err)
+	}
+	if sales.calls != 0 {
+		t.Fatalf("got %d sale calls, want none for an unowned customer", sales.calls)
 	}
 }

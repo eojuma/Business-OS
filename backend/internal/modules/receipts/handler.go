@@ -6,16 +6,20 @@ import (
 	"log"
 	"net/http"
 
+	"github.com/businessos/backend/internal/modules/purchases"
+	"github.com/businessos/backend/internal/modules/sales"
 	"github.com/businessos/backend/internal/shared/middleware"
 	"github.com/businessos/backend/internal/shared/response"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 )
 
+// Handler exposes the receipt scan and commit endpoints.
 type Handler struct {
 	service Service
 }
 
+// NewHandler builds the receipts HTTP handler.
 func NewHandler(service Service) *Handler {
 	return &Handler{service: service}
 }
@@ -153,11 +157,26 @@ func (h *Handler) Commit(c *gin.Context) {
 			errors.Is(err, ErrNoLineItems),
 			errors.Is(err, ErrMissingSupplier),
 			errors.Is(err, ErrMissingProduct),
-			errors.Is(err, ErrInvalidLineItem):
+			errors.Is(err, ErrInvalidLineItem),
+			errors.Is(err, ErrProductNotOwned),
+			errors.Is(err, ErrSupplierNotFound),
+			errors.Is(err, ErrCustomerNotFound),
+			errors.Is(err, purchases.ErrEmptyPurchase),
+			errors.Is(err, purchases.ErrInvalidPurchaseItem),
+			errors.Is(err, purchases.ErrInvalidAmountPaid),
+			errors.Is(err, sales.ErrEmptySale),
+			errors.Is(err, sales.ErrProductNotFound),
+			errors.Is(err, sales.ErrInsufficientStock),
+			errors.Is(err, sales.ErrCreditLimitExceeded),
+			errors.Is(err, sales.ErrInvalidSaleItem),
+			errors.Is(err, sales.ErrInvalidDiscount),
+			errors.Is(err, sales.ErrInvalidSaleType),
+			errors.Is(err, sales.ErrCreditNeedsCustomer),
+			errors.Is(err, sales.ErrCustomerResolveFailed):
 			response.Error(c, http.StatusBadRequest, err.Error())
 		default:
 			log.Printf("receipts: commit failed: %v", err)
-			response.Error(c, http.StatusBadRequest, "failed to save the record")
+			response.Error(c, http.StatusInternalServerError, "failed to save the record")
 		}
 		return
 	}

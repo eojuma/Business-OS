@@ -24,6 +24,7 @@ Milestones 1–3 are done and tested live end to end — not just compiling, act
 | Notifications | ✅ | — | Low-stock alerts with severity & product context |
 | Analytics | ✅ | ✅ | Overview, top-profit & slow-moving products |
 | Assistant | ✅ | ✅ | Natural-language sale preview + explicit confirmation |
+| Receipt OCR | ✅ | ✅ | Photo → extracted line items, reviewed before saving as a purchase or sale |
 
 ---
 
@@ -66,6 +67,7 @@ Business-OS/
 │           ├── analytics/
 │           ├── notifications/
 │           ├── assistant/
+│           ├── receipts/        # photo -> line items, review before commit
 │           └── ...              # remaining modules
 ├── frontend/
 │   ├── app/

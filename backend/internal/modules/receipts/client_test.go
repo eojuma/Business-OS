@@ -107,6 +107,7 @@ func TestParseMoneyToCents(t *testing.T) {
 		{"KSh 1,000.00", 100000},
 		{".50", 50},
 		{"-200", -20000},
+		{"KSh -200", -20000},
 		{"450.999", 45099},
 	}
 	for _, tc := range cases {
@@ -116,6 +117,12 @@ func TestParseMoneyToCents(t *testing.T) {
 		}
 		if got != tc.want {
 			t.Fatalf("parseMoneyToCents(%q) = %d, want %d", tc.in, got, tc.want)
+		}
+	}
+
+	for _, raw := range []string{".", "-", "--5", "200-", "2-00", "1.250.50"} {
+		if _, err := parseMoneyToCents(raw); err == nil {
+			t.Fatalf("parseMoneyToCents(%q) = nil error, want a rejection", raw)
 		}
 	}
 }

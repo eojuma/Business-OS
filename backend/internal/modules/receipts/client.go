@@ -230,7 +230,21 @@ func parseMoneyToCents(raw string) (int64, error) {
 		return 0, nil
 	}
 
-	negative := strings.HasPrefix(raw, "-")
+	negative := false
+	if minus := strings.IndexByte(raw, '-'); minus >= 0 {
+		if strings.Count(raw, "-") > 1 {
+			return 0, fmt.Errorf("invalid money value %q", raw)
+		}
+		// A sign may only precede the digits, so a currency prefix such as
+		// "KSh -200" is fine, but "200-" and "2-00" are not.
+		for _, r := range raw[:minus] {
+			if (r >= '0' && r <= '9') || r == '.' {
+				return 0, fmt.Errorf("invalid money value %q", raw)
+			}
+		}
+		negative = true
+	}
+
 	var b strings.Builder
 	for _, r := range raw {
 		if (r >= '0' && r <= '9') || r == '.' {
@@ -238,7 +252,7 @@ func parseMoneyToCents(raw string) (int64, error) {
 		}
 	}
 	cleaned := b.String()
-	if cleaned == "" || cleaned == "." {
+	if cleaned == "" || cleaned == "." || strings.Count(cleaned, ".") > 1 {
 		return 0, fmt.Errorf("invalid money value %q", raw)
 	}
 

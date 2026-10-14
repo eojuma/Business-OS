@@ -83,6 +83,9 @@ export default function ReceiptsPage() {
   const [commitError, setCommitError] = useState("");
   const [saved, setSaved] = useState<{ record_type: string; id: string; total_amount: number } | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
+  // Bumped whenever the selected file changes so a slow scan of a previously
+  // selected image can be ignored instead of repopulating the review form.
+  const scanRequestRef = useRef(0);
 
   useEffect(() => {
     async function load() {
@@ -113,6 +116,7 @@ export default function ReceiptsPage() {
   }, [file]);
 
   function pickFile(next: File | null) {
+    scanRequestRef.current += 1;
     setFile(next);
     setScan(null);
     setLines([]);
@@ -123,6 +127,7 @@ export default function ReceiptsPage() {
 
   async function handleScan() {
     if (!file) return;
+    const requestId = scanRequestRef.current;
     setScanning(true);
     setScanError("");
     setCommitError("");
@@ -133,6 +138,7 @@ export default function ReceiptsPage() {
       const res = await api.post("/receipts/scan", form, {
         headers: { "Content-Type": "multipart/form-data" },
       });
+      if (requestId !== scanRequestRef.current) return;
       const result: ScanResult = res.data.data;
       setScan(result);
       setLines(
@@ -144,9 +150,10 @@ export default function ReceiptsPage() {
         })),
       );
     } catch (err: any) {
+      if (requestId !== scanRequestRef.current) return;
       setScanError(err.response?.data?.error || "Could not read that receipt. Try a clearer photo.");
     } finally {
-      setScanning(false);
+      if (requestId === scanRequestRef.current) setScanning(false);
     }
   }
 

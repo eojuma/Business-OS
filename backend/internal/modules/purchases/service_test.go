@@ -123,7 +123,7 @@ func TestFindByIDExisting(t *testing.T) {
 	// Create first to "store" it
 	service.Create(CreateInput{
 		BusinessID: uuid.New(), SupplierID: uuid.New(), AmountPaid: 50,
-		Items: []ItemInput{{ProductID: uuid.New(), Quantity: 1, UnitCost: 50}}, //nolint:errcheck //nolint:gosec
+		Items: []ItemInput{{ProductID: uuid.New(), Quantity: 1, UnitCost: 50}}, //nolint:errcheck
 	})
 	// Get should not error even though repo.FindById returns not found
 	// (service wraps it as ErrPurchaseNotFound)

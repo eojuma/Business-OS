@@ -101,7 +101,8 @@ func (h *Handler) List(c *gin.Context) {
 			"total":      total,
 			"totalPages": totalPages,
 		},
-	})}
+	})
+}
 
 func purchaseIDs(c *gin.Context) (uuid.UUID, uuid.UUID, bool) {
 	businessID, err := middleware.CurrentBusinessID(c)

@@ -21,6 +21,9 @@ func (r *testRepository) List(uuid.UUID, *uuid.UUID) ([]Purchase, error) { retur
 func (r *testRepository) Receive(uuid.UUID, uuid.UUID, InventoryReceiver, SupplierCharger, ProductCostUpdater) (*Purchase, error) {
 	return nil, nil
 }
+func (r *testRepository) ListPaginated(uuid.UUID, int, int, *string, *uuid.UUID, *string, *string) ([]Purchase, int64, error) {
+	return nil, 0, nil
+}
 
 func TestCreateCalculatesPurchaseTotal(t *testing.T) {
 	repo := &testRepository{}

@@ -11,14 +11,19 @@ var (
 	ErrSupplierNotFound      = errors.New("supplier not found")
 	ErrInvalidPayment        = errors.New("payment amount must be positive")
 	ErrPaymentExceedsBalance = errors.New("payment exceeds supplier outstanding balance")
+	ErrInvalidPaymentTerms   = errors.New("invalid payment terms")
 )
 
 type CreateInput struct {
 	BusinessID                  uuid.UUID
 	Name, Phone, Email, Address string
+	PaymentTerms                string
 }
 
-type UpdateInput struct{ Name, Phone, Email, Address *string }
+type UpdateInput struct {
+	Name, Phone, Email, Address *string
+	PaymentTerms                *string
+}
 
 type Service interface {
 	Create(CreateInput) (*Supplier, error)
@@ -35,7 +40,14 @@ type service struct{ repo Repository }
 func NewService(repo Repository) Service { return &service{repo: repo} }
 
 func (s *service) Create(input CreateInput) (*Supplier, error) {
-	supplier := &Supplier{BusinessID: input.BusinessID, Name: input.Name, Phone: input.Phone, Email: input.Email, Address: input.Address}
+	terms := input.PaymentTerms
+	if terms == "" {
+		terms = PaymentTermsDefault
+	}
+	if !IsValidPaymentTerms(terms) {
+		return nil, ErrInvalidPaymentTerms
+	}
+	supplier := &Supplier{BusinessID: input.BusinessID, Name: input.Name, Phone: input.Phone, Email: input.Email, Address: input.Address, PaymentTerms: terms}
 	return supplier, s.repo.Create(supplier)
 }
 
@@ -65,6 +77,12 @@ func (s *service) Update(id, businessID uuid.UUID, input UpdateInput) (*Supplier
 	}
 	if input.Address != nil {
 		supplier.Address = *input.Address
+	}
+	if input.PaymentTerms != nil {
+		if !IsValidPaymentTerms(*input.PaymentTerms) {
+			return nil, ErrInvalidPaymentTerms
+		}
+		supplier.PaymentTerms = *input.PaymentTerms
 	}
 	return supplier, s.repo.Update(supplier)
 }

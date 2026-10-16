@@ -13,6 +13,7 @@ type InventoryReceiver interface {
 }
 type SupplierCharger interface {
 	AddOutstandingTx(tx *gorm.DB, id, businessID uuid.UUID, amount int64) error
+	SetPaymentDueDateTx(tx *gorm.DB, id, businessID uuid.UUID, receivedAt time.Time) (*time.Time, error)
 }
 type ProductCostUpdater interface {
 	UpdateCostPriceTx(tx *gorm.DB, businessID, productID uuid.UUID, costPrice int64) error
@@ -104,15 +105,20 @@ func (r *repository) Receive(id, businessID uuid.UUID, inventory InventoryReceiv
 				return err
 			}
 		}
+		now := time.Now()
 		outstanding := purchase.TotalAmount - purchase.AmountPaid
 		if outstanding > 0 {
 			if err := suppliers.AddOutstandingTx(tx, purchase.SupplierID, businessID, outstanding); err != nil {
 				return err
 			}
 		}
-		now := time.Now()
+		dueDate, err := suppliers.SetPaymentDueDateTx(tx, purchase.SupplierID, businessID, now)
+		if err != nil {
+			return err
+		}
 		purchase.Status = "received"
 		purchase.ReceivedAt = &now
+		purchase.DueDate = dueDate
 		return tx.Save(&purchase).Error
 	})
 	return &purchase, err

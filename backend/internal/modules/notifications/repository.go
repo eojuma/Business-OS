@@ -77,6 +77,9 @@ func (r *repository) FindByID(id, businessID uuid.UUID) (*Notification, error) {
 	var notification Notification
 	err := r.db.Where("id = ? AND business_id = ?", id, businessID).First(&notification).Error
 	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, ErrNotFound
+		}
 		return nil, err
 	}
 	return &notification, nil

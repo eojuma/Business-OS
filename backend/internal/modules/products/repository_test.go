@@ -277,7 +277,7 @@ func TestRepositoryUpdateCostPriceTx(t *testing.T) {
 	product := &Product{BusinessID: businessID, CostPrice: 1000}
 	db.Create(product)
 
-	err := repo.UpdateCostPriceTx(db, product.ID, businessID, 2000)
+	err := repo.UpdateCostPriceTx(db, businessID, product.ID, 2000)
 	if err != nil {
 		t.Fatalf("UpdateCostPriceTx failed: %v", err)
 	}
@@ -363,8 +363,11 @@ func TestProductNameIndex(t *testing.T) {
 	if len(list) != 100 {
 		t.Fatalf("len = %d, want 100", len(list))
 	}
-	if list[0].Name != "Product 000" || list[99].Name != "Product 099" {
-		t.Fatalf("products not ordered by name desc (created_at desc)")
+	for i := 1; i < len(list); i++ {
+		if list[i].CreatedAt.After(list[i-1].CreatedAt) {
+			t.Fatalf("products not in created_at desc order: index %d created_at %v is after index %d created_at %v",
+				i, list[i].CreatedAt, i-1, list[i-1].CreatedAt)
+		}
 	}
 	if elapsed > 1*time.Second {
 		t.Logf("List took %v (may need index optimization)", elapsed)

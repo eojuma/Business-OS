@@ -16,6 +16,7 @@ type Supplier struct {
 	OutstandingBalance int64      `gorm:"not null;default:0" json:"outstanding_balance"`
 	PaymentTerms       string     `gorm:"not null;default:'net30'" json:"payment_terms"`
 	DueDate            *time.Time `gorm:"type:timestamptz" json:"due_date,omitempty"`
+	LastReceivedAt     *time.Time `gorm:"type:timestamptz" json:"last_received_at,omitempty"`
 	CreatedAt          time.Time  `json:"created_at"`
 	UpdatedAt          time.Time  `json:"updated_at"`
 }

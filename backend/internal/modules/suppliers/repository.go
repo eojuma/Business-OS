@@ -83,15 +83,21 @@ func (r *repository) AddOutstandingTx(tx *gorm.DB, id, businessID uuid.UUID, amo
 
 func (r *repository) SetPaymentDueDateTx(tx *gorm.DB, id, businessID uuid.UUID, receivedAt time.Time) (*time.Time, error) {
 	var supplier Supplier
-	if err := tx.Where("id = ? AND business_id = ?", id, businessID).First(&supplier).Error; err != nil {
+	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+		Where("id = ? AND business_id = ?", id, businessID).First(&supplier).Error; err != nil {
 		return nil, err
 	}
 	dueDate, err := DueDateFrom(receivedAt, supplier.PaymentTerms)
 	if err != nil {
 		return nil, err
 	}
+	// Concurrent receipts can commit out of order; under the row lock, only
+	// replace the supplier's due date when this receipt is the latest one.
+	if supplier.LastReceivedAt != nil && !receivedAt.After(*supplier.LastReceivedAt) {
+		return &dueDate, nil
+	}
 	result := tx.Model(&Supplier{}).Where("id = ? AND business_id = ?", id, businessID).
-		UpdateColumn("due_date", dueDate)
+		Updates(map[string]interface{}{"due_date": dueDate, "last_received_at": receivedAt})
 	if result.Error != nil {
 		return nil, result.Error
 	}

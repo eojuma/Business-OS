@@ -106,7 +106,10 @@ func (r *testRepository) SetPaymentDueDateTx(_ *gorm.DB, id, businessID uuid.UUI
 	if err != nil {
 		return nil, err
 	}
-	s.DueDate = &dueDate
+	if s.LastReceivedAt == nil || receivedAt.After(*s.LastReceivedAt) {
+		s.DueDate = &dueDate
+		s.LastReceivedAt = &receivedAt
+	}
 	return &dueDate, nil
 }
 

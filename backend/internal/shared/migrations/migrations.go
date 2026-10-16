@@ -159,9 +159,8 @@ func load() ([]migration, error) {
 }
 
 // splitStatements splits a SQL script into individual statements on
-// semicolons outside single-quoted strings and line comments. Dollar-quoted
-// bodies are not supported; migrations must not define functions or DO
-// blocks containing semicolons.
+// semicolons outside single-quoted strings, line comments, and
+// dollar-quoted bodies ($$...$$ or $tag$...$tag$).
 func splitStatements(sql string) []string {
 	var (
 		stmts    []string
@@ -184,6 +183,21 @@ func splitStatements(sql string) []string {
 		case c == '\'':
 			inString = true
 			b.WriteByte(c)
+		case c == '$':
+			// Dollar-quoted body: copy verbatim through the matching closer.
+			j := i + 1
+			for j < len(sql) && isDollarTagChar(sql[j]) {
+				j++
+			}
+			if j < len(sql) && sql[j] == '$' {
+				closer := sql[i : j+1]
+				if k := strings.Index(sql[j+1:], closer); k >= 0 {
+					b.WriteString(sql[i : j+1+k+len(closer)])
+					i = j + k + len(closer)
+					continue
+				}
+			}
+			b.WriteByte(c)
 		case c == '-' && i+1 < len(sql) && sql[i+1] == '-':
 			for i < len(sql) && sql[i] != '\n' {
 				b.WriteByte(sql[i])
@@ -205,4 +219,13 @@ func splitStatements(sql string) []string {
 		stmts = append(stmts, stmt)
 	}
 	return stmts
+}
+
+// isDollarTagChar reports whether c can appear in a dollar-quote tag
+// (letters, digits, underscores; a tag may not start with a digit).
+func isDollarTagChar(c byte) bool {
+	return c == '_' ||
+		('a' <= c && c <= 'z') ||
+		('A' <= c && c <= 'Z') ||
+		('0' <= c && c <= '9')
 }

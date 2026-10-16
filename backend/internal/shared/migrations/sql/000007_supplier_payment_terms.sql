@@ -41,6 +41,30 @@ FROM (
 ) x
 WHERE s.id = x.supplier_id;
 
+-- A failed CREATE INDEX CONCURRENTLY can leave an invalid index behind;
+-- IF NOT EXISTS would then skip it on retry and the migration would be
+-- recorded as complete with an unusable index. Drop invalid leftovers first.
+DO $$
+BEGIN
+    IF to_regclass('idx_suppliers_due_date') IS NOT NULL AND EXISTS (
+        SELECT 1 FROM pg_index
+        WHERE indexrelid = to_regclass('idx_suppliers_due_date') AND NOT indisvalid
+    ) THEN
+        DROP INDEX idx_suppliers_due_date;
+    END IF;
+END
+$$;
+DO $$
+BEGIN
+    IF to_regclass('idx_purchases_due_date') IS NOT NULL AND EXISTS (
+        SELECT 1 FROM pg_index
+        WHERE indexrelid = to_regclass('idx_purchases_due_date') AND NOT indisvalid
+    ) THEN
+        DROP INDEX idx_purchases_due_date;
+    END IF;
+END
+$$;
+
 CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_suppliers_due_date ON suppliers(due_date);
 CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_purchases_due_date ON purchases(due_date);
 

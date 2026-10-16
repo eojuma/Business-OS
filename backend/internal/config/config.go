@@ -35,6 +35,10 @@ type Config struct {
 	AIAPIKey   string
 	AIModel    string
 	AIBaseURL  string
+
+	// AIOCRModel is the vision-capable model used for receipt OCR. It falls
+	// back to AIModel when unset.
+	AIOCRModel string
 }
 
 // Load loads configuration from environment variables.
@@ -65,6 +69,7 @@ func Load() *Config {
 		AIAPIKey:   getEnv("AI_API_KEY", ""),
 		AIModel:    getEnv("AI_MODEL", "gemini-3.6-flash"),
 		AIBaseURL:  getEnv("AI_BASE_URL", "https://generativelanguage.googleapis.com/v1beta/openai"),
+		AIOCRModel: getEnv("AI_OCR_MODEL", ""),
 	}
 }
 

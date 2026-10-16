@@ -23,6 +23,7 @@ type Repository interface {
 	FindByID(id, businessID uuid.UUID) (*Purchase, error)
 	List(businessID uuid.UUID, supplierID *uuid.UUID) ([]Purchase, error)
 	Receive(id, businessID uuid.UUID, inventory InventoryReceiver, suppliers SupplierCharger, products ProductCostUpdater) (*Purchase, error)
+	ListPaginated(businessID uuid.UUID, page, limit int, status *string, supplierID *uuid.UUID, dateFrom *string, dateTo *string) ([]Purchase, int64, error)
 }
 
 type repository struct{ db *gorm.DB }
@@ -59,6 +60,31 @@ func (r *repository) List(businessID uuid.UUID, supplierID *uuid.UUID) ([]Purcha
 	}
 	err := query.Order("created_at desc").Find(&purchases).Error
 	return purchases, err
+}
+
+func (r *repository) ListPaginated(businessID uuid.UUID, page, limit int, status *string, supplierID *uuid.UUID, dateFrom *string, dateTo *string) ([]Purchase, int64, error) {
+	var purchases []Purchase
+	query := r.db.Preload("Items").Where("business_id = ?", businessID)
+	if supplierID != nil {
+		query = query.Where("supplier_id = ?", *supplierID)
+	}
+	if status != nil {
+		query = query.Where("status = ?", *status)
+	}
+	if dateFrom != nil {
+		query = query.Where("created_at >= ?", dateFrom)
+	}
+	if dateTo != nil {
+		query = query.Where("created_at <= ?", dateTo)
+	}
+	var total int64
+	query.Count(&total)
+	query = query.Offset((page - 1) * limit).Limit(limit).Order("created_at desc")
+	err := query.Find(&purchases).Error
+	if err != nil {
+		return nil, 0, err
+	}
+	return purchases, total, nil
 }
 
 func (r *repository) Receive(id, businessID uuid.UUID, inventory InventoryReceiver, suppliers SupplierCharger, products ProductCostUpdater) (*Purchase, error) {

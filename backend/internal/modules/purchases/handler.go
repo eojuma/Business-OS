@@ -3,6 +3,7 @@ package purchases
 import (
 	"errors"
 	"net/http"
+	"strconv"
 
 	"github.com/businessos/backend/internal/shared/middleware"
 	"github.com/businessos/backend/internal/shared/response"
@@ -61,21 +62,46 @@ func (h *Handler) List(c *gin.Context) {
 		response.Error(c, http.StatusUnauthorized, err.Error())
 		return
 	}
-	var supplierID *uuid.UUID
-	if raw := c.Query("supplier_id"); raw != "" {
+	page := 1
+	if raw := c.Query("page"); raw != "" {
+		if p, err := strconv.Atoi(raw); err == nil && p > 0 {
+			page = p
+		}
+	}
+	limit := 20
+	if raw := c.Query("limit"); raw != "" {
+		if l, err := strconv.Atoi(raw); err == nil && l > 0 && l <= 100 {
+			limit = l
+		}
+	}
+	status := c.Query("status")
+	supplierID := c.Query("supplier_id")
+	var supplierIDPtr *uuid.UUID
+	if raw := supplierID; raw != "" {
 		parsed, err := uuid.Parse(raw)
 		if err != nil {
 			response.Error(c, http.StatusBadRequest, "invalid supplier_id")
 			return
 		}
-		supplierID = &parsed
+		supplierIDPtr = &parsed
 	}
-	items, err := h.service.List(businessID, supplierID)
+	dateFrom := c.Query("date_from")
+	dateTo := c.Query("date_to")
+	items, total, err := h.service.ListPaginated(businessID, page, limit, &status, supplierIDPtr, &dateFrom, &dateTo)
 	if err != nil {
 		response.Error(c, http.StatusInternalServerError, "failed to list purchases")
 		return
 	}
-	response.Success(c, http.StatusOK, items)
+	totalPages := (total + int64(limit) - 1) / int64(limit)
+	response.Success(c, http.StatusOK, gin.H{
+		"data": items,
+		"meta": gin.H{
+			"page":       page,
+			"limit":      limit,
+			"total":      total,
+			"totalPages": totalPages,
+		},
+	})
 }
 
 func purchaseIDs(c *gin.Context) (uuid.UUID, uuid.UUID, bool) {

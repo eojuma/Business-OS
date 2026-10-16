@@ -14,6 +14,7 @@ import (
 	"github.com/businessos/backend/internal/modules/notifications"
 	"github.com/businessos/backend/internal/modules/products"
 	"github.com/businessos/backend/internal/modules/purchases"
+	"github.com/businessos/backend/internal/modules/receipts"
 	"github.com/businessos/backend/internal/modules/reports"
 	"github.com/businessos/backend/internal/modules/sales"
 	"github.com/businessos/backend/internal/modules/suppliers"
@@ -55,6 +56,7 @@ func New(db *gorm.DB, cfg *config.Config) *gin.Engine {
 		notifications.RegisterRoutes(protected, db, cfg)
 		analytics.RegisterRoutes(protected, db, cfg)
 		assistant.RegisterRoutes(protected, db, cfg)
+		receipts.RegisterRoutes(protected, db, cfg)
 	}
 
 	return r

@@ -15,16 +15,18 @@ type Handler struct{ service Service }
 func NewHandler(service Service) *Handler { return &Handler{service: service} }
 
 type createRequest struct {
-	Name    string `json:"name" binding:"required"`
-	Phone   string `json:"phone"`
-	Email   string `json:"email"`
-	Address string `json:"address"`
+	Name         string `json:"name" binding:"required"`
+	Phone        string `json:"phone"`
+	Email        string `json:"email"`
+	Address      string `json:"address"`
+	PaymentTerms string `json:"payment_terms"`
 }
 type updateRequest struct {
-	Name    *string `json:"name"`
-	Phone   *string `json:"phone"`
-	Email   *string `json:"email"`
-	Address *string `json:"address"`
+	Name         *string `json:"name"`
+	Phone        *string `json:"phone"`
+	Email        *string `json:"email"`
+	Address      *string `json:"address"`
+	PaymentTerms *string `json:"payment_terms"`
 }
 type paymentRequest struct {
 	Amount int64  `json:"amount" binding:"required"`
@@ -56,7 +58,11 @@ func (h *Handler) Create(c *gin.Context) {
 		response.Error(c, http.StatusBadRequest, err.Error())
 		return
 	}
-	supplier, err := h.service.Create(CreateInput{BusinessID: businessID, Name: req.Name, Phone: req.Phone, Email: req.Email, Address: req.Address})
+	supplier, err := h.service.Create(CreateInput{BusinessID: businessID, Name: req.Name, Phone: req.Phone, Email: req.Email, Address: req.Address, PaymentTerms: req.PaymentTerms})
+	if errors.Is(err, ErrInvalidPaymentTerms) {
+		response.Error(c, http.StatusBadRequest, err.Error())
+		return
+	}
 	if err != nil {
 		response.Error(c, http.StatusInternalServerError, "failed to create supplier")
 		return
@@ -105,9 +111,19 @@ func (h *Handler) Update(c *gin.Context) {
 		response.Error(c, http.StatusBadRequest, err.Error())
 		return
 	}
-	item, err := h.service.Update(id, businessID, UpdateInput(req))
+	item, err := h.service.Update(id, businessID, UpdateInput{
+		Name:         req.Name,
+		Phone:        req.Phone,
+		Email:        req.Email,
+		Address:      req.Address,
+		PaymentTerms: req.PaymentTerms,
+	})
 	if errors.Is(err, ErrSupplierNotFound) {
 		response.Error(c, http.StatusNotFound, err.Error())
+		return
+	}
+	if errors.Is(err, ErrInvalidPaymentTerms) {
+		response.Error(c, http.StatusBadRequest, err.Error())
 		return
 	}
 	if err != nil {

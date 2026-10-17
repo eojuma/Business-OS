@@ -363,6 +363,75 @@ func TestAddOutstandingTxSupplierNotFound(t *testing.T) {
 	}
 }
 
+func TestRepositorySetPaymentDueDateTx(t *testing.T) {
+	db, businessID := setupTestDB(t)
+	repo := NewRepository(db)
+
+	supplier := &Supplier{BusinessID: businessID, Name: "Terms Supplier", PaymentTerms: PaymentTermsNet60}
+	db.Create(supplier)
+
+	received := time.Date(2026, time.February, 1, 12, 0, 0, 0, time.UTC)
+	dueDate, err := repo.SetPaymentDueDateTx(db, supplier.ID, businessID, received)
+	if err != nil {
+		t.Fatalf("SetPaymentDueDateTx failed: %v", err)
+	}
+	want := received.AddDate(0, 0, 60)
+	if dueDate == nil || !dueDate.UTC().Equal(want) {
+		t.Fatalf("due_date = %v, want %v", dueDate, want)
+	}
+
+	var found Supplier
+	db.First(&found, "id = ?", supplier.ID)
+	if found.DueDate == nil || !found.DueDate.UTC().Equal(want) {
+		t.Fatalf("persisted due_date = %v, want %v", found.DueDate, want)
+	}
+}
+
+func TestRepositorySetPaymentDueDateSupplierNotFound(t *testing.T) {
+	db, _ := setupTestDB(t)
+	repo := NewRepository(db)
+
+	_, err := repo.SetPaymentDueDateTx(db, uuid.New(), uuid.New(), time.Now())
+	if err != gorm.ErrRecordNotFound {
+		t.Fatalf("expected ErrRecordNotFound, got %v", err)
+	}
+}
+
+// TestRepositorySetPaymentDueDateOutOfOrder verifies that a receipt arriving
+// with an earlier timestamp does not overwrite the supplier's latest due date.
+func TestRepositorySetPaymentDueDateOutOfOrder(t *testing.T) {
+	db, businessID := setupTestDB(t)
+	repo := NewRepository(db)
+
+	supplier := &Supplier{BusinessID: businessID, Name: "Out of Order", PaymentTerms: PaymentTermsNet30}
+	db.Create(supplier)
+
+	latest := time.Date(2026, time.March, 1, 12, 0, 0, 0, time.UTC)
+	if _, err := repo.SetPaymentDueDateTx(db, supplier.ID, businessID, latest); err != nil {
+		t.Fatalf("SetPaymentDueDateTx(latest) failed: %v", err)
+	}
+
+	earlier := time.Date(2026, time.February, 1, 12, 0, 0, 0, time.UTC)
+	earlierDue, err := repo.SetPaymentDueDateTx(db, supplier.ID, businessID, earlier)
+	if err != nil {
+		t.Fatalf("SetPaymentDueDateTx(earlier) failed: %v", err)
+	}
+	wantEarlier := earlier.AddDate(0, 0, 30)
+	if earlierDue == nil || !earlierDue.UTC().Equal(wantEarlier) {
+		t.Fatalf("earlier receipt due date = %v, want %v (its own invoice is still due then)", earlierDue, wantEarlier)
+	}
+
+	var found Supplier
+	db.First(&found, "id = ?", supplier.ID)
+	wantLatest := latest.AddDate(0, 0, 30)
+	if found.DueDate == nil || !found.DueDate.UTC().Equal(wantLatest) {
+		t.Fatalf("supplier due_date = %v, want %v (latest receipt must win)", found.DueDate, wantLatest)
+	}
+	if found.LastReceivedAt == nil || !found.LastReceivedAt.UTC().Equal(latest) {
+		t.Fatalf("supplier last_received_at = %v, want %v", found.LastReceivedAt, latest)
+	}
+}
+
 func TestConcurrentRecordPayment(t *testing.T) {
 	db, businessID := setupTestDB(t)
 	repo := NewRepository(db)

@@ -2,6 +2,7 @@ package suppliers
 
 import (
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"
@@ -94,6 +95,22 @@ func (r *testRepository) AddOutstandingTx(tx *gorm.DB, id, businessID uuid.UUID,
 	}
 	s.OutstandingBalance += amount
 	return nil
+}
+
+func (r *testRepository) SetPaymentDueDateTx(_ *gorm.DB, id, businessID uuid.UUID, receivedAt time.Time) (*time.Time, error) {
+	s, ok := r.suppliers[id]
+	if !ok || s.BusinessID != businessID {
+		return nil, ErrSupplierNotFound
+	}
+	dueDate, err := DueDateFrom(receivedAt, s.PaymentTerms)
+	if err != nil {
+		return nil, err
+	}
+	if s.LastReceivedAt == nil || receivedAt.After(*s.LastReceivedAt) {
+		s.DueDate = &dueDate
+		s.LastReceivedAt = &receivedAt
+	}
+	return &dueDate, nil
 }
 
 func TestCreateSupplier(t *testing.T) {
@@ -318,5 +335,137 @@ func TestListPayments(t *testing.T) {
 	}
 	if payments[0].Amount != 1000 || payments[1].Amount != 2000 {
 		t.Fatalf("expected insertion order [1000, 2000], got [%v, %v]", payments[0].Amount, payments[1].Amount)
+	}
+}
+
+func TestDueDateFrom(t *testing.T) {
+	received := time.Date(2026, time.January, 10, 14, 30, 0, 0, time.UTC)
+	tests := []struct {
+		terms    string
+		wantDays int
+	}{
+		{PaymentTermsDueOnReceipt, 0},
+		{PaymentTermsNet15, 15},
+		{PaymentTermsNet30, 30},
+		{PaymentTermsNet45, 45},
+		{PaymentTermsNet60, 60},
+		{PaymentTermsNet90, 90},
+	}
+	for _, tt := range tests {
+		got, err := DueDateFrom(received, tt.terms)
+		if err != nil {
+			t.Fatalf("DueDateFrom(%q) failed: %v", tt.terms, err)
+		}
+		want := received.AddDate(0, 0, tt.wantDays)
+		if !got.Equal(want) {
+			t.Fatalf("DueDateFrom(%q) = %v, want %v", tt.terms, got, want)
+		}
+	}
+}
+
+func TestDueDateFromInvalidTerms(t *testing.T) {
+	_, err := DueDateFrom(time.Now(), "net7")
+	if err != ErrInvalidPaymentTerms {
+		t.Fatalf("expected ErrInvalidPaymentTerms, got %v", err)
+	}
+}
+
+func TestCreateSupplierDefaultsPaymentTerms(t *testing.T) {
+	repo := newTestRepository()
+	svc := NewService(repo)
+
+	supplier, err := svc.Create(CreateInput{BusinessID: uuid.New(), Name: "Default Terms"})
+	if err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+	if supplier.PaymentTerms != PaymentTermsDefault {
+		t.Fatalf("payment_terms = %q, want %q", supplier.PaymentTerms, PaymentTermsDefault)
+	}
+}
+
+func TestCreateSupplierWithPaymentTerms(t *testing.T) {
+	repo := newTestRepository()
+	svc := NewService(repo)
+
+	supplier, err := svc.Create(CreateInput{BusinessID: uuid.New(), Name: "Net60", PaymentTerms: PaymentTermsNet60})
+	if err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+	if supplier.PaymentTerms != PaymentTermsNet60 {
+		t.Fatalf("payment_terms = %q, want %q", supplier.PaymentTerms, PaymentTermsNet60)
+	}
+}
+
+func TestCreateSupplierInvalidPaymentTerms(t *testing.T) {
+	repo := newTestRepository()
+	svc := NewService(repo)
+
+	_, err := svc.Create(CreateInput{BusinessID: uuid.New(), Name: "Bad Terms", PaymentTerms: "net7"})
+	if err != ErrInvalidPaymentTerms {
+		t.Fatalf("expected ErrInvalidPaymentTerms, got %v", err)
+	}
+}
+
+func TestUpdateSupplierPaymentTerms(t *testing.T) {
+	repo := newTestRepository()
+	svc := NewService(repo)
+
+	businessID := uuid.New()
+	supplier := &Supplier{ID: uuid.New(), BusinessID: businessID, Name: "Test", PaymentTerms: PaymentTermsNet30}
+	repo.suppliers[supplier.ID] = supplier
+
+	terms := PaymentTermsNet90
+	updated, err := svc.Update(supplier.ID, businessID, UpdateInput{PaymentTerms: &terms})
+	if err != nil {
+		t.Fatalf("Update failed: %v", err)
+	}
+	if updated.PaymentTerms != PaymentTermsNet90 {
+		t.Fatalf("payment_terms = %q, want %q", updated.PaymentTerms, PaymentTermsNet90)
+	}
+}
+
+func TestUpdateSupplierInvalidPaymentTerms(t *testing.T) {
+	repo := newTestRepository()
+	svc := NewService(repo)
+
+	businessID := uuid.New()
+	supplier := &Supplier{ID: uuid.New(), BusinessID: businessID, Name: "Test", PaymentTerms: PaymentTermsNet30}
+	repo.suppliers[supplier.ID] = supplier
+
+	terms := "net7"
+	_, err := svc.Update(supplier.ID, businessID, UpdateInput{PaymentTerms: &terms})
+	if err != ErrInvalidPaymentTerms {
+		t.Fatalf("expected ErrInvalidPaymentTerms, got %v", err)
+	}
+	if supplier.PaymentTerms != PaymentTermsNet30 {
+		t.Fatalf("payment_terms should be unchanged, got %q", supplier.PaymentTerms)
+	}
+}
+
+func TestSetPaymentDueDateTx(t *testing.T) {
+	repo := newTestRepository()
+	businessID := uuid.New()
+	supplier := &Supplier{ID: uuid.New(), BusinessID: businessID, Name: "Test", PaymentTerms: PaymentTermsNet45}
+	repo.suppliers[supplier.ID] = supplier
+
+	received := time.Date(2026, time.March, 1, 9, 0, 0, 0, time.UTC)
+	dueDate, err := repo.SetPaymentDueDateTx(nil, supplier.ID, businessID, received)
+	if err != nil {
+		t.Fatalf("SetPaymentDueDateTx failed: %v", err)
+	}
+	want := received.AddDate(0, 0, 45)
+	if dueDate == nil || !dueDate.Equal(want) {
+		t.Fatalf("due_date = %v, want %v", dueDate, want)
+	}
+	if supplier.DueDate == nil || !supplier.DueDate.Equal(want) {
+		t.Fatalf("supplier due_date not updated, got %v", supplier.DueDate)
+	}
+}
+
+func TestSetPaymentDueDateSupplierNotFound(t *testing.T) {
+	repo := newTestRepository()
+	_, err := repo.SetPaymentDueDateTx(nil, uuid.New(), uuid.New(), time.Now())
+	if err != ErrSupplierNotFound {
+		t.Fatalf("expected ErrSupplierNotFound, got %v", err)
 	}
 }

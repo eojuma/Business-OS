@@ -15,6 +15,7 @@ type Purchase struct {
 	AmountPaid  int64              `gorm:"not null;default:0" json:"amount_paid"`
 	Note        string             `json:"note,omitempty"`
 	ReceivedAt  *time.Time         `json:"received_at,omitempty"`
+	DueDate     *time.Time         `json:"due_date,omitempty"`
 	CreatedAt   time.Time          `json:"created_at"`
 	UpdatedAt   time.Time          `json:"updated_at"`
 	Items       []PurchaseLineItem `gorm:"foreignKey:PurchaseID" json:"items,omitempty"`

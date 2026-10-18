@@ -33,6 +33,8 @@ type repository struct{ db *gorm.DB }
 func NewRepository(db *gorm.DB) Repository { return &repository{db: db} }
 
 func (r *repository) Create(purchase *Purchase, items []PurchaseLineItem) error {
+	// Reserve the PO number in the same transaction as the insert so a failed
+	// create does not consume a sequence.
 	return r.db.Transaction(func(tx *gorm.DB) error {
 		poNumber, err := nextPONumberTx(tx, purchase.BusinessID, time.Now().Year())
 		if err != nil {
@@ -93,6 +95,8 @@ func (r *repository) List(businessID uuid.UUID, supplierID *uuid.UUID) ([]Purcha
 
 func (r *repository) ListPaginated(businessID uuid.UUID, page, limit int, status *string, supplierID *uuid.UUID, dateFrom *string, dateTo *string, poNumber *string) ([]Purchase, int64, error) {
 	var purchases []Purchase
+	// Model is set explicitly so Count can infer the table; empty string filters
+	// are treated as absent because the HTTP layer always passes their pointers.
 	query := r.db.Model(&Purchase{}).Preload("Items").Where("business_id = ?", businessID)
 	if supplierID != nil {
 		query = query.Where("supplier_id = ?", *supplierID)

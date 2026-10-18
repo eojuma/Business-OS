@@ -12,6 +12,7 @@ var (
 	ErrInvalidPayment        = errors.New("payment amount must be positive")
 	ErrPaymentExceedsBalance = errors.New("payment exceeds supplier outstanding balance")
 	ErrInvalidPaymentTerms   = errors.New("invalid payment terms")
+	ErrSupplierHasPurchases  = errors.New("supplier has purchases and cannot be archived")
 )
 
 type CreateInput struct {
@@ -28,9 +29,10 @@ type UpdateInput struct {
 type Service interface {
 	Create(CreateInput) (*Supplier, error)
 	Get(id, businessID uuid.UUID) (*Supplier, error)
-	List(businessID uuid.UUID) ([]Supplier, error)
+	List(businessID uuid.UUID, includeArchived bool) ([]Supplier, error)
 	Update(id, businessID uuid.UUID, input UpdateInput) (*Supplier, error)
 	Delete(id, businessID uuid.UUID) error
+	Restore(id, businessID uuid.UUID) (*Supplier, error)
 	RecordPayment(id, businessID uuid.UUID, amount int64, note string) (*Supplier, error)
 	ListPayments(id, businessID uuid.UUID) ([]Payment, error)
 }
@@ -59,7 +61,9 @@ func (s *service) Get(id, businessID uuid.UUID) (*Supplier, error) {
 	return supplier, nil
 }
 
-func (s *service) List(businessID uuid.UUID) ([]Supplier, error) { return s.repo.List(businessID) }
+func (s *service) List(businessID uuid.UUID, includeArchived bool) ([]Supplier, error) {
+	return s.repo.List(businessID, includeArchived)
+}
 
 func (s *service) Update(id, businessID uuid.UUID, input UpdateInput) (*Supplier, error) {
 	supplier, err := s.repo.FindByID(id, businessID)
@@ -87,7 +91,23 @@ func (s *service) Update(id, businessID uuid.UUID, input UpdateInput) (*Supplier
 	return supplier, s.repo.Update(supplier)
 }
 
-func (s *service) Delete(id, businessID uuid.UUID) error { return s.repo.Delete(id, businessID) }
+func (s *service) Delete(id, businessID uuid.UUID) error {
+	err := s.repo.Delete(id, businessID)
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return ErrSupplierNotFound
+	}
+	return err
+}
+
+func (s *service) Restore(id, businessID uuid.UUID) (*Supplier, error) {
+	if err := s.repo.Restore(id, businessID); err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) || errors.Is(err, ErrSupplierNotFound) {
+			return nil, ErrSupplierNotFound
+		}
+		return nil, err
+	}
+	return s.Get(id, businessID)
+}
 
 func (s *service) RecordPayment(id, businessID uuid.UUID, amount int64, note string) (*Supplier, error) {
 	if amount <= 0 {

@@ -23,7 +23,7 @@ type Repository interface {
 	Create(purchase *Purchase, items []PurchaseLineItem) error
 	FindByID(id, businessID uuid.UUID) (*Purchase, error)
 	List(businessID uuid.UUID, supplierID *uuid.UUID) ([]Purchase, error)
-	Receive(id, businessID uuid.UUID, inventory InventoryReceiver, suppliers SupplierCharger, products ProductCostUpdater) (*Purchase, error)
+	Receive(id, businessID uuid.UUID, items []ReceiveItemInput, inventory InventoryReceiver, suppliers SupplierCharger, products ProductCostUpdater) (*Purchase, error)
 	ListPaginated(businessID uuid.UUID, page, limit int, status *string, supplierID *uuid.UUID, dateFrom *string, dateTo *string) ([]Purchase, int64, error)
 }
 
@@ -88,7 +88,48 @@ func (r *repository) ListPaginated(businessID uuid.UUID, page, limit int, status
 	return purchases, total, nil
 }
 
-func (r *repository) Receive(id, businessID uuid.UUID, inventory InventoryReceiver, suppliers SupplierCharger, products ProductCostUpdater) (*Purchase, error) {
+// receivePlan resolves a receive request into the quantity to receive for each
+// line item index. An empty request means "receive every remaining quantity".
+func receivePlan(items []PurchaseLineItem, requested []ReceiveItemInput) (map[int]int64, error) {
+	plan := make(map[int]int64)
+	if len(requested) == 0 {
+		for idx := range items {
+			if remaining := items[idx].RemainingQty(); remaining > 0 {
+				plan[idx] = remaining
+			}
+		}
+		if len(plan) == 0 {
+			return nil, ErrNothingToReceive
+		}
+		return plan, nil
+	}
+
+	indexByProduct := make(map[uuid.UUID]int, len(items))
+	for idx := range items {
+		if _, exists := indexByProduct[items[idx].ProductID]; !exists {
+			indexByProduct[items[idx].ProductID] = idx
+		}
+	}
+	for _, request := range requested {
+		if request.ReceivedQty <= 0 {
+			return nil, ErrInvalidReceiveQuantity
+		}
+		idx, ok := indexByProduct[request.ProductID]
+		if !ok {
+			return nil, ErrUnknownReceiveItem
+		}
+		if _, duplicate := plan[idx]; duplicate {
+			return nil, ErrDuplicateReceiveItem
+		}
+		if request.ReceivedQty > items[idx].RemainingQty() {
+			return nil, ErrInvalidReceiveQuantity
+		}
+		plan[idx] = request.ReceivedQty
+	}
+	return plan, nil
+}
+
+func (r *repository) Receive(id, businessID uuid.UUID, items []ReceiveItemInput, inventory InventoryReceiver, suppliers SupplierCharger, products ProductCostUpdater) (*Purchase, error) {
 	var purchase Purchase
 	err := r.db.Transaction(func(tx *gorm.DB) error {
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Preload("Items").Where("id = ? AND business_id = ?", id, businessID).First(&purchase).Error; err != nil {
@@ -97,29 +138,61 @@ func (r *repository) Receive(id, businessID uuid.UUID, inventory InventoryReceiv
 		if purchase.Status == "received" {
 			return ErrAlreadyReceived
 		}
+
+		plan, err := receivePlan(purchase.Items, items)
+		if err != nil {
+			return err
+		}
+
+		var previouslyReceivedValue int64
 		for _, item := range purchase.Items {
-			if err := inventory.RecordMovementTx(tx, businessID, item.ProductID, "restock", item.Quantity, "purchase "+purchase.ID.String()); err != nil {
+			previouslyReceivedValue += item.ReceivedQty * item.UnitCost
+		}
+
+		var newlyReceivedValue int64
+		for idx, quantity := range plan {
+			item := &purchase.Items[idx]
+			item.ReceivedQty += quantity
+			newlyReceivedValue += quantity * item.UnitCost
+			if err := inventory.RecordMovementTx(tx, businessID, item.ProductID, "restock", quantity, "purchase "+purchase.ID.String()); err != nil {
 				return err
 			}
 			if err := products.UpdateCostPriceTx(tx, businessID, item.ProductID, item.UnitCost); err != nil {
 				return err
 			}
-		}
-		now := time.Now()
-		outstanding := purchase.TotalAmount - purchase.AmountPaid
-		if outstanding > 0 {
-			if err := suppliers.AddOutstandingTx(tx, purchase.SupplierID, businessID, outstanding); err != nil {
+			if err := tx.Model(&PurchaseLineItem{}).Where("id = ?", item.ID).
+				Update("received_qty", item.ReceivedQty).Error; err != nil {
 				return err
 			}
+		}
+
+		// Charge the supplier only for the value newly delivered, applying any
+		// amount already paid to the earliest receipts so partial receipts never
+		// overcharge the outstanding balance.
+		totalReceivedValue := previouslyReceivedValue + newlyReceivedValue
+		charge := max(int64(0), totalReceivedValue-purchase.AmountPaid) -
+			max(int64(0), previouslyReceivedValue-purchase.AmountPaid)
+		if charge > 0 {
+			if err := suppliers.AddOutstandingTx(tx, purchase.SupplierID, businessID, charge); err != nil {
+				return err
+			}
+		}
+
+		now := time.Now()
+		if purchase.FullyReceived() {
+			purchase.Status = "received"
+			purchase.ReceivedAt = &now
 		}
 		dueDate, err := suppliers.SetPaymentDueDateTx(tx, purchase.SupplierID, businessID, now)
 		if err != nil {
 			return err
 		}
-		purchase.Status = "received"
-		purchase.ReceivedAt = &now
 		purchase.DueDate = dueDate
-		return tx.Save(&purchase).Error
+		return tx.Model(&Purchase{}).Where("id = ? AND business_id = ?", id, businessID).Updates(map[string]interface{}{
+			"status":      purchase.Status,
+			"received_at": purchase.ReceivedAt,
+			"due_date":    purchase.DueDate,
+		}).Error
 	})
 	return &purchase, err
 }

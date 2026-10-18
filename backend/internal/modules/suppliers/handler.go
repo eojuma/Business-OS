@@ -3,6 +3,7 @@ package suppliers
 import (
 	"errors"
 	"net/http"
+	"strconv"
 
 	"github.com/businessos/backend/internal/shared/middleware"
 	"github.com/businessos/backend/internal/shared/response"
@@ -76,7 +77,16 @@ func (h *Handler) List(c *gin.Context) {
 		response.Error(c, http.StatusUnauthorized, err.Error())
 		return
 	}
-	items, err := h.service.List(businessID)
+	includeArchived := false
+	if raw := c.Query("include_archived"); raw != "" {
+		parsed, err := strconv.ParseBool(raw)
+		if err != nil {
+			response.Error(c, http.StatusBadRequest, "invalid include_archived")
+			return
+		}
+		includeArchived = parsed
+	}
+	items, err := h.service.List(businessID, includeArchived)
 	if err != nil {
 		response.Error(c, http.StatusInternalServerError, "failed to list suppliers")
 		return
@@ -138,11 +148,37 @@ func (h *Handler) Delete(c *gin.Context) {
 	if !ok {
 		return
 	}
-	if err := h.service.Delete(id, businessID); err != nil {
+	err := h.service.Delete(id, businessID)
+	if errors.Is(err, ErrSupplierNotFound) {
+		response.Error(c, http.StatusNotFound, err.Error())
+		return
+	}
+	if errors.Is(err, ErrSupplierHasPurchases) {
+		response.Error(c, http.StatusConflict, err.Error())
+		return
+	}
+	if err != nil {
 		response.Error(c, http.StatusInternalServerError, "failed to delete supplier")
 		return
 	}
 	c.Status(http.StatusNoContent)
+}
+
+func (h *Handler) Restore(c *gin.Context) {
+	businessID, id, ok := businessAndID(c)
+	if !ok {
+		return
+	}
+	item, err := h.service.Restore(id, businessID)
+	if errors.Is(err, ErrSupplierNotFound) {
+		response.Error(c, http.StatusNotFound, err.Error())
+		return
+	}
+	if err != nil {
+		response.Error(c, http.StatusInternalServerError, "failed to restore supplier")
+		return
+	}
+	response.Success(c, http.StatusOK, item)
 }
 
 func (h *Handler) RecordPayment(c *gin.Context) {

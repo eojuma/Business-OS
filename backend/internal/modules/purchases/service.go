@@ -64,6 +64,8 @@ func (s *service) Create(input CreateInput) (*Purchase, error) {
 	if len(input.Items) == 0 {
 		return nil, ErrEmptyPurchase
 	}
+	// Copy the optional expected date and per-line notes onto the persisted
+	// purchase model; the repository stores them as-is.
 	items := make([]PurchaseLineItem, 0, len(input.Items))
 	var total int64
 	for _, item := range input.Items {

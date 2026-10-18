@@ -9,6 +9,7 @@ import (
 type Purchase struct {
 	ID          uuid.UUID          `gorm:"type:uuid;primaryKey;default:gen_random_uuid()" json:"id"`
 	BusinessID  uuid.UUID          `gorm:"type:uuid;index;not null" json:"business_id"`
+	PONumber    string             `gorm:"not null" json:"po_number"`
 	SupplierID  uuid.UUID          `gorm:"type:uuid;index;not null" json:"supplier_id"`
 	Status      string             `gorm:"not null;default:'draft'" json:"status"`
 	TotalAmount int64              `gorm:"not null" json:"total_amount"`

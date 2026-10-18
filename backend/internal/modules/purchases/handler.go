@@ -95,7 +95,12 @@ func (h *Handler) List(c *gin.Context) {
 	}
 	dateFrom := c.Query("date_from")
 	dateTo := c.Query("date_to")
-	items, total, err := h.service.ListPaginated(businessID, page, limit, &status, supplierIDPtr, &dateFrom, &dateTo)
+	poNumber := c.Query("po_number")
+	var poNumberPtr *string
+	if poNumber != "" {
+		poNumberPtr = &poNumber
+	}
+	items, total, err := h.service.ListPaginated(businessID, page, limit, &status, supplierIDPtr, &dateFrom, &dateTo, poNumberPtr)
 	if err != nil {
 		response.Error(c, http.StatusInternalServerError, "failed to list purchases")
 		return

@@ -14,6 +14,7 @@ func RegisterRoutes(rg *gin.RouterGroup, db *gorm.DB, cfg *config.Config) {
 	group.GET("/:id", handler.Get)
 	group.PATCH("/:id", handler.Update)
 	group.DELETE("/:id", handler.Delete)
+	group.POST("/:id/restore", handler.Restore)
 	group.POST("/:id/payments", handler.RecordPayment)
 	group.GET("/:id/payments", handler.ListPayments)
 }

@@ -14,6 +14,7 @@ type Purchase struct {
 	TotalAmount int64              `gorm:"not null" json:"total_amount"`
 	AmountPaid  int64              `gorm:"not null;default:0" json:"amount_paid"`
 	Note        string             `json:"note,omitempty"`
+	ExpectedAt  *time.Time         `json:"expected_at,omitempty"`
 	ReceivedAt  *time.Time         `json:"received_at,omitempty"`
 	DueDate     *time.Time         `json:"due_date,omitempty"`
 	CreatedAt   time.Time          `json:"created_at"`
@@ -31,6 +32,7 @@ type PurchaseLineItem struct {
 	ReceivedQty int64     `gorm:"not null;default:0" json:"received_qty"`
 	UnitCost    int64     `gorm:"not null" json:"unit_cost"`
 	Subtotal    int64     `gorm:"not null" json:"subtotal"`
+	Note        string    `json:"note,omitempty"`
 	CreatedAt   time.Time `json:"created_at"`
 }
 

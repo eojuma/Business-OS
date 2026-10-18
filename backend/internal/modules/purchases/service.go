@@ -8,11 +8,15 @@ import (
 )
 
 var (
-	ErrPurchaseNotFound    = errors.New("purchase not found")
-	ErrEmptyPurchase       = errors.New("a purchase must have at least one line item")
-	ErrInvalidPurchaseItem = errors.New("purchase quantities must be positive and costs cannot be negative")
-	ErrInvalidAmountPaid   = errors.New("amount paid cannot be negative or exceed the purchase total")
-	ErrAlreadyReceived     = errors.New("purchase has already been received")
+	ErrPurchaseNotFound       = errors.New("purchase not found")
+	ErrEmptyPurchase          = errors.New("a purchase must have at least one line item")
+	ErrInvalidPurchaseItem    = errors.New("purchase quantities must be positive and costs cannot be negative")
+	ErrInvalidAmountPaid      = errors.New("amount paid cannot be negative or exceed the purchase total")
+	ErrAlreadyReceived        = errors.New("purchase has already been received")
+	ErrInvalidReceiveQuantity = errors.New("received quantity must be positive and not exceed the remaining quantity")
+	ErrUnknownReceiveItem     = errors.New("purchase does not contain the requested product")
+	ErrDuplicateReceiveItem   = errors.New("duplicate product in receive request")
+	ErrNothingToReceive       = errors.New("purchase has no remaining items to receive")
 )
 
 type ItemInput struct {
@@ -26,11 +30,19 @@ type CreateInput struct {
 	Items                  []ItemInput
 }
 
+type ReceiveItemInput struct {
+	ProductID   uuid.UUID
+	ReceivedQty int64
+}
+type ReceiveInput struct {
+	Items []ReceiveItemInput
+}
+
 type Service interface {
 	Create(CreateInput) (*Purchase, error)
 	Get(id, businessID uuid.UUID) (*Purchase, error)
 	List(businessID uuid.UUID, supplierID *uuid.UUID) ([]Purchase, error)
-	Receive(id, businessID uuid.UUID) (*Purchase, error)
+	Receive(id, businessID uuid.UUID, input ReceiveInput) (*Purchase, error)
 	ListPaginated(businessID uuid.UUID, page, limit int, status *string, supplierID *uuid.UUID, dateFrom *string, dateTo *string) ([]Purchase, int64, error)
 }
 
@@ -83,8 +95,8 @@ func (s *service) List(businessID uuid.UUID, supplierID *uuid.UUID) ([]Purchase,
 func (s *service) ListPaginated(businessID uuid.UUID, page, limit int, status *string, supplierID *uuid.UUID, dateFrom *string, dateTo *string) ([]Purchase, int64, error) {
 	return s.repo.ListPaginated(businessID, page, limit, status, supplierID, dateFrom, dateTo)
 }
-func (s *service) Receive(id, businessID uuid.UUID) (*Purchase, error) {
-	p, err := s.repo.Receive(id, businessID, s.inventory, s.suppliers, s.products)
+func (s *service) Receive(id, businessID uuid.UUID, input ReceiveInput) (*Purchase, error) {
+	p, err := s.repo.Receive(id, businessID, input.Items, s.inventory, s.suppliers, s.products)
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, ErrPurchaseNotFound
 	}

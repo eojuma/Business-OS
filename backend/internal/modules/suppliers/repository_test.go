@@ -190,14 +190,23 @@ func TestRepositoryList(t *testing.T) {
 
 	db.Create(&Supplier{BusinessID: businessID, Name: "A"})
 	db.Create(&Supplier{BusinessID: businessID, Name: "B"})
+	db.Create(&Supplier{BusinessID: businessID, Name: "Archived", DeletedAt: gorm.DeletedAt{Time: time.Now(), Valid: true}})
 	db.Create(&Supplier{BusinessID: uuid.New(), Name: "C"})
 
-	list, err := repo.List(businessID)
+	list, err := repo.List(businessID, false)
 	if err != nil {
 		t.Fatalf("List failed: %v", err)
 	}
 	if len(list) != 2 {
 		t.Fatalf("len = %d, want 2", len(list))
+	}
+
+	all, err := repo.List(businessID, true)
+	if err != nil {
+		t.Fatalf("List with archived failed: %v", err)
+	}
+	if len(all) != 3 {
+		t.Fatalf("len = %d, want 3 including archived", len(all))
 	}
 }
 
@@ -237,10 +246,95 @@ func TestRepositoryDelete(t *testing.T) {
 		t.Fatalf("Delete failed: %v", err)
 	}
 
-	var count int64
-	db.Model(&Supplier{}).Where("id = ?", supplier.ID).Count(&count)
-	if count != 0 {
-		t.Fatal("supplier should be deleted")
+	if _, err := repo.FindByID(supplier.ID, businessID); err != gorm.ErrRecordNotFound {
+		t.Fatalf("expected ErrRecordNotFound after archive, got %v", err)
+	}
+
+	// The row must remain so existing purchase references stay valid.
+	var archived Supplier
+	if err := db.Unscoped().First(&archived, "id = ?", supplier.ID).Error; err != nil {
+		t.Fatalf("supplier row should still exist: %v", err)
+	}
+	if !archived.DeletedAt.Valid {
+		t.Fatal("deleted_at should be set")
+	}
+}
+
+func TestRepositoryDeleteRejectsSupplierWithPurchases(t *testing.T) {
+	db, businessID := setupTestDB(t)
+	repo := NewRepository(db)
+
+	supplier := &Supplier{BusinessID: businessID, Name: "Has Purchases"}
+	db.Create(supplier)
+	createTestPurchase(t, db, businessID, supplier.ID)
+
+	if err := repo.Delete(supplier.ID, businessID); err != ErrSupplierHasPurchases {
+		t.Fatalf("expected ErrSupplierHasPurchases, got %v", err)
+	}
+	if _, err := repo.FindByID(supplier.ID, businessID); err != nil {
+		t.Fatalf("supplier should remain active: %v", err)
+	}
+}
+
+func TestRepositoryRestoreSupplier(t *testing.T) {
+	db, businessID := setupTestDB(t)
+	repo := NewRepository(db)
+
+	supplier := &Supplier{BusinessID: businessID, Name: "Restore Me"}
+	db.Create(supplier)
+	if err := repo.Delete(supplier.ID, businessID); err != nil {
+		t.Fatalf("Delete failed: %v", err)
+	}
+
+	if err := repo.Restore(supplier.ID, businessID); err != nil {
+		t.Fatalf("Restore failed: %v", err)
+	}
+	found, err := repo.FindByID(supplier.ID, businessID)
+	if err != nil {
+		t.Fatalf("restored supplier not found: %v", err)
+	}
+	if found.DeletedAt.Valid {
+		t.Fatal("deleted_at should be cleared")
+	}
+}
+
+func TestRepositoryRestoreSupplierNotFound(t *testing.T) {
+	db, _ := setupTestDB(t)
+	repo := NewRepository(db)
+
+	if err := repo.Restore(uuid.New(), uuid.New()); err != ErrSupplierNotFound {
+		t.Fatalf("expected ErrSupplierNotFound, got %v", err)
+	}
+}
+
+// createTestPurchase inserts a minimal purchase row so delete/archive guards can
+// be exercised without importing the purchases module (which imports suppliers).
+func createTestPurchase(t *testing.T, db *gorm.DB, businessID, supplierID uuid.UUID) {
+	t.Helper()
+
+	purchase := map[string]interface{}{
+		"business_id":  businessID,
+		"supplier_id":  supplierID,
+		"total_amount": 100,
+	}
+
+	// Later migrations may make po_number required; only supply it if present so
+	// this test works before and after that change lands.
+	var hasPONumber bool
+	if err := db.Raw(`SELECT EXISTS (
+		SELECT 1 FROM information_schema.columns
+		WHERE table_schema = CURRENT_SCHEMA()
+		  AND table_name = 'purchases'
+		  AND column_name = 'po_number'
+	)`).Scan(&hasPONumber).Error; err != nil {
+		t.Fatalf("check po_number column: %v", err)
+	}
+	if hasPONumber {
+		purchase["po_number"] = "PO-TEST-" + uuid.New().String()[:8]
+	}
+
+	if err := db.Table("purchases").Create(purchase).Error; err != nil {
+		t.Fatalf("create purchase: %v", err)
 	}
 }
 
@@ -599,7 +693,7 @@ func TestSupplierNameIndex(t *testing.T) {
 	}
 
 	start := time.Now()
-	list, err := repo.List(businessID)
+	list, err := repo.List(businessID, false)
 	elapsed := time.Since(start)
 
 	if err != nil {

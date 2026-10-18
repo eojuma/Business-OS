@@ -2,6 +2,7 @@ package purchases
 
 import (
 	"errors"
+	"io"
 	"net/http"
 	"strconv"
 
@@ -25,6 +26,13 @@ type createRequest struct {
 	AmountPaid int64         `json:"amount_paid"`
 	Note       string        `json:"note"`
 	Items      []itemRequest `json:"items" binding:"required,min=1,dive"`
+}
+type receiveItemRequest struct {
+	ProductID   string `json:"product_id" binding:"required,uuid"`
+	ReceivedQty int64  `json:"received_qty" binding:"required"`
+}
+type receiveRequest struct {
+	Items []receiveItemRequest `json:"items" binding:"omitempty,dive"`
 }
 
 func (h *Handler) Create(c *gin.Context) {
@@ -138,13 +146,28 @@ func (h *Handler) Receive(c *gin.Context) {
 	if !ok {
 		return
 	}
-	item, err := h.service.Receive(id, businessID)
+	var req receiveRequest
+	if err := c.ShouldBindJSON(&req); err != nil && !errors.Is(err, io.EOF) {
+		response.Error(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	items := make([]ReceiveItemInput, 0, len(req.Items))
+	for _, item := range req.Items {
+		productID, _ := uuid.Parse(item.ProductID)
+		items = append(items, ReceiveItemInput{ProductID: productID, ReceivedQty: item.ReceivedQty})
+	}
+	item, err := h.service.Receive(id, businessID, ReceiveInput{Items: items})
 	if errors.Is(err, ErrPurchaseNotFound) {
 		response.Error(c, http.StatusNotFound, err.Error())
 		return
 	}
 	if errors.Is(err, ErrAlreadyReceived) {
 		response.Error(c, http.StatusConflict, err.Error())
+		return
+	}
+	if errors.Is(err, ErrInvalidReceiveQuantity) || errors.Is(err, ErrUnknownReceiveItem) ||
+		errors.Is(err, ErrDuplicateReceiveItem) || errors.Is(err, ErrNothingToReceive) {
+		response.Error(c, http.StatusBadRequest, err.Error())
 		return
 	}
 	if err != nil {

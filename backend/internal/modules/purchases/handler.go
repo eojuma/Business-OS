@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/businessos/backend/internal/shared/middleware"
 	"github.com/businessos/backend/internal/shared/response"
@@ -20,11 +21,13 @@ type itemRequest struct {
 	ProductID string `json:"product_id" binding:"required,uuid"`
 	Quantity  int64  `json:"quantity" binding:"required"`
 	UnitCost  int64  `json:"unit_cost"`
+	Note      string `json:"note"`
 }
 type createRequest struct {
 	SupplierID string        `json:"supplier_id" binding:"required,uuid"`
 	AmountPaid int64         `json:"amount_paid"`
 	Note       string        `json:"note"`
+	ExpectedAt *time.Time    `json:"expected_at"`
 	Items      []itemRequest `json:"items" binding:"required,min=1,dive"`
 }
 type receiveItemRequest struct {
@@ -50,9 +53,9 @@ func (h *Handler) Create(c *gin.Context) {
 	items := make([]ItemInput, 0, len(req.Items))
 	for _, item := range req.Items {
 		productID, _ := uuid.Parse(item.ProductID)
-		items = append(items, ItemInput{ProductID: productID, Quantity: item.Quantity, UnitCost: item.UnitCost})
+		items = append(items, ItemInput{ProductID: productID, Quantity: item.Quantity, UnitCost: item.UnitCost, Note: item.Note})
 	}
-	purchase, err := h.service.Create(CreateInput{BusinessID: businessID, SupplierID: supplierID, AmountPaid: req.AmountPaid, Note: req.Note, Items: items})
+	purchase, err := h.service.Create(CreateInput{BusinessID: businessID, SupplierID: supplierID, AmountPaid: req.AmountPaid, Note: req.Note, ExpectedAt: req.ExpectedAt, Items: items})
 	if errors.Is(err, ErrEmptyPurchase) || errors.Is(err, ErrInvalidPurchaseItem) || errors.Is(err, ErrInvalidAmountPaid) {
 		response.Error(c, http.StatusBadRequest, err.Error())
 		return

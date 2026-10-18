@@ -104,27 +104,44 @@ func receivePlan(items []PurchaseLineItem, requested []ReceiveItemInput) (map[in
 		return plan, nil
 	}
 
-	indexByProduct := make(map[uuid.UUID]int, len(items))
+	indexesByProduct := make(map[uuid.UUID][]int, len(items))
 	for idx := range items {
-		if _, exists := indexByProduct[items[idx].ProductID]; !exists {
-			indexByProduct[items[idx].ProductID] = idx
-		}
+		productID := items[idx].ProductID
+		indexesByProduct[productID] = append(indexesByProduct[productID], idx)
 	}
+
+	seen := make(map[uuid.UUID]bool, len(requested))
 	for _, request := range requested {
 		if request.ReceivedQty <= 0 {
 			return nil, ErrInvalidReceiveQuantity
 		}
-		idx, ok := indexByProduct[request.ProductID]
+		if seen[request.ProductID] {
+			return nil, ErrDuplicateReceiveItem
+		}
+		seen[request.ProductID] = true
+
+		indexes, ok := indexesByProduct[request.ProductID]
 		if !ok {
 			return nil, ErrUnknownReceiveItem
 		}
-		if _, duplicate := plan[idx]; duplicate {
-			return nil, ErrDuplicateReceiveItem
+		// Distribute across duplicate-product lines in line order so a receipt
+		// can consume the remaining quantity on every matching line.
+		remaining := request.ReceivedQty
+		for _, idx := range indexes {
+			if remaining == 0 {
+				break
+			}
+			available := items[idx].RemainingQty()
+			if available <= 0 {
+				continue
+			}
+			take := min(remaining, available)
+			plan[idx] += take
+			remaining -= take
 		}
-		if request.ReceivedQty > items[idx].RemainingQty() {
+		if remaining > 0 {
 			return nil, ErrInvalidReceiveQuantity
 		}
-		plan[idx] = request.ReceivedQty
 	}
 	return plan, nil
 }

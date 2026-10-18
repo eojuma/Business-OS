@@ -43,7 +43,7 @@ type Service interface {
 	Get(id, businessID uuid.UUID) (*Purchase, error)
 	List(businessID uuid.UUID, supplierID *uuid.UUID) ([]Purchase, error)
 	Receive(id, businessID uuid.UUID, input ReceiveInput) (*Purchase, error)
-	ListPaginated(businessID uuid.UUID, page, limit int, status *string, supplierID *uuid.UUID, dateFrom *string, dateTo *string) ([]Purchase, int64, error)
+	ListPaginated(businessID uuid.UUID, page, limit int, status *string, supplierID *uuid.UUID, dateFrom *string, dateTo *string, poNumber *string) ([]Purchase, int64, error)
 }
 
 type service struct {
@@ -92,8 +92,8 @@ func (s *service) List(businessID uuid.UUID, supplierID *uuid.UUID) ([]Purchase,
 	return s.repo.List(businessID, supplierID)
 }
 
-func (s *service) ListPaginated(businessID uuid.UUID, page, limit int, status *string, supplierID *uuid.UUID, dateFrom *string, dateTo *string) ([]Purchase, int64, error) {
-	return s.repo.ListPaginated(businessID, page, limit, status, supplierID, dateFrom, dateTo)
+func (s *service) ListPaginated(businessID uuid.UUID, page, limit int, status *string, supplierID *uuid.UUID, dateFrom *string, dateTo *string, poNumber *string) ([]Purchase, int64, error) {
+	return s.repo.ListPaginated(businessID, page, limit, status, supplierID, dateFrom, dateTo, poNumber)
 }
 func (s *service) Receive(id, businessID uuid.UUID, input ReceiveInput) (*Purchase, error) {
 	p, err := s.repo.Receive(id, businessID, input.Items, s.inventory, s.suppliers, s.products)

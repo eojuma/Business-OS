@@ -2,6 +2,7 @@ package purchases
 
 import (
 	"errors"
+	"time"
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"
@@ -22,11 +23,13 @@ var (
 type ItemInput struct {
 	ProductID          uuid.UUID
 	Quantity, UnitCost int64
+	Note               string
 }
 type CreateInput struct {
 	BusinessID, SupplierID uuid.UUID
 	AmountPaid             int64
 	Note                   string
+	ExpectedAt             *time.Time
 	Items                  []ItemInput
 }
 
@@ -69,12 +72,12 @@ func (s *service) Create(input CreateInput) (*Purchase, error) {
 		}
 		subtotal := item.Quantity * item.UnitCost
 		total += subtotal
-		items = append(items, PurchaseLineItem{ProductID: item.ProductID, Quantity: item.Quantity, UnitCost: item.UnitCost, Subtotal: subtotal})
+		items = append(items, PurchaseLineItem{ProductID: item.ProductID, Quantity: item.Quantity, UnitCost: item.UnitCost, Subtotal: subtotal, Note: item.Note})
 	}
 	if input.AmountPaid < 0 || input.AmountPaid > total {
 		return nil, ErrInvalidAmountPaid
 	}
-	purchase := &Purchase{BusinessID: input.BusinessID, SupplierID: input.SupplierID, Status: "draft", TotalAmount: total, AmountPaid: input.AmountPaid, Note: input.Note}
+	purchase := &Purchase{BusinessID: input.BusinessID, SupplierID: input.SupplierID, Status: "draft", TotalAmount: total, AmountPaid: input.AmountPaid, Note: input.Note, ExpectedAt: input.ExpectedAt}
 	if err := s.repo.Create(purchase, items); err != nil {
 		return nil, err
 	}

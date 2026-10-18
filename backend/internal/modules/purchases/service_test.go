@@ -90,6 +90,38 @@ func TestReceivePlanRequestedQuantities(t *testing.T) {
 	}
 }
 
+func TestReceivePlanDistributesAcrossDuplicateProductLines(t *testing.T) {
+	product := uuid.New()
+	items := []PurchaseLineItem{
+		{ProductID: product, Quantity: 2},
+		{ProductID: product, Quantity: 3},
+	}
+
+	// Four units fill the first line and take two from the second.
+	plan, err := receivePlan(items, []ReceiveItemInput{{ProductID: product, ReceivedQty: 4}})
+	if err != nil {
+		t.Fatalf("receivePlan failed: %v", err)
+	}
+	if plan[0] != 2 || plan[1] != 2 {
+		t.Fatalf("plan = %v, want {0:2, 1:2}", plan)
+	}
+
+	// Once the first line is complete, quantity comes from the next line.
+	items[0].ReceivedQty = 2
+	plan, err = receivePlan(items, []ReceiveItemInput{{ProductID: product, ReceivedQty: 2}})
+	if err != nil {
+		t.Fatalf("receivePlan failed: %v", err)
+	}
+	if plan[1] != 2 {
+		t.Fatalf("plan = %v, want {1:2}", plan)
+	}
+
+	// More than both lines can supply is rejected.
+	if _, err := receivePlan(items, []ReceiveItemInput{{ProductID: product, ReceivedQty: 4}}); err != ErrInvalidReceiveQuantity {
+		t.Fatalf("error = %v, want %v", err, ErrInvalidReceiveQuantity)
+	}
+}
+
 func TestReceivePlanRejectsOverReceipt(t *testing.T) {
 	productA := uuid.New()
 	items := []PurchaseLineItem{{ProductID: productA, Quantity: 5, ReceivedQty: 2}}

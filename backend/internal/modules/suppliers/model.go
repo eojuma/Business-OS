@@ -4,21 +4,23 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"gorm.io/gorm"
 )
 
 type Supplier struct {
-	ID                 uuid.UUID  `gorm:"type:uuid;primaryKey;default:gen_random_uuid()" json:"id"`
-	BusinessID         uuid.UUID  `gorm:"type:uuid;index;not null" json:"business_id"`
-	Name               string     `gorm:"not null" json:"name"`
-	Phone              string     `json:"phone"`
-	Email              string     `json:"email,omitempty"`
-	Address            string     `json:"address,omitempty"`
-	OutstandingBalance int64      `gorm:"not null;default:0" json:"outstanding_balance"`
-	PaymentTerms       string     `gorm:"not null;default:'net30'" json:"payment_terms"`
-	DueDate            *time.Time `gorm:"type:timestamptz" json:"due_date,omitempty"`
-	LastReceivedAt     *time.Time `gorm:"type:timestamptz" json:"last_received_at,omitempty"`
-	CreatedAt          time.Time  `json:"created_at"`
-	UpdatedAt          time.Time  `json:"updated_at"`
+	ID                 uuid.UUID      `gorm:"type:uuid;primaryKey;default:gen_random_uuid()" json:"id"`
+	BusinessID         uuid.UUID      `gorm:"type:uuid;index;not null" json:"business_id"`
+	Name               string         `gorm:"not null" json:"name"`
+	Phone              string         `json:"phone"`
+	Email              string         `json:"email,omitempty"`
+	Address            string         `json:"address,omitempty"`
+	OutstandingBalance int64          `gorm:"not null;default:0" json:"outstanding_balance"`
+	PaymentTerms       string         `gorm:"not null;default:'net30'" json:"payment_terms"`
+	DueDate            *time.Time     `gorm:"type:timestamptz" json:"due_date,omitempty"`
+	LastReceivedAt     *time.Time     `gorm:"type:timestamptz" json:"last_received_at,omitempty"`
+	DeletedAt          gorm.DeletedAt `gorm:"index" json:"deleted_at,omitempty"`
+	CreatedAt          time.Time      `json:"created_at"`
+	UpdatedAt          time.Time      `json:"updated_at"`
 }
 
 func (Supplier) TableName() string { return "suppliers" }

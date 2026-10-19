@@ -2,6 +2,7 @@ package purchases
 
 import (
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"
@@ -51,6 +52,34 @@ func TestCreateRejectsOverpayment(t *testing.T) {
 	_, err := service.Create(CreateInput{BusinessID: uuid.New(), SupplierID: uuid.New(), AmountPaid: 201, Items: []ItemInput{{ProductID: uuid.New(), Quantity: 1, UnitCost: 200}}})
 	if err != ErrInvalidAmountPaid {
 		t.Fatalf("error = %v, want %v", err, ErrInvalidAmountPaid)
+	}
+}
+
+func TestCreateStoresExpectedDateAndLineNotes(t *testing.T) {
+	repo := &testRepository{}
+	service := NewService(repo, nil, nil, nil)
+
+	expectedAt := time.Date(2026, time.November, 5, 0, 0, 0, 0, time.UTC)
+	productID := uuid.New()
+	purchase, err := service.Create(CreateInput{
+		BusinessID: uuid.New(),
+		SupplierID: uuid.New(),
+		ExpectedAt: &expectedAt,
+		Items: []ItemInput{
+			{ProductID: productID, Quantity: 2, UnitCost: 150, Note: "deliver to warehouse B"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+	if purchase.ExpectedAt == nil || !purchase.ExpectedAt.Equal(expectedAt) {
+		t.Fatalf("expected_at = %v, want %v", purchase.ExpectedAt, expectedAt)
+	}
+	if len(purchase.Items) != 1 {
+		t.Fatalf("items = %d, want 1", len(purchase.Items))
+	}
+	if purchase.Items[0].Note != "deliver to warehouse B" {
+		t.Fatalf("item note = %q, want %q", purchase.Items[0].Note, "deliver to warehouse B")
 	}
 }
 

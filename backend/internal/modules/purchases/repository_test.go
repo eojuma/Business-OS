@@ -324,3 +324,45 @@ func TestRepositoryReceiveAllRemainingWhenItemsOmitted(t *testing.T) {
 		t.Fatalf("supplier balance = %d, want 700", got)
 	}
 }
+
+func TestRepositoryCreatePersistsExpectedDateAndLineNotes(t *testing.T) {
+	db, businessID := setupTestDB(t)
+
+	supplier := &suppliers.Supplier{BusinessID: businessID, Name: "Notes Supplier", PaymentTerms: suppliers.PaymentTermsNet30}
+	if err := db.Create(supplier).Error; err != nil {
+		t.Fatalf("create supplier: %v", err)
+	}
+	product := &products.Product{BusinessID: businessID, Name: "Product", Unit: "unit", Price: 200}
+	if err := db.Create(product).Error; err != nil {
+		t.Fatalf("create product: %v", err)
+	}
+
+	expectedAt := time.Date(2026, time.November, 5, 0, 0, 0, 0, time.UTC)
+	purchase := &Purchase{
+		BusinessID:  businessID,
+		SupplierID:  supplier.ID,
+		Status:      "draft",
+		TotalAmount: 200,
+		ExpectedAt:  &expectedAt,
+	}
+	items := []PurchaseLineItem{
+		{ProductID: product.ID, Quantity: 1, UnitCost: 200, Subtotal: 200, Note: "fragile"},
+	}
+	if err := NewRepository(db).Create(purchase, items); err != nil {
+		t.Fatalf("create purchase: %v", err)
+	}
+
+	found, err := NewRepository(db).FindByID(purchase.ID, businessID)
+	if err != nil {
+		t.Fatalf("find purchase: %v", err)
+	}
+	if found.ExpectedAt == nil || !found.ExpectedAt.UTC().Equal(expectedAt) {
+		t.Fatalf("expected_at = %v, want %v", found.ExpectedAt, expectedAt)
+	}
+	if len(found.Items) != 1 {
+		t.Fatalf("items = %d, want 1", len(found.Items))
+	}
+	if found.Items[0].Note != "fragile" {
+		t.Fatalf("item note = %q, want %q", found.Items[0].Note, "fragile")
+	}
+}

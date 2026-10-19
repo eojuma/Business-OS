@@ -7,18 +7,20 @@ import (
 )
 
 type Purchase struct {
-	ID          uuid.UUID          `gorm:"type:uuid;primaryKey;default:gen_random_uuid()" json:"id"`
-	BusinessID  uuid.UUID          `gorm:"type:uuid;index;not null" json:"business_id"`
-	SupplierID  uuid.UUID          `gorm:"type:uuid;index;not null" json:"supplier_id"`
-	Status      string             `gorm:"not null;default:'draft'" json:"status"`
-	TotalAmount int64              `gorm:"not null" json:"total_amount"`
-	AmountPaid  int64              `gorm:"not null;default:0" json:"amount_paid"`
-	Note        string             `json:"note,omitempty"`
-	ReceivedAt  *time.Time         `json:"received_at,omitempty"`
-	DueDate     *time.Time         `json:"due_date,omitempty"`
-	CreatedAt   time.Time          `json:"created_at"`
-	UpdatedAt   time.Time          `json:"updated_at"`
-	Items       []PurchaseLineItem `gorm:"foreignKey:PurchaseID" json:"items,omitempty"`
+	ID          uuid.UUID `gorm:"type:uuid;primaryKey;default:gen_random_uuid()" json:"id"`
+	BusinessID  uuid.UUID `gorm:"type:uuid;index;not null" json:"business_id"`
+	SupplierID  uuid.UUID `gorm:"type:uuid;index;not null" json:"supplier_id"`
+	Status      string    `gorm:"not null;default:'draft'" json:"status"`
+	TotalAmount int64     `gorm:"not null" json:"total_amount"`
+	AmountPaid  int64     `gorm:"not null;default:0" json:"amount_paid"`
+	Note        string    `json:"note,omitempty"`
+	// ExpectedAt is the optional date the goods are expected to arrive.
+	ExpectedAt *time.Time         `json:"expected_at,omitempty"`
+	ReceivedAt *time.Time         `json:"received_at,omitempty"`
+	DueDate    *time.Time         `json:"due_date,omitempty"`
+	CreatedAt  time.Time          `json:"created_at"`
+	UpdatedAt  time.Time          `json:"updated_at"`
+	Items      []PurchaseLineItem `gorm:"foreignKey:PurchaseID" json:"items,omitempty"`
 }
 
 func (Purchase) TableName() string { return "purchases" }
@@ -31,7 +33,9 @@ type PurchaseLineItem struct {
 	ReceivedQty int64     `gorm:"not null;default:0" json:"received_qty"`
 	UnitCost    int64     `gorm:"not null" json:"unit_cost"`
 	Subtotal    int64     `gorm:"not null" json:"subtotal"`
-	CreatedAt   time.Time `json:"created_at"`
+	// Note holds optional per-line delivery instructions, e.g. "fragile".
+	Note      string    `json:"note,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
 }
 
 func (PurchaseLineItem) TableName() string { return "purchase_line_items" }

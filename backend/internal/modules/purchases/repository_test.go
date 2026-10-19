@@ -325,6 +325,97 @@ func TestRepositoryReceiveAllRemainingWhenItemsOmitted(t *testing.T) {
 	}
 }
 
+func TestRepositoryCreateAssignsSequentialPONumbers(t *testing.T) {
+	db, businessID := setupTestDB(t)
+	year := time.Now().Year()
+
+	first := seedPurchase(t, db, businessID, 1, 1)
+	second := seedPurchase(t, db, businessID, 1, 1)
+
+	wantFirst := formatPONumber(year, 1)
+	wantSecond := formatPONumber(year, 2)
+	if first.purchase.PONumber != wantFirst {
+		t.Fatalf("first po_number = %q, want %q", first.purchase.PONumber, wantFirst)
+	}
+	if second.purchase.PONumber != wantSecond {
+		t.Fatalf("second po_number = %q, want %q", second.purchase.PONumber, wantSecond)
+	}
+
+	found, err := NewRepository(db).FindByID(first.purchase.ID, businessID)
+	if err != nil {
+		t.Fatalf("find purchase: %v", err)
+	}
+	if found.PONumber != wantFirst {
+		t.Fatalf("persisted po_number = %q, want %q", found.PONumber, wantFirst)
+	}
+
+	// Sequences are per business: another business starts again at 0001.
+	otherBusiness := business.Business{ID: uuid.New(), Name: "Other Business"}
+	if err := db.Create(&otherBusiness).Error; err != nil {
+		t.Fatalf("create other business: %v", err)
+	}
+	other := seedPurchase(t, db, otherBusiness.ID, 1, 1)
+	if other.purchase.PONumber != wantFirst {
+		t.Fatalf("other business po_number = %q, want %q", other.purchase.PONumber, wantFirst)
+	}
+}
+
+func TestNextPONumberResetsEachYear(t *testing.T) {
+	db, businessID := setupTestDB(t)
+
+	first2026, err := nextPONumberTx(db, businessID, 2026)
+	if err != nil {
+		t.Fatalf("next 2026 #1: %v", err)
+	}
+	second2026, err := nextPONumberTx(db, businessID, 2026)
+	if err != nil {
+		t.Fatalf("next 2026 #2: %v", err)
+	}
+	first2027, err := nextPONumberTx(db, businessID, 2027)
+	if err != nil {
+		t.Fatalf("next 2027 #1: %v", err)
+	}
+
+	if first2026 != "PO-2026-0001" || second2026 != "PO-2026-0002" {
+		t.Fatalf("2026 numbers = %q, %q; want PO-2026-0001, PO-2026-0002", first2026, second2026)
+	}
+	if first2027 != "PO-2027-0001" {
+		t.Fatalf("2027 first number = %q, want PO-2027-0001", first2027)
+	}
+}
+
+func TestRepositoryCreateEnforcesUniquePONumberPerBusiness(t *testing.T) {
+	db, businessID := setupTestDB(t)
+	fixture := seedPurchase(t, db, businessID, 1, 1)
+
+	err := db.Exec(
+		"INSERT INTO purchases (business_id, supplier_id, po_number, total_amount) VALUES (?, ?, ?, ?)",
+		businessID, fixture.supplierID, fixture.purchase.PONumber, 100,
+	).Error
+	if err == nil {
+		t.Fatal("expected unique violation for a duplicate po_number, got nil")
+	}
+}
+
+func TestListPaginatedFiltersByPONumber(t *testing.T) {
+	db, businessID := setupTestDB(t)
+	first := seedPurchase(t, db, businessID, 1, 1)
+	seedPurchase(t, db, businessID, 1, 1)
+
+	items, total, err := NewRepository(db).ListPaginated(
+		businessID, 1, 20, nil, nil, nil, nil, &first.purchase.PONumber,
+	)
+	if err != nil {
+		t.Fatalf("list by po_number: %v", err)
+	}
+	if total != 1 || len(items) != 1 {
+		t.Fatalf("total = %d, len = %d, want 1", total, len(items))
+	}
+	if items[0].PONumber != first.purchase.PONumber {
+		t.Fatalf("po_number = %q, want %q", items[0].PONumber, first.purchase.PONumber)
+	}
+}
+
 func TestRepositoryCreatePersistsExpectedDateAndLineNotes(t *testing.T) {
 	db, businessID := setupTestDB(t)
 
@@ -365,4 +456,5 @@ func TestRepositoryCreatePersistsExpectedDateAndLineNotes(t *testing.T) {
 	if found.Items[0].Note != "fragile" {
 		t.Fatalf("item note = %q, want %q", found.Items[0].Note, "fragile")
 	}
+}	}
 }

@@ -25,7 +25,7 @@ func (r *testRepository) List(uuid.UUID, *uuid.UUID) ([]Purchase, error) { retur
 func (r *testRepository) Receive(uuid.UUID, uuid.UUID, []ReceiveItemInput, InventoryReceiver, SupplierCharger, ProductCostUpdater) (*Purchase, error) {
 	return nil, r.receiveErr
 }
-func (r *testRepository) ListPaginated(uuid.UUID, int, int, *string, *uuid.UUID, *string, *string) ([]Purchase, int64, error) {
+func (r *testRepository) ListPaginated(uuid.UUID, int, int, *string, *uuid.UUID, *string, *string, *string) ([]Purchase, int64, error) {
 	return nil, 0, nil
 }
 
@@ -81,6 +81,24 @@ func TestCreateStoresExpectedDateAndLineNotes(t *testing.T) {
 	if purchase.Items[0].Note != "deliver to warehouse B" {
 		t.Fatalf("item note = %q, want %q", purchase.Items[0].Note, "deliver to warehouse B")
 	}
+}
+
+func TestFormatPONumber(t *testing.T) {
+	tests := []struct {
+		year     int
+		sequence int64
+		want     string
+	}{
+		{2026, 1, "PO-2026-0001"},
+		{2026, 42, "PO-2026-0042"},
+		{2026, 9999, "PO-2026-9999"},
+		{2026, 10000, "PO-2026-10000"},
+	}
+	for _, tt := range tests {
+		if got := formatPONumber(tt.year, tt.sequence); got != tt.want {
+			t.Fatalf("formatPONumber(%d, %d) = %q, want %q", tt.year, tt.sequence, got, tt.want)
+		}
+	}	}
 }
 
 func TestReceivePlanAllRemaining(t *testing.T) {

@@ -1,6 +1,7 @@
 package purchases
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/google/uuid"
@@ -24,7 +25,7 @@ type Repository interface {
 	FindByID(id, businessID uuid.UUID) (*Purchase, error)
 	List(businessID uuid.UUID, supplierID *uuid.UUID) ([]Purchase, error)
 	Receive(id, businessID uuid.UUID, items []ReceiveItemInput, inventory InventoryReceiver, suppliers SupplierCharger, products ProductCostUpdater) (*Purchase, error)
-	ListPaginated(businessID uuid.UUID, page, limit int, status *string, supplierID *uuid.UUID, dateFrom *string, dateTo *string) ([]Purchase, int64, error)
+	ListPaginated(businessID uuid.UUID, page, limit int, status *string, supplierID *uuid.UUID, dateFrom *string, dateTo *string, poNumber *string) ([]Purchase, int64, error)
 }
 
 type repository struct{ db *gorm.DB }
@@ -32,7 +33,14 @@ type repository struct{ db *gorm.DB }
 func NewRepository(db *gorm.DB) Repository { return &repository{db: db} }
 
 func (r *repository) Create(purchase *Purchase, items []PurchaseLineItem) error {
+	// Reserve the PO number in the same transaction as the insert so a failed
+	// create does not consume a sequence.
 	return r.db.Transaction(func(tx *gorm.DB) error {
+		poNumber, err := nextPONumberTx(tx, purchase.BusinessID, time.Now().Year())
+		if err != nil {
+			return err
+		}
+		purchase.PONumber = poNumber
 		if err := tx.Create(purchase).Error; err != nil {
 			return err
 		}
@@ -45,6 +53,28 @@ func (r *repository) Create(purchase *Purchase, items []PurchaseLineItem) error 
 		purchase.Items = items
 		return nil
 	})
+}
+
+// formatPONumber renders PO-{year}-{sequence padded to at least four digits}.
+func formatPONumber(year int, sequence int64) string {
+	return fmt.Sprintf("PO-%d-%04d", year, sequence)
+}
+
+// nextPONumberTx atomically reserves the next sequence for a business and year.
+// The upsert locks the counter row, so concurrent creates cannot share a number;
+// rollbacks also roll back the reservation.
+func nextPONumberTx(tx *gorm.DB, businessID uuid.UUID, year int) (string, error) {
+	var sequence int64
+	row := tx.Raw(`
+		INSERT INTO purchase_number_counters (business_id, year, last_sequence)
+		VALUES (?, ?, 1)
+		ON CONFLICT (business_id, year)
+		DO UPDATE SET last_sequence = purchase_number_counters.last_sequence + 1
+		RETURNING last_sequence`, businessID, year).Row()
+	if err := row.Scan(&sequence); err != nil {
+		return "", err
+	}
+	return formatPONumber(year, sequence), nil
 }
 
 func (r *repository) FindByID(id, businessID uuid.UUID) (*Purchase, error) {
@@ -63,20 +93,25 @@ func (r *repository) List(businessID uuid.UUID, supplierID *uuid.UUID) ([]Purcha
 	return purchases, err
 }
 
-func (r *repository) ListPaginated(businessID uuid.UUID, page, limit int, status *string, supplierID *uuid.UUID, dateFrom *string, dateTo *string) ([]Purchase, int64, error) {
+func (r *repository) ListPaginated(businessID uuid.UUID, page, limit int, status *string, supplierID *uuid.UUID, dateFrom *string, dateTo *string, poNumber *string) ([]Purchase, int64, error) {
 	var purchases []Purchase
-	query := r.db.Preload("Items").Where("business_id = ?", businessID)
+	// Model is set explicitly so Count can infer the table; empty string filters
+	// are treated as absent because the HTTP layer always passes their pointers.
+	query := r.db.Model(&Purchase{}).Preload("Items").Where("business_id = ?", businessID)
 	if supplierID != nil {
 		query = query.Where("supplier_id = ?", *supplierID)
 	}
-	if status != nil {
+	if status != nil && *status != "" {
 		query = query.Where("status = ?", *status)
 	}
-	if dateFrom != nil {
-		query = query.Where("created_at >= ?", dateFrom)
+	if dateFrom != nil && *dateFrom != "" {
+		query = query.Where("created_at >= ?", *dateFrom)
 	}
-	if dateTo != nil {
-		query = query.Where("created_at <= ?", dateTo)
+	if dateTo != nil && *dateTo != "" {
+		query = query.Where("created_at <= ?", *dateTo)
+	}
+	if poNumber != nil && *poNumber != "" {
+		query = query.Where("po_number = ?", *poNumber)
 	}
 	var total int64
 	query.Count(&total)

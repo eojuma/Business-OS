@@ -98,7 +98,7 @@ func TestFormatPONumber(t *testing.T) {
 		if got := formatPONumber(tt.year, tt.sequence); got != tt.want {
 			t.Fatalf("formatPONumber(%d, %d) = %q, want %q", tt.year, tt.sequence, got, tt.want)
 		}
-	}	}
+	}
 }
 
 func TestReceivePlanAllRemaining(t *testing.T) {

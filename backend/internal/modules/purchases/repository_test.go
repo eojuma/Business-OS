@@ -359,7 +359,10 @@ func TestRepositoryCreatePersistsExpectedDateAndLineNotes(t *testing.T) {
 	if found.ExpectedAt == nil || !found.ExpectedAt.UTC().Equal(expectedAt) {
 		t.Fatalf("expected_at = %v, want %v", found.ExpectedAt, expectedAt)
 	}
-	if len(found.Items) != 1 || found.Items[0].Note != "fragile" {
+	if len(found.Items) != 1 {
+		t.Fatalf("items = %d, want 1", len(found.Items))
+	}
+	if found.Items[0].Note != "fragile" {
 		t.Fatalf("item note = %q, want %q", found.Items[0].Note, "fragile")
 	}
 }

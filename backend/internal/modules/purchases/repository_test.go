@@ -456,5 +456,4 @@ func TestRepositoryCreatePersistsExpectedDateAndLineNotes(t *testing.T) {
 	if found.Items[0].Note != "fragile" {
 		t.Fatalf("item note = %q, want %q", found.Items[0].Note, "fragile")
 	}
-}	}
 }

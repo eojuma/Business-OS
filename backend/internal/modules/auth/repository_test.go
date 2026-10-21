@@ -90,6 +90,42 @@ func TestRepositoryGoogleIdentity(t *testing.T) {
 	}
 }
 
+func TestBusinessOwnerCreatorCreatesWorkspaceAndOwner(t *testing.T) {
+	db, _ := setupAuthTestDB(t)
+	creator := &businessOwnerCreator{db: db}
+
+	googleID := "google-sub-workspace"
+	user := &User{Name: "Workspace Owner", Email: "workspace-owner@example.com", GoogleID: &googleID, Role: "owner", Active: true}
+	if err := creator.CreateWithOwner("Workspace Store", "0700", user); err != nil {
+		t.Fatalf("CreateWithOwner failed: %v", err)
+	}
+	if user.ID == uuid.Nil || user.BusinessID == uuid.Nil {
+		t.Fatal("expected the user and business ids to be populated")
+	}
+
+	var createdBusiness business.Business
+	if err := db.First(&createdBusiness, "id = ?", user.BusinessID).Error; err != nil {
+		t.Fatalf("find business: %v", err)
+	}
+	if createdBusiness.Name != "Workspace Store" || createdBusiness.Phone != "0700" {
+		t.Fatalf("business = %+v, want name=Workspace Store phone=0700", createdBusiness)
+	}
+	if createdBusiness.OwnerUserID == nil || *createdBusiness.OwnerUserID != user.ID {
+		t.Fatalf("owner_user_id = %v, want %v", createdBusiness.OwnerUserID, user.ID)
+	}
+
+	var storedUser User
+	if err := db.First(&storedUser, "id = ?", user.ID).Error; err != nil {
+		t.Fatalf("find user: %v", err)
+	}
+	if storedUser.PasswordHash != nil {
+		t.Fatal("expected no password hash for a google-only owner")
+	}
+	if storedUser.GoogleID == nil || *storedUser.GoogleID != googleID {
+		t.Fatalf("google_id = %v, want %q", storedUser.GoogleID, googleID)
+	}
+}
+
 func TestRepositorySetGoogleID(t *testing.T) {
 	db, businessID := setupAuthTestDB(t)
 	repo := NewRepository(db)

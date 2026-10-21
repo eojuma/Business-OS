@@ -1,8 +1,10 @@
 package purchases
 
 import (
+	"errors"
 	"time"
 
+	"github.com/businessos/backend/internal/modules/suppliers"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -33,6 +35,21 @@ func NewRepository(db *gorm.DB) Repository { return &repository{db: db} }
 
 func (r *repository) Create(purchase *Purchase, items []PurchaseLineItem) error {
 	return r.db.Transaction(func(tx *gorm.DB) error {
+		// Lock the supplier row for the duration of the insert so purchase
+		// creation serializes with supplier archiving. Soft deletion keeps the
+		// row, so the foreign key alone would admit purchases that reference
+		// an archived supplier.
+		var supplier suppliers.Supplier
+		err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("id = ? AND business_id = ? AND deleted_at IS NULL", purchase.SupplierID, purchase.BusinessID).
+			First(&supplier).Error
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return suppliers.ErrSupplierNotFound
+		}
+		if err != nil {
+			return err
+		}
+
 		if err := tx.Create(purchase).Error; err != nil {
 			return err
 		}

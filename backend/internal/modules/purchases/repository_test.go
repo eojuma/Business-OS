@@ -22,6 +22,8 @@ import (
 	"github.com/businessos/backend/internal/shared/migrations"
 )
 
+const testStatusDraft = "draft"
+
 func setupTestDB(t *testing.T) (*gorm.DB, uuid.UUID) {
 	t.Helper()
 
@@ -115,7 +117,7 @@ func seedPurchase(t *testing.T, db *gorm.DB, businessID uuid.UUID, quantityA, qu
 	purchase := &Purchase{
 		BusinessID:  businessID,
 		SupplierID:  supplier.ID,
-		Status:      "draft",
+		Status:      testStatusDraft,
 		TotalAmount: quantityA*100 + quantityB*200,
 	}
 	items := []PurchaseLineItem{
@@ -180,7 +182,7 @@ func TestRepositoryReceivePartialShipments(t *testing.T) {
 	if err != nil {
 		t.Fatalf("partial receive: %v", err)
 	}
-	if first.Status != "draft" {
+	if first.Status != testStatusDraft {
 		t.Fatalf("status = %q, want draft until fully received", first.Status)
 	}
 	if first.ReceivedAt != nil {
@@ -254,7 +256,7 @@ func TestRepositoryReceiveRejectsOverReceipt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("find purchase: %v", err)
 	}
-	if stored.Status != "draft" {
+	if stored.Status != testStatusDraft {
 		t.Fatalf("status = %q, want draft", stored.Status)
 	}
 	for _, item := range stored.Items {
@@ -341,7 +343,7 @@ func TestRepositoryCreateRejectsArchivedSupplier(t *testing.T) {
 		t.Fatalf("create product: %v", err)
 	}
 
-	purchase := &Purchase{BusinessID: businessID, SupplierID: supplier.ID, Status: "draft", TotalAmount: 100}
+	purchase := &Purchase{BusinessID: businessID, SupplierID: supplier.ID, Status: testStatusDraft, TotalAmount: 100}
 	items := []PurchaseLineItem{{ProductID: product.ID, Quantity: 1, UnitCost: 100, Subtotal: 100}}
 	err := NewRepository(db).Create(purchase, items)
 	if !errors.Is(err, suppliers.ErrSupplierNotFound) {
@@ -374,7 +376,7 @@ func TestRepositoryCreateRejectsSupplierFromAnotherBusiness(t *testing.T) {
 		t.Fatalf("create product: %v", err)
 	}
 
-	purchase := &Purchase{BusinessID: businessID, SupplierID: supplier.ID, Status: "draft", TotalAmount: 100}
+	purchase := &Purchase{BusinessID: businessID, SupplierID: supplier.ID, Status: testStatusDraft, TotalAmount: 100}
 	items := []PurchaseLineItem{{ProductID: product.ID, Quantity: 1, UnitCost: 100, Subtotal: 100}}
 	err := NewRepository(db).Create(purchase, items)
 	if !errors.Is(err, suppliers.ErrSupplierNotFound) {

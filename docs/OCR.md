@@ -1,4 +1,4 @@
-# Receipt OCR — approach decision
+# Receipt OCR — approach decision:
 
 Version 2 of the roadmap includes **Receipt OCR**: photograph a supplier or
 customer receipt, extract its line items and total, review them, and commit

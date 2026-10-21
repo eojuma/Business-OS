@@ -2,6 +2,7 @@ package purchases
 
 import (
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"
@@ -24,7 +25,7 @@ func (r *testRepository) List(uuid.UUID, *uuid.UUID) ([]Purchase, error) { retur
 func (r *testRepository) Receive(uuid.UUID, uuid.UUID, []ReceiveItemInput, InventoryReceiver, SupplierCharger, ProductCostUpdater) (*Purchase, error) {
 	return nil, r.receiveErr
 }
-func (r *testRepository) ListPaginated(uuid.UUID, int, int, *string, *uuid.UUID, *string, *string) ([]Purchase, int64, error) {
+func (r *testRepository) ListPaginated(uuid.UUID, int, int, *string, *uuid.UUID, *string, *string, *string) ([]Purchase, int64, error) {
 	return nil, 0, nil
 }
 
@@ -51,6 +52,52 @@ func TestCreateRejectsOverpayment(t *testing.T) {
 	_, err := service.Create(CreateInput{BusinessID: uuid.New(), SupplierID: uuid.New(), AmountPaid: 201, Items: []ItemInput{{ProductID: uuid.New(), Quantity: 1, UnitCost: 200}}})
 	if err != ErrInvalidAmountPaid {
 		t.Fatalf("error = %v, want %v", err, ErrInvalidAmountPaid)
+	}
+}
+
+func TestCreateStoresExpectedDateAndLineNotes(t *testing.T) {
+	repo := &testRepository{}
+	service := NewService(repo, nil, nil, nil)
+
+	expectedAt := time.Date(2026, time.November, 5, 0, 0, 0, 0, time.UTC)
+	productID := uuid.New()
+	purchase, err := service.Create(CreateInput{
+		BusinessID: uuid.New(),
+		SupplierID: uuid.New(),
+		ExpectedAt: &expectedAt,
+		Items: []ItemInput{
+			{ProductID: productID, Quantity: 2, UnitCost: 150, Note: "deliver to warehouse B"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+	if purchase.ExpectedAt == nil || !purchase.ExpectedAt.Equal(expectedAt) {
+		t.Fatalf("expected_at = %v, want %v", purchase.ExpectedAt, expectedAt)
+	}
+	if len(purchase.Items) != 1 {
+		t.Fatalf("items = %d, want 1", len(purchase.Items))
+	}
+	if purchase.Items[0].Note != "deliver to warehouse B" {
+		t.Fatalf("item note = %q, want %q", purchase.Items[0].Note, "deliver to warehouse B")
+	}
+}
+
+func TestFormatPONumber(t *testing.T) {
+	tests := []struct {
+		year     int
+		sequence int64
+		want     string
+	}{
+		{2026, 1, "PO-2026-0001"},
+		{2026, 42, "PO-2026-0042"},
+		{2026, 9999, "PO-2026-9999"},
+		{2026, 10000, "PO-2026-10000"},
+	}
+	for _, tt := range tests {
+		if got := formatPONumber(tt.year, tt.sequence); got != tt.want {
+			t.Fatalf("formatPONumber(%d, %d) = %q, want %q", tt.year, tt.sequence, got, tt.want)
+		}
 	}
 }
 

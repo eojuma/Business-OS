@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/businessos/backend/internal/modules/suppliers"
 	"github.com/businessos/backend/internal/shared/middleware"
@@ -21,11 +22,13 @@ type itemRequest struct {
 	ProductID string `json:"product_id" binding:"required,uuid"`
 	Quantity  int64  `json:"quantity" binding:"required"`
 	UnitCost  int64  `json:"unit_cost"`
+	Note      string `json:"note"`
 }
 type createRequest struct {
 	SupplierID string        `json:"supplier_id" binding:"required,uuid"`
 	AmountPaid int64         `json:"amount_paid"`
 	Note       string        `json:"note"`
+	ExpectedAt *time.Time    `json:"expected_at"`
 	Items      []itemRequest `json:"items" binding:"required,min=1,dive"`
 }
 type receiveItemRequest struct {
@@ -51,9 +54,9 @@ func (h *Handler) Create(c *gin.Context) {
 	items := make([]ItemInput, 0, len(req.Items))
 	for _, item := range req.Items {
 		productID, _ := uuid.Parse(item.ProductID)
-		items = append(items, ItemInput{ProductID: productID, Quantity: item.Quantity, UnitCost: item.UnitCost})
+		items = append(items, ItemInput{ProductID: productID, Quantity: item.Quantity, UnitCost: item.UnitCost, Note: item.Note})
 	}
-	purchase, err := h.service.Create(CreateInput{BusinessID: businessID, SupplierID: supplierID, AmountPaid: req.AmountPaid, Note: req.Note, Items: items})
+	purchase, err := h.service.Create(CreateInput{BusinessID: businessID, SupplierID: supplierID, AmountPaid: req.AmountPaid, Note: req.Note, ExpectedAt: req.ExpectedAt, Items: items})
 	if errors.Is(err, suppliers.ErrSupplierNotFound) {
 		response.Error(c, http.StatusNotFound, err.Error())
 		return
@@ -100,7 +103,12 @@ func (h *Handler) List(c *gin.Context) {
 	}
 	dateFrom := c.Query("date_from")
 	dateTo := c.Query("date_to")
-	items, total, err := h.service.ListPaginated(businessID, page, limit, &status, supplierIDPtr, &dateFrom, &dateTo)
+	poNumber := c.Query("po_number")
+	var poNumberPtr *string
+	if poNumber != "" {
+		poNumberPtr = &poNumber
+	}
+	items, total, err := h.service.ListPaginated(businessID, page, limit, &status, supplierIDPtr, &dateFrom, &dateTo, poNumberPtr)
 	if err != nil {
 		response.Error(c, http.StatusInternalServerError, "failed to list purchases")
 		return

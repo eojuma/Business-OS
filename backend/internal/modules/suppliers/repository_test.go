@@ -234,6 +234,39 @@ func TestRepositoryUpdate(t *testing.T) {
 	}
 }
 
+func TestRepositoryUpdateDoesNotRestoreArchivedSupplier(t *testing.T) {
+	db, businessID := setupTestDB(t)
+	repo := NewRepository(db)
+
+	supplier := &Supplier{BusinessID: businessID, Name: "Archived Supplier", Phone: "111"}
+	if err := db.Create(supplier).Error; err != nil {
+		t.Fatalf("create supplier: %v", err)
+	}
+	if err := repo.Delete(supplier.ID, businessID); err != nil {
+		t.Fatalf("archive supplier: %v", err)
+	}
+
+	supplier.Name = "Renamed While Archived"
+	supplier.Phone = "222"
+	if err := repo.Update(supplier); err != ErrSupplierNotFound {
+		t.Fatalf("Update error = %v, want %v", err, ErrSupplierNotFound)
+	}
+
+	var found Supplier
+	if err := db.Unscoped().First(&found, "id = ?", supplier.ID).Error; err != nil {
+		t.Fatalf("find archived supplier: %v", err)
+	}
+	if !found.DeletedAt.Valid {
+		t.Fatal("archived supplier was restored by Update")
+	}
+	if found.Name != "Archived Supplier" {
+		t.Fatalf("name = %q, want %q", found.Name, "Archived Supplier")
+	}
+	if found.Phone != "111" {
+		t.Fatalf("phone = %q, want %q", found.Phone, "111")
+	}
+}
+
 func TestRepositoryDelete(t *testing.T) {
 	db, businessID := setupTestDB(t)
 	repo := NewRepository(db)

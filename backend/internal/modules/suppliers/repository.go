@@ -43,7 +43,26 @@ func (r *repository) List(businessID uuid.UUID, includeArchived bool) ([]Supplie
 	return suppliers, err
 }
 
-func (r *repository) Update(s *Supplier) error { return r.db.Save(s).Error }
+func (r *repository) Update(s *Supplier) error {
+	// Update only the editable columns so an in-flight update cannot upsert over
+	// an archive. GORM adds `deleted_at IS NULL` for models with gorm.DeletedAt.
+	result := r.db.Model(&Supplier{}).
+		Where("id = ? AND business_id = ?", s.ID, s.BusinessID).
+		Updates(map[string]interface{}{
+			"name":          s.Name,
+			"phone":         s.Phone,
+			"email":         s.Email,
+			"address":       s.Address,
+			"payment_terms": s.PaymentTerms,
+		})
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
+		return ErrSupplierNotFound
+	}
+	return nil
+}
 
 func (r *repository) Delete(id, businessID uuid.UUID) error {
 	return r.db.Transaction(func(tx *gorm.DB) error {

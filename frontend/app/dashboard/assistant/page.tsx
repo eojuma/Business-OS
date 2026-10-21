@@ -1,26 +1,10 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { Bot, Send, Sparkles, User } from "lucide-react";
+import { Bot, Plus, Send, Sparkles, User, X } from "lucide-react";
 import { api } from "@/lib/api";
-
-interface Preview {
-  Kind: "sale" | "answer";
-  Understood: boolean;
-  ProductID: string;
-  ProductName: string;
-  Quantity: number;
-  UnitPrice: number; // cents
-  TotalAmount: number; // cents
-  Message: string;
-}
-
-interface ChatEntry {
-  role: "user" | "assistant";
-  text: string;
-  preview?: Preview; // only set on assistant entries that are awaiting confirmation
-  resolved?: boolean; // true once confirmed or dismissed — hides the buttons
-}
+import { useAssistantConversations } from "@/hooks/use-assistant-conversations";
+import type { Preview } from "@/lib/assistant-conversations";
 
 function formatMoney(cents: number): string {
   return (cents / 100).toFixed(2);
@@ -34,16 +18,44 @@ const suggestions = [
 ];
 
 export default function AssistantPage() {
-  const [entries, setEntries] = useState<ChatEntry[]>([]);
+  const {
+    conversations,
+    activeId,
+    activeConversation,
+    loaded,
+    appendEntry,
+    updateEntry,
+    newConversation,
+    selectConversation,
+    closeConversation,
+  } = useAssistantConversations();
+
+  const entries = activeConversation.entries;
   const [input, setInput] = useState("");
-  const [loading, setLoading] = useState(false);
+  const [pendingId, setPendingId] = useState<string | null>(null);
+  const loading = pendingId !== null;
+
   const inputRef = useRef<HTMLInputElement>(null);
-  const endRef = useRef<HTMLDivElement>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
   const focusInputRef = useRef(false);
+  const scrollPositions = useRef<Record<string, number>>({});
+  const prevActiveRef = useRef(activeId);
 
   useEffect(() => {
-    endRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
-  }, [entries, loading]);
+    if (!loaded) return;
+    const element = scrollRef.current;
+    if (!element) return;
+
+    const switched = prevActiveRef.current !== activeId;
+    prevActiveRef.current = activeId;
+
+    if (switched) {
+      const saved = scrollPositions.current[activeId];
+      element.scrollTop = saved ?? element.scrollHeight;
+      return;
+    }
+    element.scrollTo({ top: element.scrollHeight, behavior: "smooth" });
+  }, [activeId, loaded, entries.length, pendingId]);
 
   useEffect(() => {
     if (!loading && focusInputRef.current) {
@@ -52,47 +64,49 @@ export default function AssistantPage() {
     }
   }, [loading]);
 
+  function handleScroll(e: React.UIEvent<HTMLDivElement>) {
+    scrollPositions.current[activeId] = e.currentTarget.scrollTop;
+  }
+
   async function handleSend(e: React.FormEvent) {
     e.preventDefault();
-    if (!input.trim()) return;
-
     const text = input.trim();
-    setInput("");
-    focusInputRef.current = true;
+    if (!text || pendingId) return;
+
+    const conversationId = activeId;
     const history = entries
       .slice(-6)
       .map((entry) => ({ role: entry.role, text: entry.text }));
-    setEntries((prev) => [...prev, { role: "user", text }]);
-    setLoading(true);
+
+    setInput("");
+    focusInputRef.current = true;
+    appendEntry(conversationId, { role: "user", text });
+    setPendingId(conversationId);
 
     try {
       const res = await api.post("/assistant/interpret", { text, history });
       const preview: Preview = res.data.data;
 
-      setEntries((prev) => [
-        ...prev,
-        {
-          role: "assistant",
-          text: preview.Message,
-          preview: preview.Kind === "sale" && preview.Understood ? preview : undefined,
-        },
-      ]);
+      appendEntry(conversationId, {
+        role: "assistant",
+        text: preview.Message,
+        preview: preview.Kind === "sale" && preview.Understood ? preview : undefined,
+      });
     } catch (err: any) {
-      setEntries((prev) => [
-        ...prev,
-        {
-          role: "assistant",
-          text: err.response?.data?.error || "Something went wrong understanding that.",
-        },
-      ]);
+      appendEntry(conversationId, {
+        role: "assistant",
+        text: err.response?.data?.error || "Something went wrong understanding that.",
+      });
     } finally {
-      setLoading(false);
+      setPendingId((current) => (current === conversationId ? null : current));
     }
   }
 
   async function handleConfirm(index: number, preview: Preview) {
+    const conversationId = activeId;
     focusInputRef.current = true;
-    setLoading(true);
+    setPendingId(conversationId);
+
     try {
       const res = await api.post("/assistant/confirm", {
         product_id: preview.ProductID,
@@ -100,42 +114,36 @@ export default function AssistantPage() {
       });
       const sale = res.data.data;
 
-      setEntries((prev) => {
-        const next = [...prev];
-        next[index] = { ...next[index], resolved: true };
-        return [
-          ...next,
-          {
-            role: "assistant",
-            text: `Sale recorded — total KSh ${formatMoney(sale.TotalAmount)}.`,
-          },
-        ];
+      updateEntry(conversationId, index, { resolved: true });
+      appendEntry(conversationId, {
+        role: "assistant",
+        text: `Sale recorded — total KSh ${formatMoney(sale.TotalAmount)}.`,
       });
     } catch (err: any) {
-      setEntries((prev) => [
-        ...prev,
-        {
-          role: "assistant",
-          text: err.response?.data?.error || "Failed to record the sale.",
-        },
-      ]);
+      appendEntry(conversationId, {
+        role: "assistant",
+        text: err.response?.data?.error || "Failed to record the sale.",
+      });
     } finally {
-      setLoading(false);
+      setPendingId((current) => (current === conversationId ? null : current));
     }
   }
 
   function handleDismiss(index: number) {
-    setEntries((prev) => {
-      const next = [...prev];
-      next[index] = { ...next[index], resolved: true };
-      return next;
-    });
+    updateEntry(activeId, index, { resolved: true });
+  }
+
+  function handleNewConversation() {
+    newConversation();
+    inputRef.current?.focus();
   }
 
   function applySuggestion(prompt: string) {
     setInput(prompt);
     inputRef.current?.focus();
   }
+
+  const thinking = pendingId === activeId;
 
   return (
     <div className="mx-auto flex h-[calc(100dvh-6rem)] w-full max-w-3xl flex-col sm:h-[calc(100dvh-7rem)] md:h-[calc(100dvh-3rem)] lg:h-[calc(100dvh-4rem)]">
@@ -156,12 +164,71 @@ export default function AssistantPage() {
           </div>
         </header>
 
+        <div className="flex shrink-0 items-center gap-2 border-b border-[#eef1ed] px-3 py-2">
+          <div
+            className="chat-scroll flex min-w-0 flex-1 items-center gap-1 overflow-x-auto"
+            aria-label="Conversations"
+          >
+            {conversations.map((conversation) => {
+              const isActive = conversation.id === activeId;
+              return (
+                <div
+                  key={conversation.id}
+                  className={`group flex shrink-0 items-center gap-1 rounded-lg border px-2.5 py-1.5 text-xs transition ${
+                    isActive
+                      ? "border-[#16794c] bg-[#e7f4ec] text-[#12633e]"
+                      : "border-transparent text-[#647168] hover:bg-[#f2f5f1]"
+                  }`}
+                >
+                  <button
+                    type="button"
+                    onClick={() => selectConversation(conversation.id)}
+                    aria-current={isActive ? "page" : undefined}
+                    className="max-w-[150px] truncate font-semibold"
+                    title={conversation.title}
+                  >
+                    {conversation.title}
+                  </button>
+                  {conversations.length > 1 && (
+                    <button
+                      type="button"
+                      onClick={() => closeConversation(conversation.id)}
+                      aria-label={`Close ${conversation.title}`}
+                      className="rounded p-0.5 text-[#8a958d] transition hover:bg-[#d9e0d9] hover:text-[#17211b]"
+                    >
+                      <X size={12} />
+                    </button>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+          <button
+            type="button"
+            onClick={handleNewConversation}
+            className="btn-secondary shrink-0 px-2.5 py-1.5 text-xs"
+            aria-label="New chat"
+          >
+            <Plus size={14} />
+            <span className="hidden sm:inline">New chat</span>
+          </button>
+        </div>
+
         <div
+          ref={scrollRef}
+          onScroll={handleScroll}
           className="chat-scroll flex-1 space-y-3 overflow-y-auto overscroll-contain px-4 py-4 sm:px-6"
           role="log"
           aria-live="polite"
+          aria-busy={loading}
         >
-          {entries.length === 0 && (
+          {!loaded && (
+            <div className="flex h-full items-center justify-center text-sm text-[#8a958d]">
+              Loading chats…
+            </div>
+          )}
+
+          {loaded && entries.length === 0 && (
             <div className="flex h-full flex-col items-center justify-center px-2 text-center">
               <span className="rounded-2xl bg-[#e7f4ec] p-3 text-[#16794c]">
                 <Sparkles size={22} />
@@ -186,58 +253,63 @@ export default function AssistantPage() {
             </div>
           )}
 
-          {entries.map((entry, index) => (
-            <div
-              key={index}
-              className={`flex gap-2 ${entry.role === "user" ? "justify-end" : "justify-start"}`}
-            >
-              {entry.role === "assistant" && (
-                <span className="mt-0.5 hidden h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[#e7f4ec] text-[#16794c] sm:flex">
-                  <Bot size={14} />
-                </span>
-              )}
-
+          {loaded &&
+            entries.map((entry, index) => (
               <div
-                className={`max-w-[85%] rounded-2xl px-3.5 py-2.5 text-sm sm:max-w-[75%] ${
-                  entry.role === "user"
-                    ? "rounded-br-sm bg-[#16794c] text-white"
-                    : "rounded-bl-sm border border-[#e5e9e4] bg-[#f7f9f6] text-[#17211b]"
-                }`}
+                key={index}
+                className={`flex gap-2 ${entry.role === "user" ? "justify-end" : "justify-start"}`}
               >
-                <p className="whitespace-pre-wrap break-words">{entry.text}</p>
+                {entry.role === "assistant" && (
+                  <span className="mt-0.5 hidden h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[#e7f4ec] text-[#16794c] sm:flex">
+                    <Bot size={14} />
+                  </span>
+                )}
 
-                {entry.preview && !entry.resolved && (
-                  <div className="mt-3 flex flex-wrap gap-2">
-                    <button
-                      type="button"
-                      onClick={() => handleConfirm(index, entry.preview!)}
-                      disabled={loading}
-                      className="btn-primary px-3 py-1.5 text-xs"
-                    >
-                      Confirm
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => handleDismiss(index)}
-                      disabled={loading}
-                      className="btn-secondary px-3 py-1.5 text-xs"
-                    >
-                      Cancel
-                    </button>
-                  </div>
+                <div
+                  className={`max-w-[85%] rounded-2xl px-3.5 py-2.5 text-sm sm:max-w-[75%] ${
+                    entry.role === "user"
+                      ? "rounded-br-sm bg-[#16794c] text-white"
+                      : "rounded-bl-sm border border-[#e5e9e4] bg-[#f7f9f6] text-[#17211b]"
+                  }`}
+                >
+                  <p className="whitespace-pre-wrap break-words">{entry.text}</p>
+
+                  {entry.preview && !entry.resolved && (
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        onClick={() => handleConfirm(index, entry.preview!)}
+                        disabled={loading}
+                        className="btn-primary px-3 py-1.5 text-xs"
+                      >
+                        Confirm
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleDismiss(index)}
+                        disabled={loading}
+                        className="btn-secondary px-3 py-1.5 text-xs"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  )}
+                </div>
+
+                {entry.role === "user" && (
+                  <span className="mt-0.5 hidden h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[#eef1ed] text-[#52616a] sm:flex">
+                    <User size={14} />
+                  </span>
                 )}
               </div>
+            ))}
 
-              {entry.role === "user" && (
-                <span className="mt-0.5 hidden h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[#eef1ed] text-[#52616a] sm:flex">
-                  <User size={14} />
-                </span>
-              )}
-            </div>
-          ))}
-
-          {loading && (
-            <div className="flex items-center gap-2" role="status" aria-label="Assistant is thinking">
+          {thinking && (
+            <div
+              className="flex items-center gap-2"
+              role="status"
+              aria-label="Assistant is thinking"
+            >
               <span className="hidden h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[#e7f4ec] text-[#16794c] sm:flex">
                 <Bot size={14} />
               </span>
@@ -249,8 +321,6 @@ export default function AssistantPage() {
               </div>
             </div>
           )}
-
-          <div ref={endRef} />
         </div>
 
         <form

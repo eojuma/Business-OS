@@ -10,7 +10,7 @@ Milestones 1–3 are done and tested live end to end — not just compiling, act
 
 | Module | Backend | Frontend | Notes |
 |---|---|---|---|
-| Auth | ✅ | ✅ | Register, login, JWT issuing, business validation |
+| Auth | ✅ | ✅ | Register, login, Google sign-in, JWT issuing, business validation |
 | Business | ✅ | ✅ | Create (public), get/update (scoped) |
 | Products | ✅ | ✅ | Full CRUD, price stored as int64 cents |
 | Inventory | ✅ | ✅ | Stock levels + movement ledger, atomic via DB transaction |
@@ -150,6 +150,28 @@ cd frontend && npm install && npm run dev
 Health check: `curl http://localhost:8080/health` should return `{"status":"ok"}`
 
 **Note:** don't run the Docker frontend container and `npm run dev` at the same time — they'll fight over port 3000, and the CORS middleware only allows the origin set in `FRONTEND_URL` (`.env`), so a port mismatch will silently break login with a CORS error in the browser console.
+
+### Google sign-in (optional)
+
+Google sign-in uses the Google Identity Services **ID-token flow**: the browser gets an ID token and the API verifies it against Google's public keys. No client secret is used.
+
+1. In [Google Cloud Console → APIs & Services → Credentials](https://console.cloud.google.com/apis/credentials), create an **OAuth 2.0 Client ID** of type **Web application**.
+2. Add your frontend origins under **Authorized JavaScript origins** — for local development, `http://localhost:3000` (and `http://127.0.0.1:3000` if you use it). Add the production origin too.
+3. Set the same client ID in both places:
+   ```bash
+   # backend .env
+   GOOGLE_CLIENT_ID=<your-client-id>.apps.googleusercontent.com
+   # frontend .env.local (or .env)
+   NEXT_PUBLIC_GOOGLE_CLIENT_ID=<your-client-id>.apps.googleusercontent.com
+   ```
+4. Restart the API and frontend. A **Continue with Google** button appears on `/login` and `/signup`.
+
+Behaviour:
+
+- Existing Google users sign in directly; an existing email/password account is linked to the Google identity only when Google reports the email as verified.
+- A Google account with no workspace is rejected with a clear "create a workspace" message; `/signup` then asks for the store name and creates the workspace and owner in one transaction.
+- Google-only users have no local password (`password_hash` is `NULL`); email/password login tells them to continue with Google.
+- If `GOOGLE_CLIENT_ID` is empty, `/auth/google` returns `503` and the frontend shows "Google sign-in is not configured".
 
 ---
 

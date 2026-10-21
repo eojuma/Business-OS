@@ -147,11 +147,54 @@ func (h *Handler) Login(c *gin.Context) {
 		Password: req.Password,
 	})
 	if err != nil {
-		if errors.Is(err, ErrInvalidCredentials) {
+		if errors.Is(err, ErrInvalidCredentials) || errors.Is(err, ErrUseGoogleSignIn) {
 			response.Error(c, http.StatusUnauthorized, err.Error())
 			return
 		}
 		response.Error(c, http.StatusInternalServerError, "failed to login")
+		return
+	}
+
+	response.Success(c, http.StatusOK, gin.H{
+		"token": result.Token,
+		"user":  result.User,
+	})
+}
+
+type googleRequest struct {
+	Credential    string `json:"credential" binding:"required"`
+	BusinessName  string `json:"business_name"`
+	BusinessPhone string `json:"business_phone"`
+}
+
+func (h *Handler) Google(c *gin.Context) {
+	var req googleRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.Error(c, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	result, err := h.service.GoogleLogin(c.Request.Context(), GoogleLoginInput{
+		Credential:    req.Credential,
+		BusinessName:  req.BusinessName,
+		BusinessPhone: req.BusinessPhone,
+	})
+	switch {
+	case err == nil:
+	case errors.Is(err, ErrGoogleAuthUnavailable):
+		response.Error(c, http.StatusServiceUnavailable, err.Error())
+		return
+	case errors.Is(err, ErrInvalidGoogleToken), errors.Is(err, ErrUnverifiedGoogleEmail):
+		response.Error(c, http.StatusUnauthorized, err.Error())
+		return
+	case errors.Is(err, ErrWorkspaceRequired), errors.Is(err, ErrGoogleAccountConflict), errors.Is(err, ErrEmailTaken):
+		response.Error(c, http.StatusConflict, err.Error())
+		return
+	case errors.Is(err, ErrInactiveUser):
+		response.Error(c, http.StatusForbidden, err.Error())
+		return
+	default:
+		response.Error(c, http.StatusInternalServerError, "failed to sign in with google")
 		return
 	}
 

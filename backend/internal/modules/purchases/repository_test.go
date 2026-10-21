@@ -22,6 +22,8 @@ import (
 	"github.com/businessos/backend/internal/shared/migrations"
 )
 
+const testStatusDraft = "draft"
+
 func setupTestDB(t *testing.T) (*gorm.DB, uuid.UUID) {
 	t.Helper()
 
@@ -115,7 +117,7 @@ func seedPurchase(t *testing.T, db *gorm.DB, businessID uuid.UUID, quantityA, qu
 	purchase := &Purchase{
 		BusinessID:  businessID,
 		SupplierID:  supplier.ID,
-		Status:      "draft",
+		Status:      testStatusDraft,
 		TotalAmount: quantityA*100 + quantityB*200,
 	}
 	items := []PurchaseLineItem{
@@ -180,7 +182,7 @@ func TestRepositoryReceivePartialShipments(t *testing.T) {
 	if err != nil {
 		t.Fatalf("partial receive: %v", err)
 	}
-	if first.Status != "draft" {
+	if first.Status != testStatusDraft {
 		t.Fatalf("status = %q, want draft until fully received", first.Status)
 	}
 	if first.ReceivedAt != nil {
@@ -254,7 +256,7 @@ func TestRepositoryReceiveRejectsOverReceipt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("find purchase: %v", err)
 	}
-	if stored.Status != "draft" {
+	if stored.Status != testStatusDraft {
 		t.Fatalf("status = %q, want draft", stored.Status)
 	}
 	for _, item := range stored.Items {
@@ -432,7 +434,7 @@ func TestRepositoryCreatePersistsExpectedDateAndLineNotes(t *testing.T) {
 	purchase := &Purchase{
 		BusinessID:  businessID,
 		SupplierID:  supplier.ID,
-		Status:      "draft",
+		Status:      testStatusDraft,
 		TotalAmount: 200,
 		ExpectedAt:  &expectedAt,
 	}
@@ -455,5 +457,62 @@ func TestRepositoryCreatePersistsExpectedDateAndLineNotes(t *testing.T) {
 	}
 	if found.Items[0].Note != "fragile" {
 		t.Fatalf("item note = %q, want %q", found.Items[0].Note, "fragile")
+	}
+}
+
+func TestRepositoryCreateRejectsArchivedSupplier(t *testing.T) {
+	db, businessID := setupTestDB(t)
+
+	supplier := &suppliers.Supplier{BusinessID: businessID, Name: "Archived Supplier", PaymentTerms: suppliers.PaymentTermsNet30}
+	if err := db.Create(supplier).Error; err != nil {
+		t.Fatalf("create supplier: %v", err)
+	}
+	if err := suppliers.NewRepository(db).Delete(supplier.ID, businessID); err != nil {
+		t.Fatalf("archive supplier: %v", err)
+	}
+
+	product := &products.Product{BusinessID: businessID, Name: "Product A", Unit: "unit", Price: 300}
+	if err := db.Create(product).Error; err != nil {
+		t.Fatalf("create product: %v", err)
+	}
+
+	purchase := &Purchase{BusinessID: businessID, SupplierID: supplier.ID, Status: testStatusDraft, TotalAmount: 100}
+	items := []PurchaseLineItem{{ProductID: product.ID, Quantity: 1, UnitCost: 100, Subtotal: 100}}
+	err := NewRepository(db).Create(purchase, items)
+	if !errors.Is(err, suppliers.ErrSupplierNotFound) {
+		t.Fatalf("error = %v, want %v", err, suppliers.ErrSupplierNotFound)
+	}
+
+	var count int64
+	if err := db.Model(&Purchase{}).Where("supplier_id = ?", supplier.ID).Count(&count).Error; err != nil {
+		t.Fatalf("count purchases: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("purchases for archived supplier = %d, want 0", count)
+	}
+}
+
+func TestRepositoryCreateRejectsSupplierFromAnotherBusiness(t *testing.T) {
+	db, businessID := setupTestDB(t)
+
+	otherBusiness := business.Business{ID: uuid.New(), Name: "Other Business"}
+	if err := db.Create(&otherBusiness).Error; err != nil {
+		t.Fatalf("create other business: %v", err)
+	}
+	supplier := &suppliers.Supplier{BusinessID: otherBusiness.ID, Name: "Foreign Supplier", PaymentTerms: suppliers.PaymentTermsNet30}
+	if err := db.Create(supplier).Error; err != nil {
+		t.Fatalf("create supplier: %v", err)
+	}
+
+	product := &products.Product{BusinessID: businessID, Name: "Product A", Unit: "unit", Price: 300}
+	if err := db.Create(product).Error; err != nil {
+		t.Fatalf("create product: %v", err)
+	}
+
+	purchase := &Purchase{BusinessID: businessID, SupplierID: supplier.ID, Status: testStatusDraft, TotalAmount: 100}
+	items := []PurchaseLineItem{{ProductID: product.ID, Quantity: 1, UnitCost: 100, Subtotal: 100}}
+	err := NewRepository(db).Create(purchase, items)
+	if !errors.Is(err, suppliers.ErrSupplierNotFound) {
+		t.Fatalf("error = %v, want %v", err, suppliers.ErrSupplierNotFound)
 	}
 }

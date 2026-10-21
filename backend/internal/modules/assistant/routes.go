@@ -176,7 +176,7 @@ type payablesAdapter struct {
 }
 
 func (a *payablesAdapter) SuppliersOwed(businessID uuid.UUID) ([]SupplierDebtInfo, error) {
-	list, err := a.repo.List(businessID)
+	list, err := a.repo.List(businessID, false)
 	if err != nil {
 		return nil, err
 	}

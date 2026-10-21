@@ -30,18 +30,22 @@ func (r *testRepository) Create(s *Supplier) error {
 
 func (r *testRepository) FindByID(id, businessID uuid.UUID) (*Supplier, error) {
 	s, ok := r.suppliers[id]
-	if !ok || s.BusinessID != businessID {
+	if !ok || s.BusinessID != businessID || s.DeletedAt.Valid {
 		return nil, gorm.ErrRecordNotFound
 	}
 	return s, nil
 }
 
-func (r *testRepository) List(businessID uuid.UUID) ([]Supplier, error) {
+func (r *testRepository) List(businessID uuid.UUID, includeArchived bool) ([]Supplier, error) {
 	var result []Supplier
 	for _, s := range r.suppliers {
-		if s.BusinessID == businessID {
-			result = append(result, *s)
+		if s.BusinessID != businessID {
+			continue
 		}
+		if s.DeletedAt.Valid && !includeArchived {
+			continue
+		}
+		result = append(result, *s)
 	}
 	return result, nil
 }
@@ -56,10 +60,19 @@ func (r *testRepository) Update(s *Supplier) error {
 
 func (r *testRepository) Delete(id, businessID uuid.UUID) error {
 	s, ok := r.suppliers[id]
-	if !ok || s.BusinessID != businessID {
+	if !ok || s.BusinessID != businessID || s.DeletedAt.Valid {
 		return gorm.ErrRecordNotFound
 	}
-	delete(r.suppliers, id)
+	s.DeletedAt = gorm.DeletedAt{Time: time.Now(), Valid: true}
+	return nil
+}
+
+func (r *testRepository) Restore(id, businessID uuid.UUID) error {
+	s, ok := r.suppliers[id]
+	if !ok || s.BusinessID != businessID {
+		return ErrSupplierNotFound
+	}
+	s.DeletedAt = gorm.DeletedAt{}
 	return nil
 }
 
@@ -182,14 +195,23 @@ func TestListSuppliers(t *testing.T) {
 	businessID := uuid.New()
 	repo.suppliers[uuid.New()] = &Supplier{BusinessID: businessID, Name: "A"}
 	repo.suppliers[uuid.New()] = &Supplier{BusinessID: businessID, Name: "B"}
+	repo.suppliers[uuid.New()] = &Supplier{BusinessID: businessID, Name: "Archived", DeletedAt: gorm.DeletedAt{Time: time.Now(), Valid: true}}
 	repo.suppliers[uuid.New()] = &Supplier{BusinessID: uuid.New(), Name: "C"}
 
-	list, err := svc.List(businessID)
+	list, err := svc.List(businessID, false)
 	if err != nil {
 		t.Fatalf("List failed: %v", err)
 	}
 	if len(list) != 2 {
 		t.Fatalf("len = %d, want 2", len(list))
+	}
+
+	all, err := svc.List(businessID, true)
+	if err != nil {
+		t.Fatalf("List with archived failed: %v", err)
+	}
+	if len(all) != 3 {
+		t.Fatalf("len = %d, want 3 including archived", len(all))
 	}
 }
 
@@ -240,8 +262,54 @@ func TestDeleteSupplier(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Delete failed: %v", err)
 	}
-	if _, ok := repo.suppliers[supplier.ID]; ok {
-		t.Fatal("supplier should be deleted")
+	if !supplier.DeletedAt.Valid {
+		t.Fatal("supplier should be archived, not removed")
+	}
+	if _, err := svc.Get(supplier.ID, businessID); err != ErrSupplierNotFound {
+		t.Fatalf("expected ErrSupplierNotFound after archive, got %v", err)
+	}
+}
+
+func TestDeleteSupplierNotFound(t *testing.T) {
+	repo := newTestRepository()
+	svc := NewService(repo)
+
+	if err := svc.Delete(uuid.New(), uuid.New()); err != ErrSupplierNotFound {
+		t.Fatalf("expected ErrSupplierNotFound, got %v", err)
+	}
+}
+
+func TestRestoreSupplier(t *testing.T) {
+	repo := newTestRepository()
+	svc := NewService(repo)
+
+	businessID := uuid.New()
+	supplier := &Supplier{
+		ID:         uuid.New(),
+		BusinessID: businessID,
+		Name:       "Archived",
+		DeletedAt:  gorm.DeletedAt{Time: time.Now(), Valid: true},
+	}
+	repo.suppliers[supplier.ID] = supplier
+
+	restored, err := svc.Restore(supplier.ID, businessID)
+	if err != nil {
+		t.Fatalf("Restore failed: %v", err)
+	}
+	if restored.DeletedAt.Valid {
+		t.Fatal("supplier should no longer be archived")
+	}
+	if _, err := svc.Get(supplier.ID, businessID); err != nil {
+		t.Fatalf("restored supplier not retrievable: %v", err)
+	}
+}
+
+func TestRestoreSupplierNotFound(t *testing.T) {
+	repo := newTestRepository()
+	svc := NewService(repo)
+
+	if _, err := svc.Restore(uuid.New(), uuid.New()); err != ErrSupplierNotFound {
+		t.Fatalf("expected ErrSupplierNotFound, got %v", err)
 	}
 }
 

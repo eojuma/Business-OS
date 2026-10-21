@@ -11,9 +11,10 @@ import (
 type Repository interface {
 	Create(*Supplier) error
 	FindByID(id, businessID uuid.UUID) (*Supplier, error)
-	List(businessID uuid.UUID) ([]Supplier, error)
+	List(businessID uuid.UUID, includeArchived bool) ([]Supplier, error)
 	Update(*Supplier) error
 	Delete(id, businessID uuid.UUID) error
+	Restore(id, businessID uuid.UUID) error
 	RecordPayment(id, businessID uuid.UUID, payment *Payment) (*Supplier, error)
 	ListPayments(id, businessID uuid.UUID) ([]Payment, error)
 	AddOutstandingTx(tx *gorm.DB, id, businessID uuid.UUID, amount int64) error
@@ -32,16 +33,70 @@ func (r *repository) FindByID(id, businessID uuid.UUID) (*Supplier, error) {
 	return &supplier, err
 }
 
-func (r *repository) List(businessID uuid.UUID) ([]Supplier, error) {
+func (r *repository) List(businessID uuid.UUID, includeArchived bool) ([]Supplier, error) {
 	var suppliers []Supplier
-	err := r.db.Where("business_id = ?", businessID).Order("name asc").Find(&suppliers).Error
+	query := r.db
+	if includeArchived {
+		query = query.Unscoped()
+	}
+	err := query.Where("business_id = ?", businessID).Order("name asc").Find(&suppliers).Error
 	return suppliers, err
 }
 
-func (r *repository) Update(s *Supplier) error { return r.db.Save(s).Error }
+func (r *repository) Update(s *Supplier) error {
+	// Update only the editable columns so an in-flight update cannot upsert over
+	// an archive. GORM adds `deleted_at IS NULL` for models with gorm.DeletedAt.
+	result := r.db.Model(&Supplier{}).
+		Where("id = ? AND business_id = ?", s.ID, s.BusinessID).
+		Updates(map[string]interface{}{
+			"name":          s.Name,
+			"phone":         s.Phone,
+			"email":         s.Email,
+			"address":       s.Address,
+			"payment_terms": s.PaymentTerms,
+		})
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
+		return ErrSupplierNotFound
+	}
+	return nil
+}
 
 func (r *repository) Delete(id, businessID uuid.UUID) error {
-	return r.db.Where("id = ? AND business_id = ?", id, businessID).Delete(&Supplier{}).Error
+	return r.db.Transaction(func(tx *gorm.DB) error {
+		var supplier Supplier
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("id = ? AND business_id = ?", id, businessID).First(&supplier).Error; err != nil {
+			return err
+		}
+
+		var purchaseCount int64
+		if err := tx.Table("purchases").
+			Where("supplier_id = ? AND business_id = ?", id, businessID).
+			Count(&purchaseCount).Error; err != nil {
+			return err
+		}
+		if purchaseCount > 0 {
+			return ErrSupplierHasPurchases
+		}
+
+		return tx.Where("id = ? AND business_id = ?", id, businessID).Delete(&Supplier{}).Error
+	})
+}
+
+func (r *repository) Restore(id, businessID uuid.UUID) error {
+	result := r.db.Unscoped().Model(&Supplier{}).
+		Where("id = ? AND business_id = ?", id, businessID).
+		Update("deleted_at", nil)
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
+		return ErrSupplierNotFound
+	}
+	return nil
 }
 
 func (r *repository) RecordPayment(id, businessID uuid.UUID, payment *Payment) (*Supplier, error) {

@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strconv"
 
+	"github.com/businessos/backend/internal/modules/suppliers"
 	"github.com/businessos/backend/internal/shared/middleware"
 	"github.com/businessos/backend/internal/shared/response"
 	"github.com/gin-gonic/gin"
@@ -53,6 +54,10 @@ func (h *Handler) Create(c *gin.Context) {
 		items = append(items, ItemInput{ProductID: productID, Quantity: item.Quantity, UnitCost: item.UnitCost})
 	}
 	purchase, err := h.service.Create(CreateInput{BusinessID: businessID, SupplierID: supplierID, AmountPaid: req.AmountPaid, Note: req.Note, Items: items})
+	if errors.Is(err, suppliers.ErrSupplierNotFound) {
+		response.Error(c, http.StatusNotFound, err.Error())
+		return
+	}
 	if errors.Is(err, ErrEmptyPurchase) || errors.Is(err, ErrInvalidPurchaseItem) || errors.Is(err, ErrInvalidAmountPaid) {
 		response.Error(c, http.StatusBadRequest, err.Error())
 		return

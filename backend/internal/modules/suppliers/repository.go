@@ -1,6 +1,7 @@
 package suppliers
 
 import (
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -12,6 +13,7 @@ type Repository interface {
 	Create(*Supplier) error
 	FindByID(id, businessID uuid.UUID) (*Supplier, error)
 	List(businessID uuid.UUID, includeArchived bool) ([]Supplier, error)
+	ListPaginated(businessID uuid.UUID, page, limit int, search string, includeArchived bool) ([]Supplier, int64, error)
 	Update(*Supplier) error
 	Delete(id, businessID uuid.UUID) error
 	Restore(id, businessID uuid.UUID) error
@@ -41,6 +43,33 @@ func (r *repository) List(businessID uuid.UUID, includeArchived bool) ([]Supplie
 	}
 	err := query.Where("business_id = ?", businessID).Order("name asc").Find(&suppliers).Error
 	return suppliers, err
+}
+
+func (r *repository) ListPaginated(businessID uuid.UUID, page, limit int, search string, includeArchived bool) ([]Supplier, int64, error) {
+	var suppliers []Supplier
+	query := r.db
+	if includeArchived {
+		query = query.Unscoped()
+	}
+	query = query.Model(&Supplier{}).Where("business_id = ?", businessID)
+	if search != "" {
+		term := "%" + strings.ToLower(search) + "%"
+		query = query.Where(
+			"LOWER(name) LIKE ? OR LOWER(phone) LIKE ? OR LOWER(email) LIKE ?",
+			term, term, term,
+		)
+	}
+
+	var total int64
+	if err := query.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+
+	query = query.Offset((page - 1) * limit).Limit(limit).Order("name asc")
+	if err := query.Find(&suppliers).Error; err != nil {
+		return nil, 0, err
+	}
+	return suppliers, total, nil
 }
 
 func (r *repository) Update(s *Supplier) error {

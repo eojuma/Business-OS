@@ -210,6 +210,80 @@ func TestRepositoryList(t *testing.T) {
 	}
 }
 
+func TestRepositoryListPaginated(t *testing.T) {
+	db, businessID := setupTestDB(t)
+	repo := NewRepository(db)
+
+	seed := []Supplier{
+		{BusinessID: businessID, Name: "Alpha Hardware", Phone: "0700111222", Email: "alpha@example.com"},
+		{BusinessID: businessID, Name: "Bravo Cement", Phone: "0700333444", Email: "bravo@example.com"},
+		{BusinessID: businessID, Name: "Charlie Steel", Phone: "0700555666", Email: "charlie@example.com"},
+	}
+	for i := range seed {
+		if err := db.Create(&seed[i]).Error; err != nil {
+			t.Fatalf("create supplier %q: %v", seed[i].Name, err)
+		}
+	}
+	if err := db.Create(&Supplier{
+		BusinessID: businessID,
+		Name:       "Archived Supplier",
+		DeletedAt:  gorm.DeletedAt{Time: time.Now(), Valid: true},
+	}).Error; err != nil {
+		t.Fatalf("create archived supplier: %v", err)
+	}
+
+	items, total, err := repo.ListPaginated(businessID, 1, 2, "", false)
+	if err != nil {
+		t.Fatalf("ListPaginated failed: %v", err)
+	}
+	if total != 3 || len(items) != 2 {
+		t.Fatalf("total = %d, len = %d, want total 3 and len 2", total, len(items))
+	}
+	if items[0].Name != "Alpha Hardware" || items[1].Name != "Bravo Cement" {
+		t.Fatalf("page 1 = %q, %q", items[0].Name, items[1].Name)
+	}
+
+	items, total, err = repo.ListPaginated(businessID, 2, 2, "", false)
+	if err != nil {
+		t.Fatalf("ListPaginated page 2 failed: %v", err)
+	}
+	if total != 3 || len(items) != 1 || items[0].Name != "Charlie Steel" {
+		t.Fatalf("page 2 total = %d, len = %d", total, len(items))
+	}
+
+	items, total, err = repo.ListPaginated(businessID, 1, 10, "bravo", false)
+	if err != nil {
+		t.Fatalf("search by name failed: %v", err)
+	}
+	if total != 1 || len(items) != 1 || items[0].Name != "Bravo Cement" {
+		t.Fatalf("name search total = %d, len = %d", total, len(items))
+	}
+
+	items, total, err = repo.ListPaginated(businessID, 1, 10, "0700555", false)
+	if err != nil {
+		t.Fatalf("search by phone failed: %v", err)
+	}
+	if total != 1 || len(items) != 1 || items[0].Name != "Charlie Steel" {
+		t.Fatalf("phone search total = %d, len = %d", total, len(items))
+	}
+
+	items, total, err = repo.ListPaginated(businessID, 1, 10, "ALPHA@EXAMPLE.COM", false)
+	if err != nil {
+		t.Fatalf("search by email failed: %v", err)
+	}
+	if total != 1 || len(items) != 1 || items[0].Name != "Alpha Hardware" {
+		t.Fatalf("email search total = %d, len = %d", total, len(items))
+	}
+
+	_, total, err = repo.ListPaginated(businessID, 1, 10, "", true)
+	if err != nil {
+		t.Fatalf("ListPaginated including archived failed: %v", err)
+	}
+	if total != 4 {
+		t.Fatalf("total including archived = %d, want 4", total)
+	}
+}
+
 func TestRepositoryUpdate(t *testing.T) {
 	db, businessID := setupTestDB(t)
 	repo := NewRepository(db)

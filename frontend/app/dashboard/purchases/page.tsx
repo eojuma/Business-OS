@@ -1,4 +1,701 @@
 "use client";
-import{useEffect,useState}from"react";import{api}from"@/lib/api";import{PageHeader,formatMoney}from"@/components/app-shell";import{ClipboardList,Plus,PackageCheck}from"lucide-react";
-type Product={id:string;name:string;unit:string};type Supplier={id:string;name:string};type Item={product_id:string;quantity:string;unit_cost:string};type Purchase={id:string;supplier_id:string;status:string;total_amount:number;amount_paid:number;created_at:string;items:Item[]};
-export default function PurchasesPage(){const[products,setProducts]=useState<Product[]>([]),[suppliers,setSuppliers]=useState<Supplier[]>([]),[items,setItems]=useState<Purchase[]>([]),[supplier,setSupplier]=useState(""),[rows,setRows]=useState<Item[]>([{product_id:"",quantity:"",unit_cost:""}]),[paid,setPaid]=useState(""),[show,setShow]=useState(false),[error,setError]=useState("");async function load(){try{const[a,b,c]=await Promise.all([api.get("/products"),api.get("/suppliers"),api.get("/purchases")]);setProducts(a.data.data||[]);setSuppliers(b.data.data||[]);setItems(c.data.data||[])}catch(e:any){setError(e.response?.data?.error||"Failed to load purchases")}}useEffect(()=>{load()},[]);function update(i:number,key:keyof Item,value:string){setRows(r=>r.map((x,j)=>j===i?{...x,[key]:value}:x))}async function create(e:React.FormEvent){e.preventDefault();try{await api.post("/purchases",{supplier_id:supplier,amount_paid:Math.round(Number(paid||0)*100),items:rows.map(r=>({product_id:r.product_id,quantity:Number(r.quantity),unit_cost:Math.round(Number(r.unit_cost)*100)}))});setRows([{product_id:"",quantity:"",unit_cost:""}]);setPaid("");setSupplier("");setShow(false);await load()}catch(e:any){setError(e.response?.data?.error||"Failed to create purchase")}}async function receive(id:string){try{await api.post(`/purchases/${id}/receive`);await load()}catch(e:any){setError(e.response?.data?.error||"Failed to receive purchase")}}const total=rows.reduce((s,r)=>s+Number(r.quantity||0)*Number(r.unit_cost||0),0)*100;return <><PageHeader eyebrow="Procurement" title="Purchases" description="Create purchase orders and receive goods into stock." action={<button className="btn-primary" onClick={()=>setShow(!show)}><Plus size={16}/> New purchase</button>}/>{error&&<p className="mb-4 rounded-lg bg-red-50 p-3 text-sm text-red-700">{error}</p>}{show&&<form onSubmit={create} className="panel mb-6 space-y-4 p-5"><div className="grid gap-3 sm:grid-cols-2"><select className="field" value={supplier} onChange={e=>setSupplier(e.target.value)} required><option value="">Select supplier</option>{suppliers.map(s=><option key={s.id} value={s.id}>{s.name}</option>)}</select><input className="field" type="number" min="0" step="0.01" placeholder="Amount paid (KSh)" value={paid} onChange={e=>setPaid(e.target.value)}/></div><div className="space-y-2">{rows.map((r,i)=><div key={i} className="grid gap-2 sm:grid-cols-[1fr_120px_150px]"><select className="field" value={r.product_id} onChange={e=>update(i,"product_id",e.target.value)} required><option value="">Select product</option>{products.map(p=><option key={p.id} value={p.id}>{p.name} / {p.unit}</option>)}</select><input className="field" type="number" min="1" placeholder="Qty" value={r.quantity} onChange={e=>update(i,"quantity",e.target.value)} required/><input className="field" type="number" min="0" step="0.01" placeholder="Cost / unit" value={r.unit_cost} onChange={e=>update(i,"unit_cost",e.target.value)} required/></div>)}</div><button type="button" className="btn-secondary" onClick={()=>setRows([...rows,{product_id:"",quantity:"",unit_cost:""}])}><Plus size={15}/> Add line</button><div className="flex items-center justify-between border-t border-[#eef1ed] pt-4"><p className="text-sm text-[#718078]">Purchase total <strong className="ml-2 text-[#17211b]">{formatMoney(total)}</strong></p><button className="btn-primary">Save purchase</button></div></form>}<div className="panel overflow-hidden">{items.length===0?<div className="p-10 text-center"><ClipboardList className="mx-auto text-[#9aa59d]"/><p className="mt-3 font-semibold">No purchases yet</p><p className="mt-1 text-sm text-[#718078]">Record your first supplier order above.</p></div>:<div className="overflow-x-auto"><table className="w-full text-left text-sm"><thead className="bg-[#f8faf7] text-xs uppercase text-[#718078]"><tr><th className="px-5 py-3">Date</th><th className="px-5 py-3">Supplier</th><th className="px-5 py-3">Items</th><th className="px-5 py-3 text-right">Total</th><th className="px-5 py-3 text-right">Status</th></tr></thead><tbody>{items.map(p=><tr key={p.id} className="border-t border-[#eef1ed]"><td className="px-5 py-4 text-[#718078]">{new Date(p.created_at).toLocaleDateString("en-KE")}</td><td className="px-5 py-4 font-semibold">{suppliers.find(s=>s.id===p.supplier_id)?.name||"Supplier"}</td><td className="px-5 py-4 text-[#718078]">{p.items?.length||0} line{p.items?.length===1?"":"s"}</td><td className="px-5 py-4 text-right font-semibold">{formatMoney(p.total_amount)}</td><td className="px-5 py-4 text-right">{p.status==="received"?<span className="text-xs font-bold uppercase text-[#16794c]">Received</span>:<button className="btn-secondary py-1.5" onClick={()=>receive(p.id)}><PackageCheck size={15}/> Receive goods</button>}</td></tr>)}</tbody></table></div>}</div></>}
+
+import { useCallback, useEffect, useState } from "react";
+import {
+  ClipboardList,
+  Loader2,
+  PackageCheck,
+  Pencil,
+  Plus,
+  Trash2,
+  X,
+} from "lucide-react";
+import { api } from "@/lib/api";
+import { PageHeader, formatMoney } from "@/components/app-shell";
+
+type Product = { id: string; name: string; unit: string };
+type Supplier = { id: string; name: string };
+type LineItem = {
+  id?: string;
+  product_id: string;
+  quantity: number;
+  unit_cost: number;
+  subtotal: number;
+  received_qty: number;
+  note?: string;
+};
+type Purchase = {
+  id: string;
+  po_number: string;
+  supplier_id: string;
+  status: string;
+  total_amount: number;
+  amount_paid: number;
+  note?: string;
+  expected_at?: string | null;
+  due_date?: string | null;
+  created_at: string;
+  received_at?: string | null;
+  items: LineItem[];
+};
+type Meta = { page: number; limit: number; total: number; totalPages: number };
+type FormRow = {
+  product_id: string;
+  quantity: string;
+  unit_cost: string;
+  note: string;
+};
+
+const emptyRow: FormRow = { product_id: "", quantity: "", unit_cost: "", note: "" };
+
+function toCents(value: string): number {
+  return Math.round(Number(value || 0) * 100);
+}
+function fromCents(value: number): string {
+  const amount = Number(value || 0) / 100;
+  return Number.isInteger(amount) ? String(amount) : amount.toFixed(2);
+}
+function toDateInput(value?: string | null): string {
+  return value ? value.slice(0, 10) : "";
+}
+function toISO(value: string): string | null {
+  return value ? new Date(`${value}T00:00:00`).toISOString() : null;
+}
+function remaining(item: LineItem): number {
+  return Math.max(0, item.quantity - (item.received_qty || 0));
+}
+function errMessage(error: unknown, fallback: string): string {
+  const e = error as { response?: { data?: { error?: string } } };
+  return e.response?.data?.error || fallback;
+}
+
+export default function PurchasesPage() {
+  const [products, setProducts] = useState<Product[]>([]);
+  const [suppliers, setSuppliers] = useState<Supplier[]>([]);
+  const [purchases, setPurchases] = useState<Purchase[]>([]);
+  const [meta, setMeta] = useState<Meta | null>(null);
+
+  // Filters & pagination
+  const [statusFilter, setStatusFilter] = useState("");
+  const [supplierFilter, setSupplierFilter] = useState("");
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
+  const [page, setPage] = useState(1);
+  const [limit, setLimit] = useState(20);
+
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+
+  // Create / edit form state
+  const [formOpen, setFormOpen] = useState(false);
+  const [editing, setEditing] = useState<Purchase | null>(null);
+  const [formSupplier, setFormSupplier] = useState("");
+  const [formPaid, setFormPaid] = useState("");
+  const [formNote, setFormNote] = useState("");
+  const [formExpected, setFormExpected] = useState("");
+  const [formRows, setFormRows] = useState<FormRow[]>([{ ...emptyRow }]);
+  const [saving, setSaving] = useState(false);
+
+  // Partial receive state
+  const [receiving, setReceiving] = useState<Purchase | null>(null);
+  const [receiveValues, setReceiveValues] = useState<Record<number, string>>({});
+  const [receivingBusy, setReceivingBusy] = useState(false);
+
+  const loadPurchases = useCallback(async () => {
+    setLoading(true);
+    setError("");
+    try {
+      const params: Record<string, string | number> = { page, limit };
+      if (statusFilter) params.status = statusFilter;
+      if (supplierFilter) params.supplier_id = supplierFilter;
+      if (dateFrom) params.date_from = `${dateFrom}T00:00:00Z`;
+      if (dateTo) params.date_to = `${dateTo}T23:59:59Z`;
+      const res = await api.get("/purchases", { params });
+      const payload = res.data?.data;
+      const rows: Purchase[] = Array.isArray(payload) ? payload : payload?.data || [];
+      setPurchases(rows);
+      setMeta(Array.isArray(payload) ? null : payload?.meta || null);
+    } catch (e) {
+      setError(errMessage(e, "Failed to load purchases"));
+    } finally {
+      setLoading(false);
+    }
+  }, [page, limit, statusFilter, supplierFilter, dateFrom, dateTo]);
+
+  useEffect(() => {
+    void loadPurchases();
+  }, [loadPurchases]);
+
+  useEffect(() => {
+    let active = true;
+    (async () => {
+      try {
+        const [p, s] = await Promise.all([api.get("/products"), api.get("/suppliers")]);
+        if (!active) return;
+        setProducts(p.data.data || []);
+        setSuppliers(s.data.data || []);
+      } catch (e) {
+        if (active) setError(errMessage(e, "Failed to load products and suppliers"));
+      }
+    })();
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const formTotalCents = formRows.reduce(
+    (sum, row) => sum + Number(row.quantity || 0) * toCents(row.unit_cost),
+    0,
+  );
+
+  function resetFilters() {
+    setStatusFilter("");
+    setSupplierFilter("");
+    setDateFrom("");
+    setDateTo("");
+    setPage(1);
+  }
+
+  function openCreate() {
+    setEditing(null);
+    setFormSupplier("");
+    setFormPaid("");
+    setFormNote("");
+    setFormExpected("");
+    setFormRows([{ ...emptyRow }]);
+    setFormOpen(true);
+  }
+
+  function openEdit(purchase: Purchase) {
+    setEditing(purchase);
+    setFormSupplier(purchase.supplier_id);
+    setFormPaid(fromCents(purchase.amount_paid));
+    setFormNote(purchase.note || "");
+    setFormExpected(toDateInput(purchase.expected_at));
+    setFormRows(
+      purchase.items.map((item) => ({
+        product_id: item.product_id,
+        quantity: String(item.quantity),
+        unit_cost: fromCents(item.unit_cost),
+        note: item.note || "",
+      })),
+    );
+    setFormOpen(true);
+  }
+
+  function updateRow(index: number, key: keyof FormRow, value: string) {
+    setFormRows((rows) => rows.map((row, i) => (i === index ? { ...row, [key]: value } : row)));
+  }
+
+  function removeRow(index: number) {
+    setFormRows((rows) => (rows.length === 1 ? rows : rows.filter((_, i) => i !== index)));
+  }
+
+  async function submitForm(event: React.FormEvent) {
+    event.preventDefault();
+    setSaving(true);
+    setError("");
+    const body = {
+      supplier_id: formSupplier,
+      amount_paid: toCents(formPaid),
+      note: formNote,
+      expected_at: toISO(formExpected),
+      items: formRows.map((row) => ({
+        product_id: row.product_id,
+        quantity: Number(row.quantity || 0),
+        unit_cost: toCents(row.unit_cost),
+        note: row.note,
+      })),
+    };
+    try {
+      if (editing) {
+        await api.patch(`/purchases/${editing.id}`, body);
+      } else {
+        await api.post("/purchases", body);
+      }
+      setFormOpen(false);
+      await loadPurchases();
+    } catch (e) {
+      setError(errMessage(e, editing ? "Failed to update purchase" : "Failed to create purchase"));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  function openReceive(purchase: Purchase) {
+    const values: Record<number, string> = {};
+    purchase.items.forEach((item, index) => {
+      values[index] = String(remaining(item));
+    });
+    setReceiveValues(values);
+    setReceiving(purchase);
+  }
+
+  async function submitReceive(event: React.FormEvent) {
+    event.preventDefault();
+    if (!receiving) return;
+    const aggregated = new Map<string, number>();
+    Object.entries(receiveValues).forEach(([key, value]) => {
+      const quantity = Number(value || 0);
+      if (quantity <= 0) return;
+      const item = receiving.items[Number(key)];
+      if (!item) return;
+      aggregated.set(item.product_id, (aggregated.get(item.product_id) || 0) + quantity);
+    });
+    const items = Array.from(aggregated, ([product_id, received_qty]) => ({
+      product_id,
+      received_qty,
+    }));
+    if (items.length === 0) {
+      setError("Enter at least one quantity to receive");
+      return;
+    }
+    setReceivingBusy(true);
+    setError("");
+    try {
+      await api.post(`/purchases/${receiving.id}/receive`, { items });
+      setReceiving(null);
+      await loadPurchases();
+    } catch (e) {
+      setError(errMessage(e, "Failed to receive purchase"));
+    } finally {
+      setReceivingBusy(false);
+    }
+  }
+
+  async function removePurchase(purchase: Purchase) {
+    if (!window.confirm(`Delete ${purchase.po_number}? This cannot be undone.`)) return;
+    setError("");
+    try {
+      await api.delete(`/purchases/${purchase.id}`);
+      await loadPurchases();
+    } catch (e) {
+      setError(errMessage(e, "Failed to delete purchase"));
+    }
+  }
+
+  function canEdit(purchase: Purchase): boolean {
+    return purchase.status === "draft" && purchase.items.every((item) => (item.received_qty || 0) === 0);
+  }
+
+  function statusBadge(purchase: Purchase) {
+    if (purchase.status === "received") {
+      return <span className="rounded-full bg-[#e7f4ec] px-2 py-0.5 text-xs font-bold uppercase text-[#16794c]">Received</span>;
+    }
+    const partiallyReceived = purchase.items.some((item) => (item.received_qty || 0) > 0);
+    if (partiallyReceived) {
+      return <span className="rounded-full bg-[#fff3df] px-2 py-0.5 text-xs font-bold uppercase text-[#b36f16]">Partial</span>;
+    }
+    return <span className="rounded-full bg-[#f2f5f1] px-2 py-0.5 text-xs font-bold uppercase text-[#647168]">Draft</span>;
+  }
+
+  function receivedProgress(purchase: Purchase): string {
+    const ordered = purchase.items.reduce((sum, item) => sum + item.quantity, 0);
+    const arrived = purchase.items.reduce((sum, item) => sum + (item.received_qty || 0), 0);
+    return `${arrived} of ${ordered} received`;
+  }
+
+  const showPagination = meta && meta.total > 0;
+  const rangeStart = meta && meta.total > 0 ? (meta.page - 1) * meta.limit + 1 : 0;
+  const rangeEnd = meta ? Math.min(meta.page * meta.limit, meta.total) : 0;
+
+  return (
+    <>
+      <PageHeader
+        eyebrow="Procurement"
+        title="Purchases"
+        description="Create purchase orders, edit drafts, and receive goods in as many shipments as the supplier sends."
+        action={
+          <button className="btn-primary" onClick={openCreate}>
+            <Plus size={16} /> New purchase
+          </button>
+        }
+      />
+
+      {error && (
+        <p className="mb-4 flex items-start justify-between gap-3 rounded-lg bg-red-50 p-3 text-sm text-red-700">
+          <span>{error}</span>
+          <button type="button" aria-label="Dismiss error" onClick={() => setError("")}>
+            <X size={15} />
+          </button>
+        </p>
+      )}
+
+      {/* Filters */}
+      <div className="panel mb-5 grid gap-3 p-4 sm:grid-cols-2 lg:grid-cols-6">
+        <label className="text-xs font-semibold uppercase tracking-wide text-[#718078]">
+          Status
+          <select
+            className="field mt-1.5"
+            value={statusFilter}
+            onChange={(e) => {
+              setStatusFilter(e.target.value);
+              setPage(1);
+            }}
+          >
+            <option value="">All</option>
+            <option value="draft">Draft</option>
+            <option value="received">Received</option>
+          </select>
+        </label>
+        <label className="text-xs font-semibold uppercase tracking-wide text-[#718078]">
+          Supplier
+          <select
+            className="field mt-1.5"
+            value={supplierFilter}
+            onChange={(e) => {
+              setSupplierFilter(e.target.value);
+              setPage(1);
+            }}
+          >
+            <option value="">All suppliers</option>
+            {suppliers.map((supplier) => (
+              <option key={supplier.id} value={supplier.id}>
+                {supplier.name}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="text-xs font-semibold uppercase tracking-wide text-[#718078]">
+          From
+          <input
+            type="date"
+            className="field mt-1.5"
+            value={dateFrom}
+            onChange={(e) => {
+              setDateFrom(e.target.value);
+              setPage(1);
+            }}
+          />
+        </label>
+        <label className="text-xs font-semibold uppercase tracking-wide text-[#718078]">
+          To
+          <input
+            type="date"
+            className="field mt-1.5"
+            value={dateTo}
+            onChange={(e) => {
+              setDateTo(e.target.value);
+              setPage(1);
+            }}
+          />
+        </label>
+        <label className="text-xs font-semibold uppercase tracking-wide text-[#718078]">
+          Page size
+          <select
+            className="field mt-1.5"
+            value={limit}
+            onChange={(e) => {
+              setLimit(Number(e.target.value));
+              setPage(1);
+            }}
+          >
+            <option value={10}>10</option>
+            <option value={20}>20</option>
+            <option value={50}>50</option>
+            <option value={100}>100</option>
+          </select>
+        </label>
+        <div className="flex items-end">
+          <button type="button" className="btn-secondary w-full" onClick={resetFilters}>
+            Reset filters
+          </button>
+        </div>
+      </div>
+
+      {/* Table */}
+      <div className="panel overflow-hidden">
+        {loading ? (
+          <div className="flex items-center justify-center gap-2 p-10 text-sm text-[#718078]">
+            <Loader2 size={18} className="animate-spin" /> Loading purchases…
+          </div>
+        ) : purchases.length === 0 ? (
+          <div className="p-10 text-center">
+            <ClipboardList className="mx-auto text-[#9aa59d]" />
+            <p className="mt-3 font-semibold">No purchases match these filters</p>
+            <p className="mt-1 text-sm text-[#718078]">Try widening the date range or clearing the filters.</p>
+          </div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-sm">
+              <thead className="bg-[#f8faf7] text-xs uppercase text-[#718078]">
+                <tr>
+                  <th className="px-5 py-3">PO number</th>
+                  <th className="px-5 py-3">Created</th>
+                  <th className="px-5 py-3">Supplier</th>
+                  <th className="px-5 py-3">Expected</th>
+                  <th className="px-5 py-3">Items</th>
+                  <th className="px-5 py-3 text-right">Total</th>
+                  <th className="px-5 py-3 text-right">Status</th>
+                  <th className="px-5 py-3 text-right">Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {purchases.map((purchase) => (
+                  <tr key={purchase.id} className="border-t border-[#eef1ed] align-top">
+                    <td className="px-5 py-4 font-mono text-xs font-semibold">{purchase.po_number}</td>
+                    <td className="px-5 py-4 text-[#718078]">
+                      {new Date(purchase.created_at).toLocaleDateString("en-KE")}
+                    </td>
+                    <td className="px-5 py-4 font-semibold">
+                      {suppliers.find((s) => s.id === purchase.supplier_id)?.name || "Supplier"}
+                    </td>
+                    <td className="px-5 py-4 text-[#718078]">
+                      {purchase.expected_at
+                        ? new Date(purchase.expected_at).toLocaleDateString("en-KE")
+                        : "—"}
+                    </td>
+                    <td className="px-5 py-4 text-[#718078]">
+                      {purchase.items?.length || 0} line{purchase.items?.length === 1 ? "" : "s"}
+                    </td>
+                    <td className="px-5 py-4 text-right font-semibold">{formatMoney(purchase.total_amount)}</td>
+                    <td className="px-5 py-4 text-right">
+                      <div className="flex flex-col items-end gap-1">
+                        {statusBadge(purchase)}
+                        {purchase.status !== "received" && (
+                          <span className="text-[11px] text-[#8a958d]">{receivedProgress(purchase)}</span>
+                        )}
+                      </div>
+                    </td>
+                    <td className="px-5 py-4">
+                      <div className="flex flex-wrap items-center justify-end gap-2">
+                        {canEdit(purchase) && (
+                          <button
+                            type="button"
+                            className="btn-secondary py-1.5"
+                            onClick={() => openEdit(purchase)}
+                          >
+                            <Pencil size={14} /> Edit
+                          </button>
+                        )}
+                        {purchase.status !== "received" &&
+                          purchase.items.some((item) => remaining(item) > 0) && (
+                            <button
+                              type="button"
+                              className="btn-secondary py-1.5"
+                              onClick={() => openReceive(purchase)}
+                            >
+                              <PackageCheck size={14} /> Receive
+                            </button>
+                          )}
+                        {canEdit(purchase) && (
+                          <button
+                            type="button"
+                            aria-label={`Delete ${purchase.po_number}`}
+                            className="rounded-lg p-2 text-[#a3543f] transition hover:bg-[#fdeeea]"
+                            onClick={() => removePurchase(purchase)}
+                          >
+                            <Trash2 size={15} />
+                          </button>
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      {/* Pagination */}
+      {showPagination && meta && (
+        <div className="mt-4 flex flex-col gap-3 text-sm text-[#718078] sm:flex-row sm:items-center sm:justify-between">
+          <p>
+            Showing {rangeStart}–{rangeEnd} of {meta.total} purchase{meta.total === 1 ? "" : "s"}
+          </p>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              className="btn-secondary py-1.5"
+              disabled={meta.page <= 1}
+              onClick={() => setPage((p) => Math.max(1, p - 1))}
+            >
+              Previous
+            </button>
+            <span className="px-1">
+              Page {meta.page} of {Math.max(1, meta.totalPages)}
+            </span>
+            <button
+              type="button"
+              className="btn-secondary py-1.5"
+              disabled={meta.page >= meta.totalPages}
+              onClick={() => setPage((p) => p + 1)}
+            >
+              Next
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Create / edit modal */}
+      {formOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/40 p-4 sm:items-center"
+          role="dialog"
+          aria-modal="true"
+          aria-label={editing ? `Edit ${editing.po_number}` : "New purchase"}
+        >
+          <form onSubmit={submitForm} className="panel my-6 w-full max-w-3xl space-y-4 p-5">
+            <div className="flex items-start justify-between">
+              <div>
+                <p className="eyebrow mb-1">{editing ? "Edit draft" : "New purchase"}</p>
+                <h2 className="text-xl font-bold">{editing ? editing.po_number : "Create a purchase order"}</h2>
+              </div>
+              <button type="button" aria-label="Close" onClick={() => setFormOpen(false)} className="rounded-lg p-2 text-[#718078] hover:bg-[#f2f5f1]">
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="grid gap-3 sm:grid-cols-2">
+              <label className="text-sm font-semibold">
+                Supplier
+                <select className="field mt-1.5" value={formSupplier} onChange={(e) => setFormSupplier(e.target.value)} required>
+                  <option value="">Select supplier</option>
+                  {suppliers.map((supplier) => (
+                    <option key={supplier.id} value={supplier.id}>
+                      {supplier.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="text-sm font-semibold">
+                Expected delivery
+                <input type="date" className="field mt-1.5" value={formExpected} onChange={(e) => setFormExpected(e.target.value)} />
+              </label>
+              <label className="text-sm font-semibold">
+                Amount paid (KSh)
+                <input type="number" min="0" step="0.01" className="field mt-1.5" placeholder="0.00" value={formPaid} onChange={(e) => setFormPaid(e.target.value)} />
+              </label>
+              <label className="text-sm font-semibold">
+                Note
+                <input className="field mt-1.5" placeholder="Optional note" value={formNote} onChange={(e) => setFormNote(e.target.value)} />
+              </label>
+            </div>
+
+            <div className="space-y-2">
+              <p className="text-sm font-semibold">Line items</p>
+              {formRows.map((row, index) => (
+                <div key={index} className="grid gap-2 sm:grid-cols-[1fr_90px_120px_1fr_auto]">
+                  <select className="field" value={row.product_id} onChange={(e) => updateRow(index, "product_id", e.target.value)} required>
+                    <option value="">Select product</option>
+                    {products.map((product) => (
+                      <option key={product.id} value={product.id}>
+                        {product.name} / {product.unit}
+                      </option>
+                    ))}
+                  </select>
+                  <input className="field" type="number" min="1" placeholder="Qty" value={row.quantity} onChange={(e) => updateRow(index, "quantity", e.target.value)} required />
+                  <input className="field" type="number" min="0" step="0.01" placeholder="Cost / unit" value={row.unit_cost} onChange={(e) => updateRow(index, "unit_cost", e.target.value)} required />
+                  <input className="field" placeholder="Line note" value={row.note} onChange={(e) => updateRow(index, "note", e.target.value)} />
+                  <button type="button" aria-label="Remove line" className="rounded-lg p-2 text-[#a3543f] hover:bg-[#fdeeea]" onClick={() => removeRow(index)}>
+                    <Trash2 size={15} />
+                  </button>
+                </div>
+              ))}
+              <button type="button" className="btn-secondary" onClick={() => setFormRows([...formRows, { ...emptyRow }])}>
+                <Plus size={15} /> Add line
+              </button>
+            </div>
+
+            <div className="flex flex-col gap-3 border-t border-[#eef1ed] pt-4 sm:flex-row sm:items-center sm:justify-between">
+              <p className="text-sm text-[#718078]">
+                Purchase total <strong className="ml-2 text-[#17211b]">{formatMoney(formTotalCents)}</strong>
+              </p>
+              <div className="flex gap-2">
+                <button type="button" className="btn-secondary" onClick={() => setFormOpen(false)}>
+                  Cancel
+                </button>
+                <button className="btn-primary" disabled={saving}>
+                  {saving && <Loader2 size={15} className="animate-spin" />}
+                  {editing ? "Save changes" : "Save purchase"}
+                </button>
+              </div>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {/* Partial receive modal */}
+      {receiving && (
+        <div
+          className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/40 p-4 sm:items-center"
+          role="dialog"
+          aria-modal="true"
+          aria-label={`Receive ${receiving.po_number}`}
+        >
+          <form onSubmit={submitReceive} className="panel my-6 w-full max-w-2xl space-y-4 p-5">
+            <div className="flex items-start justify-between">
+              <div>
+                <p className="eyebrow mb-1">Receive goods</p>
+                <h2 className="text-xl font-bold">{receiving.po_number}</h2>
+                <p className="mt-1 text-sm text-[#718078]">
+                  Enter the quantity that arrived in this shipment. Everything is pre-filled with the remaining
+                  quantity; reduce any line that is short.
+                </p>
+              </div>
+              <button type="button" aria-label="Close" onClick={() => setReceiving(null)} className="rounded-lg p-2 text-[#718078] hover:bg-[#f2f5f1]">
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="space-y-2">
+              {receiving.items.map((item, index) => {
+                const product = products.find((p) => p.id === item.product_id);
+                const outstanding = remaining(item);
+                return (
+                  <div key={item.id || index} className="grid gap-2 rounded-lg border border-[#eef1ed] p-3 sm:grid-cols-[1fr_auto_auto]">
+                    <div>
+                      <p className="font-semibold">{product?.name || "Product"}</p>
+                      <p className="text-xs text-[#718078]">
+                        Ordered {item.quantity} · already received {item.received_qty || 0} · remaining {outstanding}
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <label className="text-xs font-semibold text-[#718078]" htmlFor={`receive-${index}`}>
+                        Receive now
+                      </label>
+                      <input
+                        id={`receive-${index}`}
+                        className="field w-24"
+                        type="number"
+                        min="0"
+                        max={outstanding}
+                        step="1"
+                        disabled={outstanding === 0}
+                        value={receiveValues[index] ?? ""}
+                        onChange={(e) => setReceiveValues((values) => ({ ...values, [index]: e.target.value }))}
+                      />
+                    </div>
+                    <div className="flex items-center justify-end">
+                      {outstanding === 0 ? (
+                        <span className="text-xs font-bold uppercase text-[#16794c]">Complete</span>
+                      ) : (
+                        <span className="text-xs font-bold uppercase text-[#b36f16]">Pending</span>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            <div className="flex flex-col gap-3 border-t border-[#eef1ed] pt-4 sm:flex-row sm:items-center sm:justify-between">
+              <p className="text-xs text-[#718078]">
+                The purchase is marked received only when every line is complete.
+              </p>
+              <div className="flex gap-2">
+                <button type="button" className="btn-secondary" onClick={() => setReceiving(null)}>
+                  Cancel
+                </button>
+                <button className="btn-primary" disabled={receivingBusy}>
+                  {receivingBusy && <Loader2 size={15} className="animate-spin" />}
+                  Receive shipment
+                </button>
+              </div>
+            </div>
+          </form>
+        </div>
+      )}
+    </>
+  );
+}

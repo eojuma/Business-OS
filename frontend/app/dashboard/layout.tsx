@@ -22,7 +22,7 @@ export default function DashboardLayout({
   }, [router]);
   
   if (!checked) {
-    return <main className="flex min-h-screen items-center justify-center bg-[#f7f9f6] p-6"><div className="text-center"><div className="mx-auto h-8 w-8 animate-spin rounded-full border-2 border-[#d9e0d9] border-t-[#16794c]"/><p className="mt-3 text-sm text-[#718078]">Opening your workspace...</p></div></main>;
+    return <main className="flex min-h-screen items-center justify-center bg-background p-6"><div className="text-center"><div className="mx-auto h-8 w-8 animate-spin rounded-full border-2 border-border border-t-primary"/><p className="mt-3 text-sm text-muted">Opening your workspace...</p></div></main>;
   }
 
   return <AppShell>{children}</AppShell>;

@@ -97,10 +97,13 @@ type purchaseFixture struct {
 	supplierID uuid.UUID
 }
 
+var seedCounter int
+
 func seedPurchase(t *testing.T, db *gorm.DB, businessID uuid.UUID, quantityA, quantityB int64) purchaseFixture {
 	t.Helper()
 
-	supplier := &suppliers.Supplier{BusinessID: businessID, Name: "Test Supplier", PaymentTerms: suppliers.PaymentTermsNet30}
+	seedCounter++
+	supplier := &suppliers.Supplier{BusinessID: businessID, Name: fmt.Sprintf("Test Supplier %d", seedCounter), PaymentTerms: suppliers.PaymentTermsNet30}
 	if err := db.Create(supplier).Error; err != nil {
 		t.Fatalf("create supplier: %v", err)
 	}
@@ -514,5 +517,98 @@ func TestRepositoryCreateRejectsSupplierFromAnotherBusiness(t *testing.T) {
 	err := NewRepository(db).Create(purchase, items)
 	if !errors.Is(err, suppliers.ErrSupplierNotFound) {
 		t.Fatalf("error = %v, want %v", err, suppliers.ErrSupplierNotFound)
+	}
+}
+
+func TestRepositoryUpdateDraftReplacesItemsAndTotals(t *testing.T) {
+	db, businessID := setupTestDB(t)
+	fixture := seedPurchase(t, db, businessID, 2, 3)
+
+	newSupplier := &suppliers.Supplier{BusinessID: businessID, Name: "Second Supplier", PaymentTerms: suppliers.PaymentTermsNet30}
+	if err := db.Create(newSupplier).Error; err != nil {
+		t.Fatalf("create supplier: %v", err)
+	}
+	expectedAt := time.Date(2026, time.December, 2, 0, 0, 0, 0, time.UTC)
+	items := []PurchaseLineItem{
+		{ProductID: fixture.productA, Quantity: 5, UnitCost: 150, Subtotal: 750, Note: "rush"},
+		{ProductID: fixture.productB, Quantity: 1, UnitCost: 400, Subtotal: 400},
+	}
+
+	updated, err := NewRepository(db).Update(fixture.purchase.ID, businessID, newSupplier.ID, 100, "updated note", &expectedAt, items)
+	if err != nil {
+		t.Fatalf("update purchase: %v", err)
+	}
+	if updated.TotalAmount != 1150 {
+		t.Fatalf("total = %d, want 1150", updated.TotalAmount)
+	}
+	if updated.SupplierID != newSupplier.ID {
+		t.Fatalf("supplier = %s, want %s", updated.SupplierID, newSupplier.ID)
+	}
+	if updated.Note != "updated note" {
+		t.Fatalf("note = %q, want updated note", updated.Note)
+	}
+	if updated.PONumber != fixture.purchase.PONumber {
+		t.Fatalf("po_number changed from %q to %q", fixture.purchase.PONumber, updated.PONumber)
+	}
+	if updated.ExpectedAt == nil || !updated.ExpectedAt.UTC().Equal(expectedAt) {
+		t.Fatalf("expected_at = %v, want %v", updated.ExpectedAt, expectedAt)
+	}
+	if len(updated.Items) != 2 {
+		t.Fatalf("items = %d, want 2", len(updated.Items))
+	}
+
+	var count int64
+	if err := db.Model(&PurchaseLineItem{}).Where("purchase_id = ?", fixture.purchase.ID).Count(&count).Error; err != nil {
+		t.Fatalf("count items: %v", err)
+	}
+	if count != 2 {
+		t.Fatalf("persisted line items = %d, want 2", count)
+	}
+}
+
+func TestRepositoryUpdateRejectsPartiallyReceivedPurchase(t *testing.T) {
+	db, businessID := setupTestDB(t)
+	fixture := seedPurchase(t, db, businessID, 5, 4)
+
+	if _, err := receivePurchase(t, db, businessID, fixture.purchase.ID, []ReceiveItemInput{{ProductID: fixture.productA, ReceivedQty: 2}}); err != nil {
+		t.Fatalf("partial receive: %v", err)
+	}
+
+	items := []PurchaseLineItem{{ProductID: fixture.productA, Quantity: 5, UnitCost: 100, Subtotal: 500}}
+	_, err := NewRepository(db).Update(fixture.purchase.ID, businessID, fixture.supplierID, 0, "", nil, items)
+	if !errors.Is(err, ErrPurchasePartiallyReceived) {
+		t.Fatalf("error = %v, want %v", err, ErrPurchasePartiallyReceived)
+	}
+}
+
+func TestRepositoryDeleteDraftRemovesPurchaseAndItems(t *testing.T) {
+	db, businessID := setupTestDB(t)
+	fixture := seedPurchase(t, db, businessID, 2, 2)
+
+	if err := NewRepository(db).Delete(fixture.purchase.ID, businessID); err != nil {
+		t.Fatalf("delete purchase: %v", err)
+	}
+	if _, err := NewRepository(db).FindByID(fixture.purchase.ID, businessID); !errors.Is(err, gorm.ErrRecordNotFound) {
+		t.Fatalf("find after delete error = %v, want record not found", err)
+	}
+	var count int64
+	if err := db.Model(&PurchaseLineItem{}).Where("purchase_id = ?", fixture.purchase.ID).Count(&count).Error; err != nil {
+		t.Fatalf("count items: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("orphan line items = %d, want 0", count)
+	}
+}
+
+func TestRepositoryDeleteRejectsReceivedPurchase(t *testing.T) {
+	db, businessID := setupTestDB(t)
+	fixture := seedPurchase(t, db, businessID, 1, 1)
+
+	if _, err := receivePurchase(t, db, businessID, fixture.purchase.ID, nil); err != nil {
+		t.Fatalf("receive all: %v", err)
+	}
+	err := NewRepository(db).Delete(fixture.purchase.ID, businessID)
+	if !errors.Is(err, ErrAlreadyReceived) {
+		t.Fatalf("error = %v, want %v", err, ErrAlreadyReceived)
 	}
 }

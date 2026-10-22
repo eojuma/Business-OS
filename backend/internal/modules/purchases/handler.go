@@ -189,3 +189,71 @@ func (h *Handler) Receive(c *gin.Context) {
 	}
 	response.Success(c, http.StatusOK, item)
 }
+
+// Update edits a draft purchase. The full editable payload is sent, matching
+// the create request shape, and the total is recalculated server-side.
+func (h *Handler) Update(c *gin.Context) {
+	businessID, id, ok := purchaseIDs(c)
+	if !ok {
+		return
+	}
+	var req createRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.Error(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	supplierID, err := uuid.Parse(req.SupplierID)
+	if err != nil {
+		response.Error(c, http.StatusBadRequest, "invalid supplier_id")
+		return
+	}
+	items := make([]ItemInput, 0, len(req.Items))
+	for _, item := range req.Items {
+		productID, err := uuid.Parse(item.ProductID)
+		if err != nil {
+			response.Error(c, http.StatusBadRequest, "invalid product_id")
+			return
+		}
+		items = append(items, ItemInput{ProductID: productID, Quantity: item.Quantity, UnitCost: item.UnitCost, Note: item.Note})
+	}
+	purchase, err := h.service.Update(id, businessID, UpdateInput{
+		SupplierID: supplierID,
+		AmountPaid: req.AmountPaid,
+		Note:       req.Note,
+		ExpectedAt: req.ExpectedAt,
+		Items:      items,
+	})
+	switch {
+	case errors.Is(err, ErrPurchaseNotFound):
+		response.Error(c, http.StatusNotFound, err.Error())
+	case errors.Is(err, ErrAlreadyReceived), errors.Is(err, ErrPurchasePartiallyReceived):
+		response.Error(c, http.StatusConflict, err.Error())
+	case errors.Is(err, suppliers.ErrSupplierNotFound):
+		response.Error(c, http.StatusNotFound, err.Error())
+	case errors.Is(err, ErrEmptyPurchase), errors.Is(err, ErrInvalidPurchaseItem), errors.Is(err, ErrInvalidAmountPaid):
+		response.Error(c, http.StatusBadRequest, err.Error())
+	case err != nil:
+		response.Error(c, http.StatusInternalServerError, "failed to update purchase")
+	default:
+		response.Success(c, http.StatusOK, purchase)
+	}
+}
+
+// Delete removes a draft purchase and its line items.
+func (h *Handler) Delete(c *gin.Context) {
+	businessID, id, ok := purchaseIDs(c)
+	if !ok {
+		return
+	}
+	err := h.service.Delete(id, businessID)
+	switch {
+	case errors.Is(err, ErrPurchaseNotFound):
+		response.Error(c, http.StatusNotFound, err.Error())
+	case errors.Is(err, ErrAlreadyReceived), errors.Is(err, ErrPurchasePartiallyReceived):
+		response.Error(c, http.StatusConflict, err.Error())
+	case err != nil:
+		response.Error(c, http.StatusInternalServerError, "failed to delete purchase")
+	default:
+		c.Status(http.StatusNoContent)
+	}
+}

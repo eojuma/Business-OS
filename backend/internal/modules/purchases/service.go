@@ -9,15 +9,16 @@ import (
 )
 
 var (
-	ErrPurchaseNotFound       = errors.New("purchase not found")
-	ErrEmptyPurchase          = errors.New("a purchase must have at least one line item")
-	ErrInvalidPurchaseItem    = errors.New("purchase quantities must be positive and costs cannot be negative")
-	ErrInvalidAmountPaid      = errors.New("amount paid cannot be negative or exceed the purchase total")
-	ErrAlreadyReceived        = errors.New("purchase has already been received")
-	ErrInvalidReceiveQuantity = errors.New("received quantity must be positive and not exceed the remaining quantity")
-	ErrUnknownReceiveItem     = errors.New("purchase does not contain the requested product")
-	ErrDuplicateReceiveItem   = errors.New("duplicate product in receive request")
-	ErrNothingToReceive       = errors.New("purchase has no remaining items to receive")
+	ErrPurchaseNotFound          = errors.New("purchase not found")
+	ErrEmptyPurchase             = errors.New("a purchase must have at least one line item")
+	ErrInvalidPurchaseItem       = errors.New("purchase quantities must be positive and costs cannot be negative")
+	ErrInvalidAmountPaid         = errors.New("amount paid cannot be negative or exceed the purchase total")
+	ErrAlreadyReceived           = errors.New("purchase has already been received")
+	ErrInvalidReceiveQuantity    = errors.New("received quantity must be positive and not exceed the remaining quantity")
+	ErrUnknownReceiveItem        = errors.New("purchase does not contain the requested product")
+	ErrDuplicateReceiveItem      = errors.New("duplicate product in receive request")
+	ErrNothingToReceive          = errors.New("purchase has no remaining items to receive")
+	ErrPurchasePartiallyReceived = errors.New("purchase has received items and cannot be edited or deleted")
 )
 
 type ItemInput struct {
@@ -31,6 +32,14 @@ type CreateInput struct {
 	Note                   string
 	ExpectedAt             *time.Time
 	Items                  []ItemInput
+}
+
+type UpdateInput struct {
+	SupplierID uuid.UUID
+	AmountPaid int64
+	Note       string
+	ExpectedAt *time.Time
+	Items      []ItemInput
 }
 
 type ReceiveItemInput struct {
@@ -47,6 +56,8 @@ type Service interface {
 	List(businessID uuid.UUID, supplierID *uuid.UUID) ([]Purchase, error)
 	Receive(id, businessID uuid.UUID, input ReceiveInput) (*Purchase, error)
 	ListPaginated(businessID uuid.UUID, page, limit int, status *string, supplierID *uuid.UUID, dateFrom *string, dateTo *string, poNumber *string) ([]Purchase, int64, error)
+	Update(id, businessID uuid.UUID, input UpdateInput) (*Purchase, error)
+	Delete(id, businessID uuid.UUID) error
 }
 
 type service struct {
@@ -106,4 +117,36 @@ func (s *service) Receive(id, businessID uuid.UUID, input ReceiveInput) (*Purcha
 		return nil, ErrPurchaseNotFound
 	}
 	return p, err
+}
+
+func (s *service) Update(id, businessID uuid.UUID, input UpdateInput) (*Purchase, error) {
+	if len(input.Items) == 0 {
+		return nil, ErrEmptyPurchase
+	}
+	items := make([]PurchaseLineItem, 0, len(input.Items))
+	var total int64
+	for _, item := range input.Items {
+		if item.Quantity <= 0 || item.UnitCost < 0 {
+			return nil, ErrInvalidPurchaseItem
+		}
+		subtotal := item.Quantity * item.UnitCost
+		total += subtotal
+		items = append(items, PurchaseLineItem{ProductID: item.ProductID, Quantity: item.Quantity, UnitCost: item.UnitCost, Subtotal: subtotal, Note: item.Note})
+	}
+	if input.AmountPaid < 0 || input.AmountPaid > total {
+		return nil, ErrInvalidAmountPaid
+	}
+	purchase, err := s.repo.Update(id, businessID, input.SupplierID, input.AmountPaid, input.Note, input.ExpectedAt, items)
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, ErrPurchaseNotFound
+	}
+	return purchase, err
+}
+
+func (s *service) Delete(id, businessID uuid.UUID) error {
+	err := s.repo.Delete(id, businessID)
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return ErrPurchaseNotFound
+	}
+	return err
 }

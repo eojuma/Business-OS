@@ -11,6 +11,9 @@ import (
 	"gorm.io/gorm/clause"
 )
 
+// lockForUpdate is the row-lock mode used when mutating a purchase.
+const lockForUpdate = "UPDATE"
+
 type InventoryReceiver interface {
 	RecordMovementTx(tx *gorm.DB, businessID, productID uuid.UUID, movementType string, quantity int64, note string) error
 }
@@ -45,7 +48,7 @@ func (r *repository) Create(purchase *Purchase, items []PurchaseLineItem) error 
 		// row, so the foreign key alone would admit purchases that reference
 		// an archived supplier.
 		var supplier suppliers.Supplier
-		err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+		err := tx.Clauses(clause.Locking{Strength: lockForUpdate}).
 			Where("id = ? AND business_id = ? AND deleted_at IS NULL", purchase.SupplierID, purchase.BusinessID).
 			First(&supplier).Error
 		if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -203,7 +206,7 @@ func receivePlan(items []PurchaseLineItem, requested []ReceiveItemInput) (map[in
 func (r *repository) Receive(id, businessID uuid.UUID, items []ReceiveItemInput, inventory InventoryReceiver, suppliers SupplierCharger, products ProductCostUpdater) (*Purchase, error) {
 	var purchase Purchase
 	err := r.db.Transaction(func(tx *gorm.DB) error {
-		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Preload("Items").Where("id = ? AND business_id = ?", id, businessID).First(&purchase).Error; err != nil {
+		if err := tx.Clauses(clause.Locking{Strength: lockForUpdate}).Preload("Items").Where("id = ? AND business_id = ?", id, businessID).First(&purchase).Error; err != nil {
 			return err
 		}
 		if purchase.Status == "received" {
@@ -274,7 +277,7 @@ func (r *repository) Receive(id, businessID uuid.UUID, items []ReceiveItemInput,
 func (r *repository) Update(id, businessID uuid.UUID, supplierID uuid.UUID, amountPaid int64, note string, expectedAt *time.Time, items []PurchaseLineItem) (*Purchase, error) {
 	var purchase Purchase
 	err := r.db.Transaction(func(tx *gorm.DB) error {
-		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Preload("Items").
+		if err := tx.Clauses(clause.Locking{Strength: lockForUpdate}).Preload("Items").
 			Where("id = ? AND business_id = ?", id, businessID).First(&purchase).Error; err != nil {
 			return err
 		}
@@ -290,7 +293,7 @@ func (r *repository) Update(id, businessID uuid.UUID, supplierID uuid.UUID, amou
 		// Like create, only an active supplier belonging to this business may be
 		// referenced; the row is locked so it cannot be archived concurrently.
 		var supplier suppliers.Supplier
-		err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+		err := tx.Clauses(clause.Locking{Strength: lockForUpdate}).
 			Where("id = ? AND business_id = ? AND deleted_at IS NULL", supplierID, businessID).
 			First(&supplier).Error
 		if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -336,7 +339,7 @@ func (r *repository) Update(id, businessID uuid.UUID, supplierID uuid.UUID, amou
 func (r *repository) Delete(id, businessID uuid.UUID) error {
 	return r.db.Transaction(func(tx *gorm.DB) error {
 		var purchase Purchase
-		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Preload("Items").
+		if err := tx.Clauses(clause.Locking{Strength: lockForUpdate}).Preload("Items").
 			Where("id = ? AND business_id = ?", id, businessID).First(&purchase).Error; err != nil {
 			return err
 		}

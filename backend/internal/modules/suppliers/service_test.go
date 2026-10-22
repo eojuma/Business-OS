@@ -101,6 +101,53 @@ func (r *testRepository) ListPayments(id, businessID uuid.UUID) ([]Payment, erro
 	return r.payments[id], nil
 }
 
+func (r *testRepository) GetAging(businessID uuid.UUID, asOf time.Time) (*AgingReport, error) {
+	// Simple implementation for testing - filter suppliers from the map
+	var suppliers []*Supplier
+	for _, s := range r.suppliers {
+		if s.BusinessID == businessID && !s.DeletedAt.Valid && s.OutstandingBalance > 0 {
+			suppliers = append(suppliers, s)
+		}
+	}
+
+	report := &AgingReport{}
+	for _, s := range suppliers {
+		ds := *s  // dereference pointer
+		daysOverdue := 0
+		if ds.DueDate != nil && ds.DueDate.Before(asOf) {
+			daysOverdue = int(asOf.Sub(*ds.DueDate).Hours() / 24)
+		}
+
+		entry := AgingSupplier{
+			ID:          ds.ID,
+			Name:        ds.Name,
+			Outstanding: ds.OutstandingBalance,
+			DueDate:     ds.DueDate,
+			DaysOverdue: daysOverdue,
+		}
+
+		switch {
+		case daysOverdue <= 0:
+			report.Current = append(report.Current, entry)
+			report.Totals.Current += s.OutstandingBalance
+		case daysOverdue <= 30:
+			report.Days1_30 = append(report.Days1_30, entry)
+			report.Totals.Days1_30 += s.OutstandingBalance
+		case daysOverdue <= 60:
+			report.Days31_60 = append(report.Days31_60, entry)
+			report.Totals.Days31_60 += s.OutstandingBalance
+		case daysOverdue <= 90:
+			report.Days61_90 = append(report.Days61_90, entry)
+			report.Totals.Days61_90 += s.OutstandingBalance
+		default:
+			report.Days90Plus = append(report.Days90Plus, entry)
+			report.Totals.Days90Plus += s.OutstandingBalance
+		}
+		report.Totals.Total += s.OutstandingBalance
+	}
+	return report, nil
+}
+
 func (r *testRepository) AddOutstandingTx(tx *gorm.DB, id, businessID uuid.UUID, amount int64) error {
 	s, ok := r.suppliers[id]
 	if !ok || s.BusinessID != businessID {
@@ -537,3 +584,87 @@ func TestSetPaymentDueDateSupplierNotFound(t *testing.T) {
 		t.Fatalf("expected ErrSupplierNotFound, got %v", err)
 	}
 }
+
+
+func TestGetAging(t *testing.T) {
+	repo := newTestRepository()
+	svc := NewService(repo)
+
+	businessID := uuid.New()
+	now := time.Date(2026, time.January, 15, 0, 0, 0, 0, time.UTC)
+
+	// Supplier 1: current (not overdue)
+	s1 := &Supplier{ID: uuid.New(), BusinessID: businessID, Name: "Current Supplier", OutstandingBalance: 5000, DueDate: func() *time.Time { t := now.AddDate(0, 0, 5); return &t }()}
+	repo.suppliers[s1.ID] = s1
+
+	// Supplier 2: 1-30 days overdue
+	s2 := &Supplier{ID: uuid.New(), BusinessID: businessID, Name: "Overdue 1-30", OutstandingBalance: 10000, DueDate: func() *time.Time { t := now.AddDate(0, 0, -10); return &t }()}
+	repo.suppliers[s2.ID] = s2
+
+	// Supplier 3: 31-60 days overdue
+	s3 := &Supplier{ID: uuid.New(), BusinessID: businessID, Name: "Overdue 31-60", OutstandingBalance: 15000, DueDate: func() *time.Time { t := now.AddDate(0, 0, -45); return &t }()}
+	repo.suppliers[s3.ID] = s3
+
+	// Supplier 4: 61-90 days overdue
+	s4 := &Supplier{ID: uuid.New(), BusinessID: businessID, Name: "Overdue 61-90", OutstandingBalance: 20000, DueDate: func() *time.Time { t := now.AddDate(0, 0, -75); return &t }()}
+	repo.suppliers[s4.ID] = s4
+
+	// Supplier 5: 90+ days overdue
+	s5 := &Supplier{ID: uuid.New(), BusinessID: businessID, Name: "Overdue 90+", OutstandingBalance: 25000, DueDate: func() *time.Time { t := now.AddDate(0, 0, -120); return &t }()}
+	repo.suppliers[s5.ID] = s5
+
+	// Supplier 6: no due date (should be current)
+	s6 := &Supplier{ID: uuid.New(), BusinessID: businessID, Name: "No Due Date", OutstandingBalance: 5000, DueDate: nil}
+	repo.suppliers[s6.ID] = s6
+
+	// Supplier with zero balance (should not appear)
+	s7 := &Supplier{ID: uuid.New(), BusinessID: businessID, Name: "Zero Balance", OutstandingBalance: 0, DueDate: func() *time.Time { t := now.AddDate(0, 0, -10); return &t }()}
+	repo.suppliers[s7.ID] = s7
+
+	// Supplier 8: archived (deleted_at set) - should not appear
+	s8 := &Supplier{ID: uuid.New(), BusinessID: businessID, Name: "Archived", OutstandingBalance: 10000, DueDate: func() *time.Time { t := now.AddDate(0, 0, -10); return &t }(), DeletedAt: gorm.DeletedAt{Time: time.Now(), Valid: true}}
+	repo.suppliers[s8.ID] = s8
+
+	asOf := now
+	report, err := svc.GetAging(businessID, asOf)
+	if err != nil {
+		t.Fatalf("GetAging failed: %v", err)
+	}
+
+	if len(report.Current) != 2 {
+		t.Errorf("Current = %d, want 2 (current + no due date)", len(report.Current))
+	}
+	if len(report.Days1_30) != 1 {
+		t.Errorf("Days1_30 = %d, want 1", len(report.Days1_30))
+	}
+	if len(report.Days31_60) != 1 {
+		t.Errorf("Days31_60 = %d, want 1", len(report.Days31_60))
+	}
+	if len(report.Days61_90) != 1 {
+		t.Errorf("Days61_90 = %d, want 1", len(report.Days61_90))
+	}
+	if len(report.Days90Plus) != 1 {
+		t.Errorf("Days90Plus = %d, want 1", len(report.Days90Plus))
+	}
+
+	// Check totals
+	if report.Totals.Current != 10000 {
+		t.Errorf("Totals.Current = %d, want 10000", report.Totals.Current)
+	}
+	if report.Totals.Days1_30 != 10000 {
+		t.Errorf("Totals.Days1_30 = %d, want 10000", report.Totals.Days1_30)
+	}
+	if report.Totals.Days31_60 != 15000 {
+		t.Errorf("Totals.Days31_60 = %d, want 15000", report.Totals.Days31_60)
+	}
+	if report.Totals.Days61_90 != 20000 {
+		t.Errorf("Totals.Days61_90 = %d, want 20000", report.Totals.Days61_90)
+	}
+	if report.Totals.Days90Plus != 25000 {
+		t.Errorf("Totals.Days90Plus = %d, want 25000", report.Totals.Days90Plus)
+	}
+	if report.Totals.Total != 80000 {
+		t.Errorf("Totals.Total = %d, want 80000", report.Totals.Total)
+	}
+}
+

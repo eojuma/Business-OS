@@ -19,6 +19,7 @@ type Repository interface {
 	ListPayments(id, businessID uuid.UUID) ([]Payment, error)
 	AddOutstandingTx(tx *gorm.DB, id, businessID uuid.UUID, amount int64) error
 	SetPaymentDueDateTx(tx *gorm.DB, id, businessID uuid.UUID, receivedAt time.Time) (*time.Time, error)
+	GetAging(businessID uuid.UUID, asOf time.Time) (*AgingReport, error)
 }
 
 type repository struct{ db *gorm.DB }
@@ -160,4 +161,77 @@ func (r *repository) SetPaymentDueDateTx(tx *gorm.DB, id, businessID uuid.UUID, 
 		return nil, ErrSupplierNotFound
 	}
 	return &dueDate, nil
+}
+
+
+// AgingReport represents the supplier aging report.
+type AgingReport struct {
+	Current       []AgingSupplier `json:"current"`
+	Days1_30      []AgingSupplier `json:"days_1_30"`
+	Days31_60     []AgingSupplier `json:"days_31_60"`
+	Days61_90     []AgingSupplier `json:"days_61_90"`
+	Days90Plus    []AgingSupplier `json:"days_90_plus"`
+	Totals        AgingTotals     `json:"totals"`
+}
+
+type AgingSupplier struct {
+	ID             uuid.UUID  `json:"id"`
+	Name           string     `json:"name"`
+	Outstanding    int64      `json:"outstanding"`
+	DueDate        *time.Time `json:"due_date"`
+	DaysOverdue    int        `json:"days_overdue"`
+}
+
+type AgingTotals struct {
+	Current    int64 `json:"current"`
+	Days1_30   int64 `json:"days_1_30"`
+	Days31_60  int64 `json:"days_31_60"`
+	Days61_90  int64 `json:"days_61_90"`
+	Days90Plus int64 `json:"days_90_plus"`
+	Total      int64 `json:"total"`
+}
+
+func (r *repository) GetAging(businessID uuid.UUID, asOf time.Time) (*AgingReport, error) {
+	var suppliers []Supplier
+	err := r.db.Where("business_id = ? AND deleted_at IS NULL AND outstanding_balance > 0", businessID).
+		Order("name asc").Find(&suppliers).Error
+	if err != nil {
+		return nil, err
+	}
+
+	report := &AgingReport{}
+	for _, s := range suppliers {
+		daysOverdue := 0
+		if s.DueDate != nil && s.DueDate.Before(asOf) {
+			daysOverdue = int(asOf.Sub(*s.DueDate).Hours() / 24)
+		}
+
+		entry := AgingSupplier{
+			ID:          s.ID,
+			Name:        s.Name,
+			Outstanding: s.OutstandingBalance,
+			DueDate:     s.DueDate,
+			DaysOverdue: daysOverdue,
+		}
+
+		switch {
+		case daysOverdue <= 0:
+			report.Current = append(report.Current, entry)
+			report.Totals.Current += s.OutstandingBalance
+		case daysOverdue <= 30:
+			report.Days1_30 = append(report.Days1_30, entry)
+			report.Totals.Days1_30 += s.OutstandingBalance
+		case daysOverdue <= 60:
+			report.Days31_60 = append(report.Days31_60, entry)
+			report.Totals.Days31_60 += s.OutstandingBalance
+		case daysOverdue <= 90:
+			report.Days61_90 = append(report.Days61_90, entry)
+			report.Totals.Days61_90 += s.OutstandingBalance
+		default:
+			report.Days90Plus = append(report.Days90Plus, entry)
+			report.Totals.Days90Plus += s.OutstandingBalance
+		}
+		report.Totals.Total += s.OutstandingBalance
+	}
+	return report, nil
 }

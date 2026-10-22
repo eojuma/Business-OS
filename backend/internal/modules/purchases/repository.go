@@ -28,6 +28,8 @@ type Repository interface {
 	List(businessID uuid.UUID, supplierID *uuid.UUID) ([]Purchase, error)
 	Receive(id, businessID uuid.UUID, items []ReceiveItemInput, inventory InventoryReceiver, suppliers SupplierCharger, products ProductCostUpdater) (*Purchase, error)
 	ListPaginated(businessID uuid.UUID, page, limit int, status *string, supplierID *uuid.UUID, dateFrom *string, dateTo *string, poNumber *string) ([]Purchase, int64, error)
+	Update(id, businessID uuid.UUID, supplierID uuid.UUID, amountPaid int64, note string, expectedAt *time.Time, items []PurchaseLineItem) (*Purchase, error)
+	Delete(id, businessID uuid.UUID) error
 }
 
 type repository struct{ db *gorm.DB }
@@ -264,4 +266,91 @@ func (r *repository) Receive(id, businessID uuid.UUID, items []ReceiveItemInput,
 		}).Error
 	})
 	return &purchase, err
+}
+
+// Update replaces the editable fields of a draft purchase. It refuses to touch
+// a purchase that has already been received, or one where any line item has
+// stock against it, because changing quantities then would corrupt receipts.
+func (r *repository) Update(id, businessID uuid.UUID, supplierID uuid.UUID, amountPaid int64, note string, expectedAt *time.Time, items []PurchaseLineItem) (*Purchase, error) {
+	var purchase Purchase
+	err := r.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Preload("Items").
+			Where("id = ? AND business_id = ?", id, businessID).First(&purchase).Error; err != nil {
+			return err
+		}
+		if purchase.Status == "received" {
+			return ErrAlreadyReceived
+		}
+		for _, item := range purchase.Items {
+			if item.ReceivedQty > 0 {
+				return ErrPurchasePartiallyReceived
+			}
+		}
+
+		// Like create, only an active supplier belonging to this business may be
+		// referenced; the row is locked so it cannot be archived concurrently.
+		var supplier suppliers.Supplier
+		err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("id = ? AND business_id = ? AND deleted_at IS NULL", supplierID, businessID).
+			First(&supplier).Error
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return suppliers.ErrSupplierNotFound
+		}
+		if err != nil {
+			return err
+		}
+
+		if err := tx.Where("purchase_id = ?", purchase.ID).Delete(&PurchaseLineItem{}).Error; err != nil {
+			return err
+		}
+
+		var total int64
+		for i := range items {
+			items[i].PurchaseID = purchase.ID
+			items[i].ReceivedQty = 0
+			total += items[i].Subtotal
+		}
+		if amountPaid < 0 || amountPaid > total {
+			return ErrInvalidAmountPaid
+		}
+		if err := tx.Create(&items).Error; err != nil {
+			return err
+		}
+		if err := tx.Model(&Purchase{}).Where("id = ? AND business_id = ?", purchase.ID, businessID).
+			Updates(map[string]interface{}{
+				"supplier_id":  supplierID,
+				"amount_paid":  amountPaid,
+				"note":         note,
+				"expected_at":  expectedAt,
+				"total_amount": total,
+			}).Error; err != nil {
+			return err
+		}
+		return tx.Preload("Items").Where("id = ? AND business_id = ?", id, businessID).First(&purchase).Error
+	})
+	return &purchase, err
+}
+
+// Delete removes a draft purchase and its line items. It refuses to delete a
+// received purchase or one with any received quantity recorded.
+func (r *repository) Delete(id, businessID uuid.UUID) error {
+	return r.db.Transaction(func(tx *gorm.DB) error {
+		var purchase Purchase
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Preload("Items").
+			Where("id = ? AND business_id = ?", id, businessID).First(&purchase).Error; err != nil {
+			return err
+		}
+		if purchase.Status == "received" {
+			return ErrAlreadyReceived
+		}
+		for _, item := range purchase.Items {
+			if item.ReceivedQty > 0 {
+				return ErrPurchasePartiallyReceived
+			}
+		}
+		if err := tx.Where("purchase_id = ?", purchase.ID).Delete(&PurchaseLineItem{}).Error; err != nil {
+			return err
+		}
+		return tx.Where("id = ? AND business_id = ?", id, businessID).Delete(&Purchase{}).Error
+	})
 }

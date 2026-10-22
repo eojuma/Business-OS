@@ -97,10 +97,13 @@ type purchaseFixture struct {
 	supplierID uuid.UUID
 }
 
+var seedCounter int
+
 func seedPurchase(t *testing.T, db *gorm.DB, businessID uuid.UUID, quantityA, quantityB int64) purchaseFixture {
 	t.Helper()
 
-	supplier := &suppliers.Supplier{BusinessID: businessID, Name: "Test Supplier", PaymentTerms: suppliers.PaymentTermsNet30}
+	seedCounter++
+	supplier := &suppliers.Supplier{BusinessID: businessID, Name: fmt.Sprintf("Test Supplier %d", seedCounter), PaymentTerms: suppliers.PaymentTermsNet30}
 	if err := db.Create(supplier).Error; err != nil {
 		t.Fatalf("create supplier: %v", err)
 	}

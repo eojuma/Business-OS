@@ -5,6 +5,7 @@ import (
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"
+	"time"
 )
 
 var (
@@ -35,6 +36,7 @@ type Service interface {
 	Restore(id, businessID uuid.UUID) (*Supplier, error)
 	RecordPayment(id, businessID uuid.UUID, amount int64, note string) (*Supplier, error)
 	ListPayments(id, businessID uuid.UUID) ([]Payment, error)
+	GetAging(businessID uuid.UUID, asOf time.Time) (*AgingReport, error)
 }
 
 type service struct{ repo Repository }
@@ -122,3 +124,8 @@ func (s *service) RecordPayment(id, businessID uuid.UUID, amount int64, note str
 func (s *service) ListPayments(id, businessID uuid.UUID) ([]Payment, error) {
 	return s.repo.ListPayments(id, businessID)
 }
+
+func (s *service) GetAging(businessID uuid.UUID, asOf time.Time) (*AgingReport, error) {
+	return s.repo.GetAging(businessID, asOf)
+}
+

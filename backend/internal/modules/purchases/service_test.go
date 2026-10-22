@@ -28,6 +28,10 @@ func (r *testRepository) Receive(uuid.UUID, uuid.UUID, []ReceiveItemInput, Inven
 func (r *testRepository) ListPaginated(uuid.UUID, int, int, *string, *uuid.UUID, *string, *string, *string) ([]Purchase, int64, error) {
 	return nil, 0, nil
 }
+func (r *testRepository) Update(uuid.UUID, uuid.UUID, uuid.UUID, int64, string, *time.Time, []PurchaseLineItem) (*Purchase, error) {
+	return nil, nil
+}
+func (r *testRepository) Delete(uuid.UUID, uuid.UUID) error { return nil }
 
 func TestCreateCalculatesPurchaseTotal(t *testing.T) {
 	repo := &testRepository{}

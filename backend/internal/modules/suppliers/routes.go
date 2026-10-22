@@ -17,4 +17,5 @@ func RegisterRoutes(rg *gin.RouterGroup, db *gorm.DB, cfg *config.Config) {
 	group.POST("/:id/restore", handler.Restore)
 	group.POST("/:id/payments", handler.RecordPayment)
 	group.GET("/:id/payments", handler.ListPayments)
+	group.GET("/aging", handler.Aging)
 }

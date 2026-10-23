@@ -1,3 +1,2 @@
 [config]
 model = "deepseek/deepseek-v4-flash"
-fallback_models = ["deepseek/deepseek-v4-flash"]   

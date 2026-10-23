@@ -84,10 +84,18 @@ type Service interface {
 
 func validRole(role string) bool { return role == "owner" || role == "manager" || role == "cashier" }
 
+// normalizeEmail trims and lowercases an address so storage and lookups are
+// case-insensitive, matching the normalization used by identity providers
+// such as Google.
+func normalizeEmail(email string) string {
+	return strings.ToLower(strings.TrimSpace(email))
+}
+
 func (s *service) CreateTeamUser(input RegisterInput) (*User, error) {
 	if !validRole(input.Role) {
 		return nil, ErrInvalidRole
 	}
+	input.Email = normalizeEmail(input.Email)
 	if _, err := s.repo.FindByEmail(input.Email); err == nil {
 		return nil, ErrEmailTaken
 	}
@@ -123,6 +131,7 @@ func NewService(repo Repository, cfg *config.Config, businesses BusinessChecker,
 }
 
 func (s *service) Register(input RegisterInput) (*AuthResult, error) {
+	input.Email = normalizeEmail(input.Email)
 	exists, err := s.businesses.Exists(input.BusinessID)
 	if err != nil {
 		return nil, err
@@ -158,6 +167,7 @@ func (s *service) Register(input RegisterInput) (*AuthResult, error) {
 }
 
 func (s *service) Login(input LoginInput) (*AuthResult, error) {
+	input.Email = normalizeEmail(input.Email)
 	user, err := s.repo.FindByEmail(input.Email)
 	if err != nil {
 		return nil, ErrInvalidCredentials
@@ -188,6 +198,7 @@ func (s *service) GoogleLogin(ctx context.Context, input GoogleLoginInput) (*Aut
 	if !identity.EmailVerified {
 		return nil, ErrUnverifiedGoogleEmail
 	}
+	identity.Email = normalizeEmail(identity.Email)
 
 	user, err := s.repo.FindByGoogleID(identity.Subject)
 	if err == nil {

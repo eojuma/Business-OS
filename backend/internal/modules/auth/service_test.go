@@ -12,7 +12,10 @@ import (
 	"gorm.io/gorm"
 )
 
-const testCredential = "token"
+const (
+	testCredential = "token"
+	testRoleOwner  = "owner"
+)
 
 type fakeRepository struct {
 	users   []*User
@@ -142,7 +145,7 @@ func googleIdentity(sub, email string, verified bool) *GoogleIdentity {
 
 func TestGoogleLoginExistingUser(t *testing.T) {
 	sub := "google-sub-1"
-	user := &User{ID: uuid.New(), BusinessID: uuid.New(), Name: "Existing", Email: "existing@example.com", GoogleID: &sub, Role: "owner", Active: true}
+	user := &User{ID: uuid.New(), BusinessID: uuid.New(), Name: "Existing", Email: "existing@example.com", GoogleID: &sub, Role: testRoleOwner, Active: true}
 	repo := &fakeRepository{users: []*User{user}}
 	creator := &fakeBusinessCreator{}
 	svc := testService(repo, &fakeVerifier{identity: googleIdentity(sub, user.Email, true)}, creator)
@@ -164,7 +167,7 @@ func TestGoogleLoginExistingUser(t *testing.T) {
 
 func TestGoogleLoginRejectsLinkingPasswordAccount(t *testing.T) {
 	hash := "existing-hash"
-	user := &User{ID: uuid.New(), BusinessID: uuid.New(), Name: "Password User", Email: "link@example.com", PasswordHash: &hash, Role: "owner", Active: true}
+	user := &User{ID: uuid.New(), BusinessID: uuid.New(), Name: "Password User", Email: "link@example.com", PasswordHash: &hash, Role: testRoleOwner, Active: true}
 	repo := &fakeRepository{users: []*User{user}}
 	svc := testService(repo, &fakeVerifier{identity: googleIdentity("google-sub-2", user.Email, true)}, nil)
 
@@ -294,7 +297,7 @@ func TestLoginStillAcceptsPasswordAccount(t *testing.T) {
 		t.Fatalf("hash password: %v", err)
 	}
 	hashStr := string(hash)
-	user := &User{ID: uuid.New(), BusinessID: uuid.New(), Email: "password@example.com", PasswordHash: &hashStr, Role: "owner", Active: true}
+	user := &User{ID: uuid.New(), BusinessID: uuid.New(), Email: "password@example.com", PasswordHash: &hashStr, Role: testRoleOwner, Active: true}
 	svc := testService(&fakeRepository{users: []*User{user}}, nil, nil)
 
 	result, err := svc.Login(LoginInput{Email: user.Email, Password: "password123"})

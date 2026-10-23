@@ -163,23 +163,22 @@ func (r *repository) SetPaymentDueDateTx(tx *gorm.DB, id, businessID uuid.UUID, 
 	return &dueDate, nil
 }
 
-
 // AgingReport represents the supplier aging report.
 type AgingReport struct {
-	Current       []AgingSupplier `json:"current"`
-	Days1_30      []AgingSupplier `json:"days_1_30"`
-	Days31_60     []AgingSupplier `json:"days_31_60"`
-	Days61_90     []AgingSupplier `json:"days_61_90"`
-	Days90Plus    []AgingSupplier `json:"days_90_plus"`
-	Totals        AgingTotals     `json:"totals"`
+	Current    []AgingSupplier `json:"current"`
+	Days1_30   []AgingSupplier `json:"days_1_30"`
+	Days31_60  []AgingSupplier `json:"days_31_60"`
+	Days61_90  []AgingSupplier `json:"days_61_90"`
+	Days90Plus []AgingSupplier `json:"days_90_plus"`
+	Totals     AgingTotals     `json:"totals"`
 }
 
 type AgingSupplier struct {
-	ID             uuid.UUID  `json:"id"`
-	Name           string     `json:"name"`
-	Outstanding    int64      `json:"outstanding"`
-	DueDate        *time.Time `json:"due_date"`
-	DaysOverdue    int        `json:"days_overdue"`
+	ID          uuid.UUID  `json:"id"`
+	Name        string     `json:"name"`
+	Outstanding int64      `json:"outstanding"`
+	DueDate     *time.Time `json:"due_date"`
+	DaysOverdue int        `json:"days_overdue"`
 }
 
 type AgingTotals struct {
@@ -191,9 +190,17 @@ type AgingTotals struct {
 	Total      int64 `json:"total"`
 }
 
+// startOfUTCDay converts an instant to UTC before taking its calendar fields,
+// so the same instant always maps to the same day regardless of the RFC3339
+// offset it arrived with.
+func startOfUTCDay(t time.Time) time.Time {
+	t = t.UTC()
+	return time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, time.UTC)
+}
+
 func daysPastDue(dueDate, asOf time.Time) int {
-	due := time.Date(dueDate.Year(), dueDate.Month(), dueDate.Day(), 0, 0, 0, 0, time.UTC)
-	ref := time.Date(asOf.Year(), asOf.Month(), asOf.Day(), 0, 0, 0, 0, time.UTC)
+	due := startOfUTCDay(dueDate)
+	ref := startOfUTCDay(asOf)
 	days := int(ref.Sub(due).Hours() / 24)
 	if days < 1 {
 		return 1

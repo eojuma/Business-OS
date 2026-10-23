@@ -54,6 +54,7 @@ export function GoogleSignIn({
   useEffect(() => {
     if (!clientId) return;
     let cancelled = false;
+    let script: HTMLScriptElement | null = null;
 
     const render = () => {
       if (cancelled || !containerRef.current) return;
@@ -86,26 +87,46 @@ export function GoogleSignIn({
       });
     };
 
-    const existing = document.getElementById(SCRIPT_ID);
+    // Always drop a script that failed to load, even if this mount has already
+    // been unmounted. Otherwise a later mount would attach a load listener to
+    // an element that never fires again and the button would stay blank.
+    const reportLoadFailure = () => {
+      script?.remove();
+      if (!cancelled) {
+        errorRef.current?.("Could not load Google sign-in.");
+      }
+    };
+
+    const existing = document.getElementById(SCRIPT_ID) as HTMLScriptElement | null;
     if (existing) {
       if (window.google?.accounts?.id) {
         render();
-      } else {
-        existing.addEventListener("load", render);
+        return () => {
+          cancelled = true;
+        };
       }
+      script = existing;
+      const onLoad = () => {
+        if (!cancelled) render();
+      };
+      existing.addEventListener("load", onLoad);
+      existing.addEventListener("error", reportLoadFailure);
       return () => {
         cancelled = true;
-        existing.removeEventListener("load", render);
+        existing.removeEventListener("load", onLoad);
+        existing.removeEventListener("error", reportLoadFailure);
       };
     }
 
-    const script = document.createElement("script");
+    script = document.createElement("script");
     script.id = SCRIPT_ID;
     script.src = "https://accounts.google.com/gsi/client";
     script.async = true;
     script.defer = true;
-    script.onload = render;
-    script.onerror = () => errorRef.current?.("Could not load Google sign-in.");
+    script.onload = () => {
+      if (!cancelled) render();
+    };
+    script.onerror = reportLoadFailure;
     document.head.appendChild(script);
 
     return () => {

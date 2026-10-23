@@ -47,6 +47,13 @@ func setupTestDB(t *testing.T) (*gorm.DB, uuid.UUID) {
 
 	db := database.NewPostgresFromURL(testDBURL)
 
+	// Pin the pool to a single connection so the session-level
+	// SET search_path below applies to every query, including the
+	// migration connection pinned by migrations.Up.
+	if sqlDB, err := db.DB(); err == nil {
+		sqlDB.SetMaxOpenConns(1)
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if err := db.WithContext(ctx).Exec("SELECT 1").Error; err != nil {

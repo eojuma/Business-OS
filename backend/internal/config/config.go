@@ -31,6 +31,10 @@ type Config struct {
 	JWTSecret      string
 	JWTExpiryHours int
 
+	// GoogleClientID is the OAuth 2.0 Web client ID used to verify Google
+	// Identity Services ID tokens. When empty, /auth/google returns 503.
+	GoogleClientID string
+
 	AIProvider string
 	AIAPIKey   string
 	AIModel    string
@@ -64,6 +68,8 @@ func Load() *Config {
 
 		JWTSecret:      getEnv("JWT_SECRET", "dev_secret_change_me"),
 		JWTExpiryHours: getEnvInt("JWT_EXPIRY_HOURS", 24),
+
+		GoogleClientID: getEnv("GOOGLE_CLIENT_ID", ""),
 
 		AIProvider: getEnv("AI_PROVIDER", "gemini"),
 		AIAPIKey:   getEnv("AI_API_KEY", ""),

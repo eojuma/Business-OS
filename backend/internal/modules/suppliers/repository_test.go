@@ -3,7 +3,9 @@ package suppliers
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -26,19 +28,27 @@ func setupTestDB(t *testing.T) (*gorm.DB, uuid.UUID) {
 		t.Skip("TEST_DATABASE_URL not set, skipping integration test")
 	}
 
+	parsedURL, err := url.Parse(testDBURL)
+	if err != nil || parsedURL.Hostname() == "" || parsedURL.User == nil {
+		t.Fatalf("invalid TEST_DATABASE_URL: %v", err)
+	}
+
 	cfg := config.Load()
-
-	// Parse TEST_DATABASE_URL for host, port, user, password, dbname
-	// Format: postgres://user:password@host:port/dbname?sslmode=disable
-	// For simplicity, we'll parse basic format
-	_ = testDBURL // suppress unused warning for now
-
-	cfg.DBName = "businessos_test"
-	cfg.DBHost = "localhost"
-	cfg.DBPort = "5432"
-	cfg.DBUser = "businessos"
-	cfg.DBPassword = "businessos"
-	cfg.DBSSLMode = "disable"
+	cfg.DBHost = parsedURL.Hostname()
+	if port := parsedURL.Port(); port != "" {
+		cfg.DBPort = port
+	}
+	cfg.DBUser = parsedURL.User.Username()
+	cfg.DBPassword = ""
+	if password, ok := parsedURL.User.Password(); ok {
+		cfg.DBPassword = password
+	}
+	if dbName := strings.TrimPrefix(parsedURL.Path, "/"); dbName != "" {
+		cfg.DBName = dbName
+	}
+	if sslMode := parsedURL.Query().Get("sslmode"); sslMode != "" {
+		cfg.DBSSLMode = sslMode
+	}
 
 	db := database.NewPostgres(cfg)
 
@@ -53,7 +63,7 @@ func setupTestDB(t *testing.T) (*gorm.DB, uuid.UUID) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if err := db.WithContext(ctx).Exec("SELECT 1").Error; err != nil {
-		t.Skipf("Database not reachable, skipping integration test: %v", err)
+		t.Fatalf("Database not reachable: %v", err)
 	}
 
 	if err := migrations.Up(db); err != nil {

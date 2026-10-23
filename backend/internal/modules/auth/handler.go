@@ -187,7 +187,7 @@ func (h *Handler) Google(c *gin.Context) {
 	case errors.Is(err, ErrInvalidGoogleToken), errors.Is(err, ErrUnverifiedGoogleEmail):
 		response.Error(c, http.StatusUnauthorized, err.Error())
 		return
-	case errors.Is(err, ErrWorkspaceRequired), errors.Is(err, ErrGoogleAccountConflict), errors.Is(err, ErrEmailTaken):
+	case errors.Is(err, ErrWorkspaceRequired), errors.Is(err, ErrGoogleAccountConflict), errors.Is(err, ErrGoogleLinkRequiresPassword), errors.Is(err, ErrEmailTaken):
 		response.Error(c, http.StatusConflict, err.Error())
 		return
 	case errors.Is(err, ErrInactiveUser):

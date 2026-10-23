@@ -33,6 +33,9 @@ func (v *idTokenVerifier) Verify(ctx context.Context, credential string) (*Googl
 	if err != nil {
 		return nil, err
 	}
+	if payload.Issuer != "accounts.google.com" && payload.Issuer != "https://accounts.google.com" {
+		return nil, fmt.Errorf("google id token: unexpected issuer %q", payload.Issuer)
+	}
 
 	email, _ := payload.Claims["email"].(string)
 	verified, _ := payload.Claims["email_verified"].(bool)

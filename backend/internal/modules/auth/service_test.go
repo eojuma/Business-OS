@@ -161,9 +161,22 @@ func TestGoogleLoginExistingUser(t *testing.T) {
 	}
 }
 
-func TestGoogleLoginLinksExistingEmailAccount(t *testing.T) {
+func TestGoogleLoginRejectsLinkingPasswordAccount(t *testing.T) {
 	hash := "existing-hash"
 	user := &User{ID: uuid.New(), BusinessID: uuid.New(), Name: "Password User", Email: "link@example.com", PasswordHash: &hash, Role: "owner", Active: true}
+	repo := &fakeRepository{users: []*User{user}}
+	svc := testService(repo, &fakeVerifier{identity: googleIdentity("google-sub-2", user.Email, true)}, nil)
+
+	if _, err := svc.GoogleLogin(context.Background(), GoogleLoginInput{Credential: testCredential}); err != ErrGoogleLinkRequiresPassword {
+		t.Fatalf("error = %v, want %v", err, ErrGoogleLinkRequiresPassword)
+	}
+	if repo.setID != uuid.Nil || user.GoogleID != nil {
+		t.Fatal("a password account must not be linked to a google identity")
+	}
+}
+
+func TestGoogleLoginLinksPasswordlessEmailAccount(t *testing.T) {
+	user := &User{ID: uuid.New(), BusinessID: uuid.New(), Name: "Google User", Email: "link@example.com", Active: true}
 	repo := &fakeRepository{users: []*User{user}}
 	svc := testService(repo, &fakeVerifier{identity: googleIdentity("google-sub-2", user.Email, true)}, nil)
 
@@ -317,6 +330,7 @@ func TestGoogleTokenVerifierMapsClaims(t *testing.T) {
 		audience: "client-id",
 		validate: func(context.Context, string, string) (*idtoken.Payload, error) {
 			return &idtoken.Payload{
+				Issuer:  "accounts.google.com",
 				Subject: "subject-1",
 				Claims: map[string]interface{}{
 					"email":          "person@example.com",
@@ -333,5 +347,25 @@ func TestGoogleTokenVerifierMapsClaims(t *testing.T) {
 	}
 	if identity.Subject != "subject-1" || identity.Email != "person@example.com" || !identity.EmailVerified || identity.Name != "Person" {
 		t.Fatalf("unexpected identity: %+v", identity)
+	}
+}
+
+func TestGoogleTokenVerifierRejectsUnexpectedIssuer(t *testing.T) {
+	verifier := &idTokenVerifier{
+		audience: "client-id",
+		validate: func(context.Context, string, string) (*idtoken.Payload, error) {
+			return &idtoken.Payload{
+				Issuer:  "accounts.example.com",
+				Subject: "subject-1",
+				Claims: map[string]interface{}{
+					"email":          "person@example.com",
+					"email_verified": true,
+				},
+			}, nil
+		},
+	}
+
+	if _, err := verifier.Verify(context.Background(), "credential"); err == nil {
+		t.Fatal("expected a non-Google issuer to be rejected")
 	}
 }

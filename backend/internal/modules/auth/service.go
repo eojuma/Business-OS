@@ -14,17 +14,18 @@ import (
 )
 
 var (
-	ErrInvalidCredentials    = errors.New("invalid email or password")
-	ErrUseGoogleSignIn       = errors.New("this account uses Google sign-in; continue with Google")
-	ErrEmailTaken            = errors.New("email already registered")
-	ErrBusinessNotFound      = errors.New("business does not exist")
-	ErrInvalidRole           = errors.New("role must be owner, manager, or cashier")
-	ErrGoogleAuthUnavailable = errors.New("google sign-in is not configured")
-	ErrInvalidGoogleToken    = errors.New("invalid google credential")
-	ErrUnverifiedGoogleEmail = errors.New("google account email is not verified")
-	ErrGoogleAccountConflict = errors.New("this email is linked to a different google account")
-	ErrWorkspaceRequired     = errors.New("no workspace is linked to this google account; create one to continue")
-	ErrInactiveUser          = errors.New("user account is inactive")
+	ErrInvalidCredentials         = errors.New("invalid email or password")
+	ErrUseGoogleSignIn            = errors.New("this account uses Google sign-in; continue with Google")
+	ErrEmailTaken                 = errors.New("email already registered")
+	ErrBusinessNotFound           = errors.New("business does not exist")
+	ErrInvalidRole                = errors.New("role must be owner, manager, or cashier")
+	ErrGoogleAuthUnavailable      = errors.New("google sign-in is not configured")
+	ErrInvalidGoogleToken         = errors.New("invalid google credential")
+	ErrUnverifiedGoogleEmail      = errors.New("google account email is not verified")
+	ErrGoogleAccountConflict      = errors.New("this email is linked to a different google account")
+	ErrGoogleLinkRequiresPassword = errors.New("this email already has a password; sign in with your password instead")
+	ErrWorkspaceRequired          = errors.New("no workspace is linked to this google account; create one to continue")
+	ErrInactiveUser               = errors.New("user account is inactive")
 )
 
 type BusinessChecker interface {
@@ -208,6 +209,9 @@ func (s *service) GoogleLogin(ctx context.Context, input GoogleLoginInput) (*Aut
 			return nil, ErrGoogleAccountConflict
 		}
 		if user.GoogleID == nil {
+			if user.PasswordHash != nil {
+				return nil, ErrGoogleLinkRequiresPassword
+			}
 			if err := s.repo.SetGoogleID(user.ID, identity.Subject); err != nil {
 				return nil, err
 			}

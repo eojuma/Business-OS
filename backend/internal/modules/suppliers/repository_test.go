@@ -751,15 +751,23 @@ func TestDaysPastDue(t *testing.T) {
 	tests := []struct {
 		name string
 		due  time.Time
+		asOf time.Time
 		want int
 	}{
 		{name: "less than one day", due: time.Date(2026, time.January, 15, 9, 0, 0, 0, time.UTC), want: 1},
 		{name: "previous calendar day", due: time.Date(2026, time.January, 14, 12, 0, 0, 0, time.UTC), want: 1},
 		{name: "ten days", due: asOf.AddDate(0, 0, -10), want: 10},
+		// The same instant must land in the same bucket regardless of offset.
+		{name: "negative offset", due: time.Date(2026, time.January, 1, 0, 0, 0, 0, time.UTC), asOf: time.Date(2026, time.January, 31, 23, 30, 0, 0, time.FixedZone("", -2*3600)), want: 31},
+		{name: "utc equivalent", due: time.Date(2026, time.January, 1, 0, 0, 0, 0, time.UTC), asOf: time.Date(2026, time.February, 1, 1, 30, 0, 0, time.UTC), want: 31},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := daysPastDue(tt.due, asOf); got != tt.want {
+			ref := asOf
+			if !tt.asOf.IsZero() {
+				ref = tt.asOf
+			}
+			if got := daysPastDue(tt.due, ref); got != tt.want {
 				t.Fatalf("daysPastDue() = %d, want %d", got, tt.want)
 			}
 		})

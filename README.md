@@ -153,6 +153,33 @@ Health check: `curl http://localhost:8080/health` should return `{"status":"ok"}
 
 ---
 
+## Theming (light / dark)
+
+The frontend supports **light**, **dark**, and **system** themes. The toggle lives in the sidebar footer (desktop), the mobile header, and the login/signup pages.
+
+- **Preference:** stored in `localStorage` under the `theme` key (`light`, `dark`, or `system`) and defaults to `system`, which follows the OS `prefers-color-scheme`.
+- **No flash:** an inline script in `frontend/app/layout.tsx` applies the `dark` class to `<html>` before first paint. `<html>` uses `suppressHydrationWarning` so the script-set class doesn't trigger a hydration mismatch.
+- **Implementation:** `frontend/lib/theme-provider.tsx` owns state and persistence; `frontend/components/theme-toggle.tsx` renders the accessible segmented control (`aria-pressed`, keyboard focus ring).
+
+### Adding dark styles to new components
+
+Do not hardcode hex colours. Use the semantic tokens defined in `frontend/app/globals.css` and mapped in `frontend/tailwind.config.ts`:
+
+| Token | Purpose |
+|---|---|
+| `bg-background` / `text-foreground` | Page background and primary text |
+| `bg-card` | Panels, cards, inputs, sidebar |
+| `bg-surface-muted` | Inset/secondary surfaces (table striping, skeletons) |
+| `text-muted` / `text-subtle` | Secondary and tertiary text |
+| `border-border` / `border-border-subtle` | Dividers and outlines |
+| `bg-hover` | Hover surface |
+| `text-primary`, `bg-primary-solid`, `bg-primary-soft`, `text-primary-hover` | Brand actions and accents |
+| `text-warning`, `bg-warning-soft`, `text-danger`, `bg-danger-soft` | Status colours |
+
+Each token has a light value on `:root` and a dark value under `.dark` in `globals.css`, so using the token classes is enough — no `dark:` variants needed. The values are space-separated RGB channels, so opacity modifiers such as `bg-primary/10` work.
+
+---
+
 ## Try the working flow
 
 The full loop — sign up, add a product, restock it, sell it, see it in reports — works end to end through the actual UI at `http://localhost:3000/signup`. Or via curl:

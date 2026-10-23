@@ -44,30 +44,30 @@ export default function ReportsPage() {
   const totalSales = summaries.reduce((sum, s) => sum + s.sale_count, 0);
 
   if (loading) return <main className="p-8">Loading report...</main>;
-  if (error) return <main className="p-8 text-red-600">{error}</main>;
+  if (error) return <main className="p-8 text-danger">{error}</main>;
 
   return (
     <main className="min-h-screen p-8">
       <h1 className="mb-2 text-2xl font-semibold">Daily Sales Report</h1>
-      <p className="mb-6 text-sm text-gray-500">Last 30 days</p>
+      <p className="mb-6 text-sm text-muted">Last 30 days</p>
 
       <div className="mb-6 grid max-w-2xl gap-4 sm:grid-cols-2">
-        <div className="rounded-lg border border-gray-200 p-4">
-          <p className="text-sm text-gray-500">Total Revenue</p>
+        <div className="rounded-lg border border-border-subtle p-4">
+          <p className="text-sm text-muted">Total Revenue</p>
           <p className="text-2xl font-semibold">KSh {formatMoney(totalRevenue)}</p>
         </div>
-        <div className="rounded-lg border border-gray-200 p-4">
-          <p className="text-sm text-gray-500">Total Sales</p>
+        <div className="rounded-lg border border-border-subtle p-4">
+          <p className="text-sm text-muted">Total Sales</p>
           <p className="text-2xl font-semibold">{totalSales}</p>
         </div>
       </div>
 
       {summaries.length === 0 ? (
-        <p className="text-gray-500">No sales recorded in this period yet.</p>
+        <p className="text-muted">No sales recorded in this period yet.</p>
       ) : (
         <table className="w-full max-w-2xl border-collapse text-left">
           <thead>
-            <tr className="border-b border-gray-200 text-sm text-gray-500">
+            <tr className="border-b border-border-subtle text-sm text-muted">
               <th className="py-2">Date</th>
               <th className="py-2 text-right">Sales</th>
               <th className="py-2 text-right">Revenue</th>
@@ -75,7 +75,7 @@ export default function ReportsPage() {
           </thead>
           <tbody>
             {summaries.map((s) => (
-              <tr key={s.date} className="border-b border-gray-100">
+              <tr key={s.date} className="border-b border-border-subtle">
                 <td className="py-2">{formatDate(s.date)}</td>
                 <td className="py-2 text-right">{s.sale_count}</td>
                 <td className="py-2 text-right">KSh {formatMoney(s.total_revenue)}</td>

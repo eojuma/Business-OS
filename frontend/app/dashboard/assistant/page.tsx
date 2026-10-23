@@ -111,14 +111,14 @@ export default function AssistantPage() {
   return (
     <main className="flex min-h-screen flex-col p-8">
       <h1 className="mb-2 text-2xl font-semibold">Assistant</h1>
-      <p className="mb-6 text-sm text-gray-500">
+      <p className="mb-6 text-sm text-muted">
         Try &quot;sold 3 cement&quot; to record a sale, or ask &quot;what&apos;s my
         profit today?&quot;. Nothing is saved until you confirm.
       </p>
 
       <div className="mb-4 max-w-2xl flex-1 space-y-3">
         {entries.length === 0 && (
-          <p className="text-sm text-gray-400">No messages yet.</p>
+          <p className="text-sm text-subtle">No messages yet.</p>
         )}
 
         {entries.map((entry, index) => (
@@ -127,7 +127,7 @@ export default function AssistantPage() {
             className={`rounded-lg p-3 text-sm ${
               entry.role === "user"
                 ? "ml-auto max-w-[80%] bg-brand-600 text-white"
-                : "max-w-[80%] bg-gray-100 text-gray-900"
+                : "max-w-[80%] bg-surface-muted text-foreground"
             }`}
           >
             <p>{entry.text}</p>
@@ -144,7 +144,7 @@ export default function AssistantPage() {
                 <button
                   onClick={() => handleDismiss(index)}
                   disabled={loading}
-                  className="rounded border border-gray-300 px-3 py-1 text-gray-600"
+                  className="rounded border border-border px-3 py-1 text-muted"
                 >
                   Cancel
                 </button>
@@ -160,7 +160,7 @@ export default function AssistantPage() {
           placeholder='e.g. "sold 3 cement"'
           value={input}
           onChange={(e) => setInput(e.target.value)}
-          className="flex-1 rounded border border-gray-300 px-3 py-2"
+          className="flex-1 rounded border border-border px-3 py-2"
           disabled={loading}
         />
         <button

@@ -221,10 +221,10 @@ export default function ReceiptsPage() {
         description="Photograph a receipt, review what was read, then save it as a purchase or a sale."
       />
 
-      {loadError && <p className="mb-4 rounded-lg bg-red-50 p-3 text-sm text-red-700">{loadError}</p>}
+      {loadError && <p className="mb-4 rounded-lg bg-danger-soft p-3 text-sm text-danger">{loadError}</p>}
 
       {saved && (
-        <div className="mb-6 flex items-center gap-2 rounded-lg bg-[#e7f4ec] p-4 text-sm text-[#12633e]">
+        <div className="mb-6 flex items-center gap-2 rounded-lg bg-primary-soft p-4 text-sm text-primary-hover">
           <Check size={18} />
           <p>
             Saved as a {saved.record_type} — {formatMoney(saved.total_amount)}. Reference {saved.id.slice(0, 8).toUpperCase()}.
@@ -235,10 +235,10 @@ export default function ReceiptsPage() {
       <div className="grid gap-6 xl:grid-cols-[.8fr_1.2fr]">
         <section className="panel h-fit space-y-4 p-5">
           <p className="eyebrow">1. Upload a receipt</p>
-          <label className="flex cursor-pointer flex-col items-center justify-center gap-2 rounded-xl border border-dashed border-[#cfd8d0] p-6 text-center hover:bg-[#f7f9f6]">
-            <Upload size={22} className="text-[#16794c]" />
+          <label className="flex cursor-pointer flex-col items-center justify-center gap-2 rounded-xl border border-dashed border-border p-6 text-center hover:bg-hover">
+            <Upload size={22} className="text-primary" />
             <span className="text-sm font-medium">{file ? file.name : "Choose or take a photo"}</span>
-            <span className="text-xs text-[#8a958d]">JPEG, PNG or WebP · up to 10 MB</span>
+            <span className="text-xs text-subtle">JPEG, PNG or WebP · up to 10 MB</span>
             <input
               ref={fileInput}
               type="file"
@@ -250,7 +250,7 @@ export default function ReceiptsPage() {
 
           {previewUrl && (
             /* eslint-disable-next-line @next/next/no-img-element */
-            <img src={previewUrl} alt="Receipt preview" className="max-h-72 w-full rounded-lg border border-[#eef1ed] object-contain" />
+            <img src={previewUrl} alt="Receipt preview" className="max-h-72 w-full rounded-lg border border-border-subtle object-contain" />
           )}
 
           <button className="btn-primary w-full py-2.5" onClick={handleScan} disabled={!file || scanning}>
@@ -258,9 +258,9 @@ export default function ReceiptsPage() {
             {scanning ? "Reading receipt..." : "Scan receipt"}
           </button>
 
-          {scanError && <p className="rounded-lg bg-red-50 p-3 text-sm text-red-700">{scanError}</p>}
+          {scanError && <p className="rounded-lg bg-danger-soft p-3 text-sm text-danger">{scanError}</p>}
 
-          <div className="flex items-start gap-2 rounded-lg bg-[#fff8e8] p-3 text-xs text-[#8a6d1f]">
+          <div className="flex items-start gap-2 rounded-lg bg-warning-soft p-3 text-xs text-warning-strong">
             <AlertTriangle size={15} className="mt-0.5 shrink-0" />
             <p>
               OCR is not perfect, especially on handwritten or faded receipts. Check every line before saving — nothing is
@@ -271,7 +271,7 @@ export default function ReceiptsPage() {
 
         <section className="space-y-6">
           {!scan ? (
-            <div className="panel p-10 text-center text-sm text-[#718078]">
+            <div className="panel p-10 text-center text-sm text-muted">
               Scan a receipt to review its line items here.
             </div>
           ) : (
@@ -279,19 +279,19 @@ export default function ReceiptsPage() {
               <div className="panel space-y-2 p-5">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <p className="eyebrow">2. Review &amp; correct</p>
-                  <span className="rounded-full bg-[#eef1f4] px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide text-[#52616a]">
+                  <span className="rounded-full bg-surface-muted px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide text-muted">
                     {scan.confidence || "unknown"} confidence
                   </span>
                 </div>
-                <p className="text-sm text-[#526057]">
+                <p className="text-sm text-muted">
                   {scan.merchant || "Unknown merchant"}
                   {scan.date ? ` · ${scan.date}` : ""}
                 </p>
-                {scan.notes && <p className="text-xs text-[#8a958d]">{scan.notes}</p>}
+                {scan.notes && <p className="text-xs text-subtle">{scan.notes}</p>}
               </div>
 
               <div className="panel space-y-3 p-5">
-                <div className="hidden gap-3 text-xs font-semibold uppercase tracking-wide text-[#8a958d] sm:grid sm:grid-cols-[1.6fr_.7fr_.8fr_.8fr_auto]">
+                <div className="hidden gap-3 text-xs font-semibold uppercase tracking-wide text-subtle sm:grid sm:grid-cols-[1.6fr_.7fr_.8fr_.8fr_auto]">
                   <span>Product</span>
                   <span>Qty</span>
                   <span>Unit price</span>
@@ -302,7 +302,7 @@ export default function ReceiptsPage() {
                 {lines.map((line, index) => (
                   <div
                     key={index}
-                    className="grid gap-3 rounded-lg border border-[#eef1ed] p-3 sm:grid-cols-[1.6fr_.7fr_.8fr_.8fr_auto] sm:items-center"
+                    className="grid gap-3 rounded-lg border border-border-subtle p-3 sm:grid-cols-[1.6fr_.7fr_.8fr_.8fr_auto] sm:items-center"
                   >
                     <div className="space-y-1">
                       <select
@@ -318,7 +318,7 @@ export default function ReceiptsPage() {
                         ))}
                       </select>
                       {line.description && (
-                        <p className="text-xs text-[#8a958d]">Read as: “{line.description}”</p>
+                        <p className="text-xs text-subtle">Read as: “{line.description}”</p>
                       )}
                     </div>
                     <input
@@ -342,7 +342,7 @@ export default function ReceiptsPage() {
                     <button
                       type="button"
                       onClick={() => removeLine(index)}
-                      className="justify-self-start rounded-md p-1.5 text-[#a3543f] hover:bg-[#fdeeea]"
+                      className="justify-self-start rounded-md p-1.5 text-danger hover:bg-danger-soft"
                       aria-label="Remove line"
                     >
                       <Trash2 size={15} />
@@ -365,8 +365,8 @@ export default function ReceiptsPage() {
                       onClick={() => setRecordType(t)}
                       className={`rounded-lg border px-3 py-2.5 text-sm font-semibold capitalize transition ${
                         recordType === t
-                          ? "border-[#16794c] bg-[#e7f4ec] text-[#12633e]"
-                          : "border-[#dce7de] text-[#647168] hover:bg-[#f7f9f6]"
+                          ? "border-primary bg-primary-soft text-primary-hover"
+                          : "border-border text-muted hover:bg-hover"
                       }`}
                     >
                       {t}
@@ -421,7 +421,7 @@ export default function ReceiptsPage() {
                         ))}
                       </select>
                     </div>
-                    <p className="text-xs text-[#8a958d]">
+                    <p className="text-xs text-subtle">
                       Sale prices come from your product catalogue, so the final total may differ from the receipt.
                     </p>
                   </div>
@@ -432,18 +432,18 @@ export default function ReceiptsPage() {
                   <input className="field" value={note} onChange={(e) => setNote(e.target.value)} />
                 </div>
 
-                <div className="flex items-center justify-between border-t border-[#eef1ed] pt-4 text-sm">
-                  <span className="text-[#718078]">Reviewed total</span>
+                <div className="flex items-center justify-between border-t border-border-subtle pt-4 text-sm">
+                  <span className="text-muted">Reviewed total</span>
                   <span className="text-xl font-bold">{formatMoney(estimatedTotal)}</span>
                 </div>
 
-                {commitError && <p className="rounded-lg bg-red-50 p-3 text-sm text-red-700">{commitError}</p>}
+                {commitError && <p className="rounded-lg bg-danger-soft p-3 text-sm text-danger">{commitError}</p>}
 
                 <button className="btn-primary w-full py-3" onClick={handleCommit} disabled={!reviewReady || committing}>
                   {committing ? "Saving..." : `Confirm & save ${recordType}`}
                 </button>
                 {!reviewReady && (
-                  <p className="text-xs text-[#8a958d]">
+                  <p className="text-xs text-subtle">
                     Every line needs a product and a quantity{recordType === "purchase" ? ", and a supplier must be selected" : ""}.
                   </p>
                 )}

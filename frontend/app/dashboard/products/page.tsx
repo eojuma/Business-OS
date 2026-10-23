@@ -106,17 +106,17 @@ export default function ProductsPage() {
 
       <form
         onSubmit={handleSubmit}
-        className="mb-8 grid max-w-2xl gap-3 rounded-lg border border-gray-200 p-4 sm:grid-cols-2"
+        className="mb-8 grid max-w-2xl gap-3 rounded-lg border border-border-subtle p-4 sm:grid-cols-2"
       >
         {formError && (
-          <p className="text-sm text-red-600 sm:col-span-2">{formError}</p>
+          <p className="text-sm text-danger sm:col-span-2">{formError}</p>
         )}
         <input
           type="text"
           placeholder="Name (e.g. Cement 50kg)"
           value={name}
           onChange={(e) => setName(e.target.value)}
-          className="rounded border border-gray-300 px-3 py-2"
+          className="rounded border border-border px-3 py-2"
           required
         />
         <input
@@ -124,14 +124,14 @@ export default function ProductsPage() {
           placeholder="Category (e.g. Building Materials)"
           value={category}
           onChange={(e) => setCategory(e.target.value)}
-          className="rounded border border-gray-300 px-3 py-2"
+          className="rounded border border-border px-3 py-2"
         />
         <input
           type="text"
           placeholder="Unit (e.g. bag, piece, kg)"
           value={unit}
           onChange={(e) => setUnit(e.target.value)}
-          className="rounded border border-gray-300 px-3 py-2"
+          className="rounded border border-border px-3 py-2"
           required
         />
         <input
@@ -139,7 +139,7 @@ export default function ProductsPage() {
           placeholder="Price (KSh, e.g. 450.50)"
           value={priceInput}
           onChange={(e) => setPriceInput(e.target.value)}
-          className="rounded border border-gray-300 px-3 py-2"
+          className="rounded border border-border px-3 py-2"
           required
         />
         <button
@@ -154,13 +154,13 @@ export default function ProductsPage() {
       {loading ? (
         <p>Loading products...</p>
       ) : error ? (
-        <p className="text-red-600">{error}</p>
+        <p className="text-danger">{error}</p>
       ) : products.length === 0 ? (
-        <p className="text-gray-500">No products yet — add your first one above.</p>
+        <p className="text-muted">No products yet — add your first one above.</p>
       ) : (
         <table className="w-full max-w-2xl border-collapse text-left">
           <thead>
-            <tr className="border-b border-gray-200 text-sm text-gray-500">
+            <tr className="border-b border-border-subtle text-sm text-muted">
               <th className="py-2">Name</th>
               <th className="py-2">Category</th>
               <th className="py-2">Unit</th>
@@ -170,7 +170,7 @@ export default function ProductsPage() {
           </thead>
           <tbody>
             {products.map((p) => (
-              <tr key={p.id} className="border-b border-gray-100">
+              <tr key={p.id} className="border-b border-border-subtle">
                 <td className="py-2">{p.name}</td>
                 <td className="py-2">{p.category || "—"}</td>
                 <td className="py-2">{p.unit}</td>
@@ -183,7 +183,7 @@ export default function ProductsPage() {
                         value={editPrice}
                         onChange={(e) => setEditPrice(e.target.value)}
                         placeholder="New price"
-                        className="w-24 rounded border border-gray-300 px-2 py-1 text-sm"
+                        className="w-24 rounded border border-border px-2 py-1 text-sm"
                       />
                       <button
                         onClick={() => savePrice(p.id)}
@@ -197,7 +197,7 @@ export default function ProductsPage() {
                           setEditingId(null);
                           setEditPrice("");
                         }}
-                        className="text-xs text-gray-500"
+                        className="text-xs text-muted"
                       >
                         Cancel
                       </button>

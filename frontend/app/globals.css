@@ -2,17 +2,78 @@
 @tailwind components;
 @tailwind utilities;
 
-:root { --ink: #17211b; --muted: #6d796f; --line: #e5e9e4; --paper: #f7f9f6; --green: #16794c; --amber: #c78222; }
+/**
+ * Semantic theme tokens.
+ *
+ * Values are space-separated RGB channels so Tailwind can compose them with
+ * opacity modifiers (for example `bg-primary/10`). The light values live on
+ * :root; the `.dark` class on <html> switches to the dark palette.
+ */
+:root {
+  --background: 247 249 246;
+  --foreground: 23 33 27;
+  --card: 255 255 255;
+  --surface-muted: 242 245 241;
+  --muted: 113 128 120;
+  --subtle: 138 149 141;
+  --border: 229 233 228;
+  --border-subtle: 238 241 237;
+  --hover: 242 245 241;
+  --primary: 22 121 76;
+  --primary-solid: 22 121 76;
+  --primary-solid-hover: 18 99 62;
+  --primary-foreground: 255 255 255;
+  --primary-hover: 18 99 62;
+  --primary-soft: 231 244 236;
+  --primary-deep: 21 61 43;
+  --primary-light: 142 210 170;
+  --primary-light-muted: 168 200 181;
+  --warning: 199 130 34;
+  --warning-strong: 179 111 22;
+  --warning-soft: 255 243 223;
+  --danger: 163 84 63;
+  --danger-soft: 253 238 234;
+  color-scheme: light;
+}
+
+.dark {
+  --background: 15 21 18;
+  --foreground: 232 239 234;
+  --card: 22 29 25;
+  --surface-muted: 29 38 33;
+  --muted: 154 168 160;
+  --subtle: 127 140 132;
+  --border: 42 53 47;
+  --border-subtle: 35 45 39;
+  --hover: 30 40 34;
+  --primary: 74 222 148;
+  --primary-solid: 22 121 76;
+  --primary-solid-hover: 18 99 62;
+  --primary-foreground: 255 255 255;
+  --primary-hover: 110 231 168;
+  --primary-soft: 18 51 38;
+  --primary-deep: 11 36 24;
+  --primary-light: 142 210 170;
+  --primary-light-muted: 168 200 181;
+  --warning: 240 179 82;
+  --warning-strong: 247 200 115;
+  --warning-soft: 58 44 18;
+  --danger: 241 141 117;
+  --danger-soft: 58 31 24;
+  color-scheme: dark;
+}
+
 * { box-sizing: border-box; }
-body { background: var(--paper); color: var(--ink); font-family: Arial, Helvetica, sans-serif; }
+body { background: rgb(var(--background)); color: rgb(var(--foreground)); font-family: Arial, Helvetica, sans-serif; }
 button, input, select, textarea { font: inherit; }
 button { cursor: pointer; }
 button:disabled { cursor: not-allowed; }
-::selection { background: #b7e4c7; }
+::selection { background: rgb(var(--primary) / 0.25); }
+
 @layer components {
-  .panel { @apply rounded-xl border border-[#e5e9e4] bg-white shadow-[0_4px_18px_rgba(23,33,27,0.04)]; }
-  .field { @apply w-full rounded-lg border border-[#d9e0d9] bg-white px-3 py-2.5 text-sm outline-none transition focus:border-[#16794c] focus:ring-2 focus:ring-[#16794c]/10; }
-  .btn-primary { @apply inline-flex items-center justify-center gap-2 rounded-lg bg-[#16794c] px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-[#12633e] disabled:opacity-50; }
-  .btn-secondary { @apply inline-flex items-center justify-center gap-2 rounded-lg border border-[#d9e0d9] bg-white px-4 py-2.5 text-sm font-semibold text-[#344139] transition hover:bg-[#f2f5f1] disabled:opacity-50; }
-  .eyebrow { @apply text-[11px] font-bold uppercase tracking-[0.14em] text-[#718078]; }
+  .panel { @apply rounded-xl border border-border bg-card shadow-[0_4px_18px_rgba(0,0,0,0.06)]; }
+  .field { @apply w-full rounded-lg border border-border bg-card px-3 py-2.5 text-sm text-foreground outline-none transition placeholder:text-subtle focus:border-primary focus:ring-2 focus:ring-primary/10; }
+  .btn-primary { @apply inline-flex items-center justify-center gap-2 rounded-lg bg-primary-solid px-4 py-2.5 text-sm font-semibold text-primary-foreground transition hover:bg-primary-solid-hover disabled:opacity-50; }
+  .btn-secondary { @apply inline-flex items-center justify-center gap-2 rounded-lg border border-border bg-card px-4 py-2.5 text-sm font-semibold text-foreground transition hover:bg-hover disabled:opacity-50; }
+  .eyebrow { @apply text-[11px] font-bold uppercase tracking-[0.14em] text-muted; }
 }

@@ -175,7 +175,7 @@ Behaviour:
   ```
   The user can then sign in with Google again to link the new identity.
 - A Google account with no workspace is rejected with a clear "create a workspace" message; `/signup` then asks for the store name and creates the workspace and owner in one transaction.
-- Google-only users have no local password (`password_hash` is `NULL`); email/password login tells them to continue with Google.
+- Google-only users have no local password (`password_hash` is `NULL`); email/password login returns the same generic credentials error as for unknown addresses, so account type is never disclosed to unauthenticated callers.
 - If `GOOGLE_CLIENT_ID` is empty, `/auth/google` returns `503` and the frontend shows "Google sign-in is not configured".
 
 ---

@@ -57,7 +57,7 @@ func setupTestDB(t *testing.T) (*gorm.DB, uuid.UUID) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if err := db.WithContext(ctx).Exec("SELECT 1").Error; err != nil {
-		t.Skipf("Database not reachable, skipping integration test: %v", err)
+		t.Fatalf("Database not reachable: %v", err)
 	}
 
 	// Use a unique schema per test so packages can run in parallel safely.

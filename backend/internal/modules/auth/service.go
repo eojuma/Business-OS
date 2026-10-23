@@ -15,7 +15,6 @@ import (
 
 var (
 	ErrInvalidCredentials         = errors.New("invalid email or password")
-	ErrUseGoogleSignIn            = errors.New("this account uses Google sign-in; continue with Google")
 	ErrEmailTaken                 = errors.New("email already registered")
 	ErrBusinessNotFound           = errors.New("business does not exist")
 	ErrInvalidRole                = errors.New("role must be owner, manager, or cashier")
@@ -27,6 +26,12 @@ var (
 	ErrWorkspaceRequired          = errors.New("no workspace is linked to this google account; create one to continue")
 	ErrInactiveUser               = errors.New("user account is inactive")
 )
+
+// dummyPasswordHash is compared when an account has no local password, so a
+// login attempt takes the same time whether the address belongs to a
+// Google-only account or does not exist at all. Together with the generic
+// credentials error this prevents account enumeration.
+var dummyPasswordHash, _ = bcrypt.GenerateFromPassword([]byte("businessos-dummy-password"), bcrypt.DefaultCost)
 
 type BusinessChecker interface {
 	Exists(id uuid.UUID) (bool, error)
@@ -174,7 +179,8 @@ func (s *service) Login(input LoginInput) (*AuthResult, error) {
 	}
 
 	if user.PasswordHash == nil {
-		return nil, ErrUseGoogleSignIn
+		_ = bcrypt.CompareHashAndPassword(dummyPasswordHash, []byte(input.Password))
+		return nil, ErrInvalidCredentials
 	}
 	if err := bcrypt.CompareHashAndPassword([]byte(*user.PasswordHash), []byte(input.Password)); err != nil {
 		return nil, ErrInvalidCredentials

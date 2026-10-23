@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/businessos/backend/internal/config"
@@ -31,7 +32,7 @@ func (r *fakeRepository) Create(user *User) error {
 
 func (r *fakeRepository) FindByEmail(email string) (*User, error) {
 	for _, user := range r.users {
-		if user.Email == email {
+		if strings.EqualFold(user.Email, email) {
 			return user, nil
 		}
 	}
@@ -367,5 +368,38 @@ func TestGoogleTokenVerifierRejectsUnexpectedIssuer(t *testing.T) {
 
 	if _, err := verifier.Verify(context.Background(), "credential"); err == nil {
 		t.Fatal("expected a non-Google issuer to be rejected")
+	}
+}
+
+func TestRegisterNormalizesEmail(t *testing.T) {
+	repo := &fakeRepository{}
+	svc := NewService(repo, &config.Config{JWTSecret: "test-secret", JWTExpiryHours: 1}, &fakeBusinessChecker{exists: true}, nil, nil)
+
+	result, err := svc.Register(RegisterInput{BusinessID: uuid.New(), Name: "John", Email: " John@Example.COM ", Password: "secret"})
+	if err != nil {
+		t.Fatalf("Register failed: %v", err)
+	}
+	if result.User.Email != "john@example.com" {
+		t.Fatalf("email = %q, want %q", result.User.Email, "john@example.com")
+	}
+	if repo.created == nil || repo.created.Email != "john@example.com" {
+		t.Fatalf("stored email was not normalized: %+v", repo.created)
+	}
+}
+
+func TestGoogleLoginMatchesMixedCaseEmail(t *testing.T) {
+	user := &User{ID: uuid.New(), BusinessID: uuid.New(), Name: "Mixed Case", Email: "John@Example.com", Active: true}
+	repo := &fakeRepository{users: []*User{user}}
+	svc := testService(repo, &fakeVerifier{identity: googleIdentity("google-sub-case", "john@example.com", true)}, nil)
+
+	result, err := svc.GoogleLogin(context.Background(), GoogleLoginInput{Credential: testCredential})
+	if err != nil {
+		t.Fatalf("GoogleLogin failed: %v", err)
+	}
+	if result.User != user {
+		t.Fatal("expected the existing mixed-case account to be reused")
+	}
+	if repo.setID != user.ID || repo.setSub != "google-sub-case" {
+		t.Fatalf("expected the google id to be linked to the existing user, got id=%v sub=%q", repo.setID, repo.setSub)
 	}
 }

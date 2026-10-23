@@ -4,7 +4,6 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
-	"time"
 
 	"github.com/businessos/backend/internal/shared/middleware"
 	"github.com/businessos/backend/internal/shared/response"
@@ -219,28 +218,4 @@ func (h *Handler) ListPayments(c *gin.Context) {
 		return
 	}
 	response.Success(c, http.StatusOK, items)
-}
-
-// Aging returns the supplier aging report with balances bucketed by overdue days.
-func (h *Handler) Aging(c *gin.Context) {
-	businessID, err := middleware.CurrentBusinessID(c)
-	if err != nil {
-		response.Error(c, http.StatusUnauthorized, err.Error())
-		return
-	}
-	asOf := time.Now()
-	if raw := c.Query("as_of"); raw != "" {
-		if parsed, err := time.Parse(time.RFC3339, raw); err == nil {
-			asOf = parsed
-		} else {
-			response.Error(c, http.StatusBadRequest, "invalid as_of format, use RFC3339")
-			return
-		}
-	}
-	report, err := h.service.GetAging(businessID, asOf)
-	if err != nil {
-		response.Error(c, http.StatusInternalServerError, "failed to generate aging report")
-		return
-	}
-	response.Success(c, http.StatusOK, report)
 }

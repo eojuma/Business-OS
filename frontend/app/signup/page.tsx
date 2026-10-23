@@ -88,8 +88,9 @@ export default function SignupPage() {
         localStorage.setItem("token", r.data.data.token);
         router.push("/dashboard");
       } catch (e: any) {
+        const code = e.response?.data?.code;
         const message = e.response?.data?.error || "Unable to continue with Google";
-        if (e.response?.status === 409 && /workspace/i.test(message)) {
+        if (code === "workspace_required") {
           setNotice("Add your store details to finish creating the workspace.");
         } else {
           setError(message);

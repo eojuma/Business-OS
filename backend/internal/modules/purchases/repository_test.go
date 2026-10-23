@@ -13,7 +13,6 @@ import (
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 
-	"github.com/businessos/backend/internal/config"
 	"github.com/businessos/backend/internal/modules/business"
 	"github.com/businessos/backend/internal/modules/inventory"
 	"github.com/businessos/backend/internal/modules/products"
@@ -34,25 +33,11 @@ func setupTestDB(t *testing.T) (*gorm.DB, uuid.UUID) {
 	if err != nil || parsedURL.Hostname() == "" || parsedURL.User == nil {
 		t.Fatalf("invalid TEST_DATABASE_URL: %v", err)
 	}
-
-	cfg := config.Load()
-	cfg.DBHost = parsedURL.Hostname()
-	if port := parsedURL.Port(); port != "" {
-		cfg.DBPort = port
-	}
-	cfg.DBUser = parsedURL.User.Username()
-	cfg.DBPassword = ""
-	if password, ok := parsedURL.User.Password(); ok {
-		cfg.DBPassword = password
-	}
-	if dbName := strings.TrimPrefix(parsedURL.Path, "/"); dbName != "" {
-		cfg.DBName = dbName
-	}
-	if sslMode := parsedURL.Query().Get("sslmode"); sslMode != "" {
-		cfg.DBSSLMode = sslMode
+	if dbName := strings.TrimPrefix(parsedURL.Path, "/"); dbName == "" {
+		t.Fatalf("invalid TEST_DATABASE_URL: database name is required")
 	}
 
-	db := database.NewPostgres(cfg)
+	db := database.NewPostgresFromURL(testDBURL)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()

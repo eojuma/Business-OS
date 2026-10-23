@@ -88,9 +88,14 @@ export function GoogleSignIn({
 
     const existing = document.getElementById(SCRIPT_ID);
     if (existing) {
-      render();
+      if (window.google?.accounts?.id) {
+        render();
+      } else {
+        existing.addEventListener("load", render);
+      }
       return () => {
         cancelled = true;
+        existing.removeEventListener("load", render);
       };
     }
 

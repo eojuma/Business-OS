@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -20,17 +22,32 @@ import (
 func setupAuthTestDB(t *testing.T) (*gorm.DB, uuid.UUID) {
 	t.Helper()
 
-	if os.Getenv("TEST_DATABASE_URL") == "" {
+	testDBURL := os.Getenv("TEST_DATABASE_URL")
+	if testDBURL == "" {
 		t.Skip("TEST_DATABASE_URL not set, skipping integration test")
 	}
 
+	parsedURL, err := url.Parse(testDBURL)
+	if err != nil || parsedURL.Hostname() == "" || parsedURL.User == nil {
+		t.Fatalf("invalid TEST_DATABASE_URL: %v", err)
+	}
+
 	cfg := config.Load()
-	cfg.DBName = "businessos_test"
-	cfg.DBHost = "localhost"
-	cfg.DBPort = "5432"
-	cfg.DBUser = "businessos"
-	cfg.DBPassword = "businessos"
-	cfg.DBSSLMode = "disable"
+	cfg.DBHost = parsedURL.Hostname()
+	if port := parsedURL.Port(); port != "" {
+		cfg.DBPort = port
+	}
+	cfg.DBUser = parsedURL.User.Username()
+	cfg.DBPassword = ""
+	if password, ok := parsedURL.User.Password(); ok {
+		cfg.DBPassword = password
+	}
+	if dbName := strings.TrimPrefix(parsedURL.Path, "/"); dbName != "" {
+		cfg.DBName = dbName
+	}
+	if sslMode := parsedURL.Query().Get("sslmode"); sslMode != "" {
+		cfg.DBSSLMode = sslMode
+	}
 
 	db := database.NewPostgres(cfg)
 	if sqlDB, err := db.DB(); err == nil {

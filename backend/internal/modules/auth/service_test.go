@@ -281,13 +281,14 @@ func TestGoogleLoginUnavailableWhenNotConfigured(t *testing.T) {
 	}
 }
 
-func TestLoginRejectsGoogleOnlyAccount(t *testing.T) {
+func TestLoginRejectsGoogleOnlyAccountWithoutDisclosure(t *testing.T) {
 	sub := "google-sub-7"
 	user := &User{ID: uuid.New(), BusinessID: uuid.New(), Email: "googleonly@example.com", GoogleID: &sub, Active: true}
 	svc := testService(&fakeRepository{users: []*User{user}}, nil, nil)
 
-	if _, err := svc.Login(LoginInput{Email: user.Email, Password: "anything"}); err != ErrUseGoogleSignIn {
-		t.Fatalf("error = %v, want %v", err, ErrUseGoogleSignIn)
+	// Same error as an unknown address, so callers cannot enumerate accounts.
+	if _, err := svc.Login(LoginInput{Email: user.Email, Password: "anything"}); err != ErrInvalidCredentials {
+		t.Fatalf("error = %v, want %v", err, ErrInvalidCredentials)
 	}
 }
 

@@ -113,7 +113,7 @@ func TestBusinessOwnerCreatorCreatesWorkspaceAndOwner(t *testing.T) {
 	creator := &businessOwnerCreator{db: db}
 
 	googleID := "google-sub-workspace"
-	user := &User{Name: "Workspace Owner", Email: "workspace-owner@example.com", GoogleID: &googleID, Role: "owner", Active: true}
+	user := &User{Name: "Workspace Owner", Email: "workspace-owner@example.com", GoogleID: &googleID, Role: testRoleOwner, Active: true}
 	if err := creator.CreateWithOwner("Workspace Store", "0700", user); err != nil {
 		t.Fatalf("CreateWithOwner failed: %v", err)
 	}
@@ -173,7 +173,7 @@ func TestRepositoryFindByEmailCaseInsensitive(t *testing.T) {
 	db, businessID := setupAuthTestDB(t)
 	repo := NewRepository(db)
 
-	user := &User{BusinessID: businessID, Name: "Case User", Email: "Case.User@Example.com", Role: "owner", Active: true}
+	user := &User{BusinessID: businessID, Name: "Case User", Email: "Case.User@Example.com", Role: testRoleOwner, Active: true}
 	if err := repo.Create(user); err != nil {
 		t.Fatalf("Create failed: %v", err)
 	}

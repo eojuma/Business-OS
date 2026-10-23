@@ -40,7 +40,14 @@ services:
     env_file:
       - backend/.env
     environment:
+      # Point the container at the Compose services, overriding any
+      # production values (e.g. Neon) in backend/.env.
       DB_HOST: postgres
+      DB_PORT: 5432
+      DB_USER: ${DB_USER:-businessos}
+      DB_PASSWORD: ${DB_PASSWORD:-businessos}
+      DB_NAME: ${DB_NAME:-businessos}
+      DB_SSLMODE: disable
       REDIS_HOST: redis
     ports:
       - "8080:8080"

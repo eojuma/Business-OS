@@ -128,4 +128,3 @@ func (s *service) ListPayments(id, businessID uuid.UUID) ([]Payment, error) {
 func (s *service) GetAging(businessID uuid.UUID, asOf time.Time) (*AgingReport, error) {
 	return s.repo.GetAging(businessID, asOf)
 }
-

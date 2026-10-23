@@ -14,6 +14,21 @@ WHERE email <> LOWER(TRIM(email));
 -- CREATE INDEX CONCURRENTLY cannot run inside a transaction, hence the
 -- NoTransaction marker. The index makes the LOWER(email) lookup in
 -- FindByEmail deterministic and guarantees at most one match.
+--
+-- A failed concurrent build can leave an invalid index behind; IF NOT EXISTS
+-- would then skip the rebuild on retry and record the migration as applied
+-- without enforcing uniqueness. Drop invalid leftovers first.
+DO $$
+BEGIN
+    IF to_regclass('idx_users_email_lower') IS NOT NULL AND EXISTS (
+        SELECT 1 FROM pg_index
+        WHERE indexrelid = to_regclass('idx_users_email_lower') AND NOT indisvalid
+    ) THEN
+        DROP INDEX idx_users_email_lower;
+    END IF;
+END
+$$;
+
 CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS idx_users_email_lower ON users (LOWER(email));
 
 -- +migrate Down

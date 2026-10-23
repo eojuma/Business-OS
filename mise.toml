@@ -5,7 +5,7 @@
 [tools]
 go = "1.25.0"
 node = "20"
-golangci-lint = "latest"
+golangci-lint = "2.15.0"
 
 # ---------------------------------------------------------------- frontend
 

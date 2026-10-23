@@ -95,7 +95,7 @@ jobs:
       - name: Run golangci-lint
         uses: golangci/golangci-lint-action@v7
         with:
-          version: latest
+          version: v2.15.0
           working-directory: backend
           args: --timeout=5m
 

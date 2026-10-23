@@ -34,7 +34,7 @@ func (r *repository) Create(user *User) error {
 
 func (r *repository) FindByEmail(email string) (*User, error) {
 	var user User
-	if err := r.db.Where("email = ?", email).First(&user).Error; err != nil {
+	if err := r.db.Where("LOWER(email) = LOWER(?)", email).First(&user).Error; err != nil {
 		return nil, err
 	}
 	return &user, nil

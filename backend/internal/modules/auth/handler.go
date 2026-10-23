@@ -147,7 +147,7 @@ func (h *Handler) Login(c *gin.Context) {
 		Password: req.Password,
 	})
 	if err != nil {
-		if errors.Is(err, ErrInvalidCredentials) || errors.Is(err, ErrUseGoogleSignIn) {
+		if errors.Is(err, ErrInvalidCredentials) {
 			response.Error(c, http.StatusUnauthorized, err.Error())
 			return
 		}

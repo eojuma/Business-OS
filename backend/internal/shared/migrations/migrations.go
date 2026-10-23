@@ -54,7 +54,7 @@ func withMigrationLock(db *gorm.DB, fn func(locked *gorm.DB) error) error {
 		return err
 	}
 	// Registered first: runs after the unlock below (defer is LIFO).
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	// WithContext clones the statement so swapping the connection pool below
 	// cannot mutate the caller's session. The advisory lock and every

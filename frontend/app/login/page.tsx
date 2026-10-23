@@ -42,7 +42,7 @@ export default function LoginPage() {
         router.push("/dashboard");
       } catch (e: any) {
         const message = e.response?.data?.error || "Unable to sign in with Google";
-        if (e.response?.status === 409 && /workspace/i.test(message)) {
+        if (e.response?.data?.code === "workspace_required") {
           setNeedsWorkspace(true);
         } else {
           setError(message);

@@ -163,23 +163,22 @@ func (r *repository) SetPaymentDueDateTx(tx *gorm.DB, id, businessID uuid.UUID, 
 	return &dueDate, nil
 }
 
-
 // AgingReport represents the supplier aging report.
 type AgingReport struct {
-	Current       []AgingSupplier `json:"current"`
-	Days1_30      []AgingSupplier `json:"days_1_30"`
-	Days31_60     []AgingSupplier `json:"days_31_60"`
-	Days61_90     []AgingSupplier `json:"days_61_90"`
-	Days90Plus    []AgingSupplier `json:"days_90_plus"`
-	Totals        AgingTotals     `json:"totals"`
+	Current    []AgingSupplier `json:"current"`
+	Days1_30   []AgingSupplier `json:"days_1_30"`
+	Days31_60  []AgingSupplier `json:"days_31_60"`
+	Days61_90  []AgingSupplier `json:"days_61_90"`
+	Days90Plus []AgingSupplier `json:"days_90_plus"`
+	Totals     AgingTotals     `json:"totals"`
 }
 
 type AgingSupplier struct {
-	ID             uuid.UUID  `json:"id"`
-	Name           string     `json:"name"`
-	Outstanding    int64      `json:"outstanding"`
-	DueDate        *time.Time `json:"due_date"`
-	DaysOverdue    int        `json:"days_overdue"`
+	ID          uuid.UUID  `json:"id"`
+	Name        string     `json:"name"`
+	Outstanding int64      `json:"outstanding"`
+	DueDate     *time.Time `json:"due_date"`
+	DaysOverdue int        `json:"days_overdue"`
 }
 
 type AgingTotals struct {

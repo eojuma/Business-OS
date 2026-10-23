@@ -221,7 +221,6 @@ func (h *Handler) ListPayments(c *gin.Context) {
 	response.Success(c, http.StatusOK, items)
 }
 
-
 // Aging returns the supplier aging report with balances bucketed by overdue days.
 func (h *Handler) Aging(c *gin.Context) {
 	businessID, err := middleware.CurrentBusinessID(c)
@@ -245,4 +244,3 @@ func (h *Handler) Aging(c *gin.Context) {
 	}
 	response.Success(c, http.StatusOK, report)
 }
-

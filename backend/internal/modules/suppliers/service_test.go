@@ -112,7 +112,7 @@ func (r *testRepository) GetAging(businessID uuid.UUID, asOf time.Time) (*AgingR
 
 	report := &AgingReport{}
 	for _, s := range suppliers {
-		ds := *s  // dereference pointer
+		ds := *s // dereference pointer
 		daysOverdue := 0
 		if ds.DueDate != nil && ds.DueDate.Before(asOf) {
 			daysOverdue = int(asOf.Sub(*ds.DueDate).Hours() / 24)
@@ -585,7 +585,6 @@ func TestSetPaymentDueDateSupplierNotFound(t *testing.T) {
 	}
 }
 
-
 func TestGetAging(t *testing.T) {
 	repo := newTestRepository()
 	svc := NewService(repo)
@@ -667,4 +666,3 @@ func TestGetAging(t *testing.T) {
 		t.Errorf("Totals.Total = %d, want 80000", report.Totals.Total)
 	}
 }
-

@@ -744,3 +744,23 @@ func TestSupplierNameIndex(t *testing.T) {
 		t.Logf("List took %v (may need index optimization)", elapsed)
 	}
 }
+
+func TestDaysPastDue(t *testing.T) {
+	asOf := time.Date(2026, time.January, 15, 12, 0, 0, 0, time.UTC)
+	tests := []struct {
+		name string
+		due  time.Time
+		want int
+	}{
+		{name: "less than one day", due: time.Date(2026, time.January, 15, 9, 0, 0, 0, time.UTC), want: 1},
+		{name: "previous calendar day", due: time.Date(2026, time.January, 14, 12, 0, 0, 0, time.UTC), want: 1},
+		{name: "ten days", due: asOf.AddDate(0, 0, -10), want: 10},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := daysPastDue(tt.due, asOf); got != tt.want {
+				t.Fatalf("daysPastDue() = %d, want %d", got, tt.want)
+			}
+		})
+	}
+}

@@ -115,7 +115,7 @@ func (r *testRepository) GetAging(businessID uuid.UUID, asOf time.Time) (*AgingR
 		ds := *s // dereference pointer
 		daysOverdue := 0
 		if ds.DueDate != nil && ds.DueDate.Before(asOf) {
-			daysOverdue = int(asOf.Sub(*ds.DueDate).Hours() / 24)
+			daysOverdue = daysPastDue(*ds.DueDate, asOf)
 		}
 
 		entry := AgingSupplier{
@@ -586,43 +586,53 @@ func TestSetPaymentDueDateSupplierNotFound(t *testing.T) {
 }
 
 func TestGetAging(t *testing.T) {
-	repo := newTestRepository()
+	db, businessID := setupTestDB(t)
+	repo := NewRepository(db)
 	svc := NewService(repo)
 
-	businessID := uuid.New()
 	now := time.Date(2026, time.January, 15, 0, 0, 0, 0, time.UTC)
+	insert := func(s *Supplier) {
+		t.Helper()
+		if err := db.Create(s).Error; err != nil {
+			t.Fatalf("failed to create supplier: %v", err)
+		}
+	}
 
 	// Supplier 1: current (not overdue)
 	s1 := &Supplier{ID: uuid.New(), BusinessID: businessID, Name: "Current Supplier", OutstandingBalance: 5000, DueDate: func() *time.Time { t := now.AddDate(0, 0, 5); return &t }()}
-	repo.suppliers[s1.ID] = s1
+	insert(s1)
 
 	// Supplier 2: 1-30 days overdue
 	s2 := &Supplier{ID: uuid.New(), BusinessID: businessID, Name: "Overdue 1-30", OutstandingBalance: 10000, DueDate: func() *time.Time { t := now.AddDate(0, 0, -10); return &t }()}
-	repo.suppliers[s2.ID] = s2
+	insert(s2)
 
 	// Supplier 3: 31-60 days overdue
 	s3 := &Supplier{ID: uuid.New(), BusinessID: businessID, Name: "Overdue 31-60", OutstandingBalance: 15000, DueDate: func() *time.Time { t := now.AddDate(0, 0, -45); return &t }()}
-	repo.suppliers[s3.ID] = s3
+	insert(s3)
 
 	// Supplier 4: 61-90 days overdue
 	s4 := &Supplier{ID: uuid.New(), BusinessID: businessID, Name: "Overdue 61-90", OutstandingBalance: 20000, DueDate: func() *time.Time { t := now.AddDate(0, 0, -75); return &t }()}
-	repo.suppliers[s4.ID] = s4
+	insert(s4)
 
 	// Supplier 5: 90+ days overdue
 	s5 := &Supplier{ID: uuid.New(), BusinessID: businessID, Name: "Overdue 90+", OutstandingBalance: 25000, DueDate: func() *time.Time { t := now.AddDate(0, 0, -120); return &t }()}
-	repo.suppliers[s5.ID] = s5
+	insert(s5)
 
 	// Supplier 6: no due date (should be current)
 	s6 := &Supplier{ID: uuid.New(), BusinessID: businessID, Name: "No Due Date", OutstandingBalance: 5000, DueDate: nil}
-	repo.suppliers[s6.ID] = s6
+	insert(s6)
 
 	// Supplier with zero balance (should not appear)
 	s7 := &Supplier{ID: uuid.New(), BusinessID: businessID, Name: "Zero Balance", OutstandingBalance: 0, DueDate: func() *time.Time { t := now.AddDate(0, 0, -10); return &t }()}
-	repo.suppliers[s7.ID] = s7
+	insert(s7)
 
 	// Supplier 8: archived (deleted_at set) - should not appear
 	s8 := &Supplier{ID: uuid.New(), BusinessID: businessID, Name: "Archived", OutstandingBalance: 10000, DueDate: func() *time.Time { t := now.AddDate(0, 0, -10); return &t }(), DeletedAt: gorm.DeletedAt{Time: time.Now(), Valid: true}}
-	repo.suppliers[s8.ID] = s8
+	insert(s8)
+
+	// Supplier 9: overdue by less than 24 hours - still belongs in 1-30
+	s9 := &Supplier{ID: uuid.New(), BusinessID: businessID, Name: "Overdue Today", OutstandingBalance: 7000, DueDate: func() *time.Time { t := now.Add(-12 * time.Hour); return &t }()}
+	insert(s9)
 
 	asOf := now
 	report, err := svc.GetAging(businessID, asOf)
@@ -633,8 +643,13 @@ func TestGetAging(t *testing.T) {
 	if len(report.Current) != 2 {
 		t.Errorf("Current = %d, want 2 (current + no due date)", len(report.Current))
 	}
-	if len(report.Days1_30) != 1 {
-		t.Errorf("Days1_30 = %d, want 1", len(report.Days1_30))
+	if len(report.Days1_30) != 2 {
+		t.Errorf("Days1_30 = %d, want 2", len(report.Days1_30))
+	}
+	for _, entry := range report.Days1_30 {
+		if entry.ID == s9.ID && entry.DaysOverdue != 1 {
+			t.Errorf("DaysOverdue for sub-day overdue supplier = %d, want 1", entry.DaysOverdue)
+		}
 	}
 	if len(report.Days31_60) != 1 {
 		t.Errorf("Days31_60 = %d, want 1", len(report.Days31_60))
@@ -650,8 +665,8 @@ func TestGetAging(t *testing.T) {
 	if report.Totals.Current != 10000 {
 		t.Errorf("Totals.Current = %d, want 10000", report.Totals.Current)
 	}
-	if report.Totals.Days1_30 != 10000 {
-		t.Errorf("Totals.Days1_30 = %d, want 10000", report.Totals.Days1_30)
+	if report.Totals.Days1_30 != 17000 {
+		t.Errorf("Totals.Days1_30 = %d, want 17000", report.Totals.Days1_30)
 	}
 	if report.Totals.Days31_60 != 15000 {
 		t.Errorf("Totals.Days31_60 = %d, want 15000", report.Totals.Days31_60)
@@ -662,7 +677,7 @@ func TestGetAging(t *testing.T) {
 	if report.Totals.Days90Plus != 25000 {
 		t.Errorf("Totals.Days90Plus = %d, want 25000", report.Totals.Days90Plus)
 	}
-	if report.Totals.Total != 80000 {
-		t.Errorf("Totals.Total = %d, want 80000", report.Totals.Total)
+	if report.Totals.Total != 87000 {
+		t.Errorf("Totals.Total = %d, want 87000", report.Totals.Total)
 	}
 }

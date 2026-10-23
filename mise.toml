@@ -143,6 +143,7 @@ mise run backend:test
 description = "Run all CI checks without needing Postgres"
 run = '''
 set -e
+unset TEST_DATABASE_URL
 mise run backend:check
 mise run frontend:check
 '''

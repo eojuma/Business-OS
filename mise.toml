@@ -104,7 +104,21 @@ description = "Start Postgres and create the businessos_test database if missing
 run = '''
 set -e
 docker compose up -d postgres
-until docker compose exec -T postgres pg_isready >/dev/null 2>&1; do sleep 1; done
+ready=false
+i=0
+while [ "$i" -lt 60 ]; do
+  if docker compose exec -T postgres pg_isready >/dev/null 2>&1; then
+    ready=true
+    break
+  fi
+  i=$((i + 1))
+  sleep 1
+done
+if [ "$ready" != true ]; then
+  echo "PostgreSQL did not become ready within 60 seconds." >&2
+  docker compose logs --tail=50 postgres >&2 || true
+  exit 1
+fi
 db_user="$(docker compose exec -T postgres printenv POSTGRES_USER | tr -d '\r')"
 if ! docker compose exec -T postgres psql -U "$db_user" -tAc "SELECT 1 FROM pg_database WHERE datname='businessos_test'" | grep -q 1; then
   docker compose exec -T postgres psql -U "$db_user" -c "CREATE DATABASE businessos_test"

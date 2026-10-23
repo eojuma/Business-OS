@@ -168,3 +168,21 @@ func TestRepositorySetGoogleID(t *testing.T) {
 		t.Fatalf("SetGoogleID error = %v, want %v", err, gorm.ErrRecordNotFound)
 	}
 }
+
+func TestRepositoryFindByEmailCaseInsensitive(t *testing.T) {
+	db, businessID := setupAuthTestDB(t)
+	repo := NewRepository(db)
+
+	user := &User{BusinessID: businessID, Name: "Case User", Email: "Case.User@Example.com", Role: "owner", Active: true}
+	if err := repo.Create(user); err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+
+	found, err := repo.FindByEmail("case.user@example.com")
+	if err != nil {
+		t.Fatalf("FindByEmail failed: %v", err)
+	}
+	if found.ID != user.ID {
+		t.Fatalf("found user %v, want %v", found.ID, user.ID)
+	}
+}

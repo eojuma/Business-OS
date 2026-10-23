@@ -168,7 +168,7 @@ Google sign-in uses the Google Identity Services **ID-token flow**: the browser 
 
 Behaviour:
 
-- Existing Google users sign in directly; an existing email/password account is linked to the Google identity only when Google reports the email as verified.
+- Existing Google users sign in directly. An existing password account is **not** auto-linked to a Google identity: Google sign-in returns `409` so a Google user cannot take over an account created with an email and password. Sign in with the password instead.
 - A Google account with no workspace is rejected with a clear "create a workspace" message; `/signup` then asks for the store name and creates the workspace and owner in one transaction.
 - Google-only users have no local password (`password_hash` is `NULL`); email/password login tells them to continue with Google.
 - If `GOOGLE_CLIENT_ID` is empty, `/auth/google` returns `503` and the frontend shows "Google sign-in is not configured".

@@ -90,7 +90,6 @@ Business-OS/
 │   ├── lib/api.ts               # single axios client, JWT auto-attached
 │   └── Dockerfile
 ├── docker-compose.yml
-├── .env.example
 └── Makefile
 ```
 
@@ -124,7 +123,8 @@ See `sales/repository.go` and `sales/routes.go` for the reference implementation
 Environment:
 
 ```bash
-cp .env.example .env
+cp backend/.env.example backend/.env
+cp frontend/.env.example frontend/.env
 ```
 
 Start everything (Postgres, Redis, backend, frontend):
@@ -149,7 +149,7 @@ cd frontend && npm install && npm run dev
 
 Health check: `curl http://localhost:8080/health` should return `{"status":"ok"}`
 
-**Note:** don't run the Docker frontend container and `npm run dev` at the same time — they'll fight over port 3000, and the CORS middleware only allows the origin set in `FRONTEND_URL` (`.env`), so a port mismatch will silently break login with a CORS error in the browser console.
+**Note:** don't run the Docker frontend container and `npm run dev` at the same time — they'll fight over port 3000, and the CORS middleware only allows the origin set in `FRONTEND_URL` (`backend/.env`), so a port mismatch will silently break login with a CORS error in the browser console.
 
 ### Google sign-in (optional)
 
@@ -159,9 +159,9 @@ Google sign-in uses the Google Identity Services **ID-token flow**: the browser 
 2. Add your frontend origins under **Authorized JavaScript origins** — for local development, `http://localhost:3000` (and `http://127.0.0.1:3000` if you use it). Add the production origin too.
 3. Set the same client ID in both places:
    ```bash
-   # backend .env
+   # backend/.env
    GOOGLE_CLIENT_ID=<your-client-id>.apps.googleusercontent.com
-   # frontend .env.local (or .env)
+   # frontend/.env
    NEXT_PUBLIC_GOOGLE_CLIENT_ID=<your-client-id>.apps.googleusercontent.com
    ```
 4. Restart the API and frontend. A **Continue with Google** button appears on `/login` and `/signup`.
@@ -239,7 +239,7 @@ Production runs on [Neon](https://neon.tech) Postgres. Set these on the backend 
     DB_NAME=neondb
     DB_SSLMODE=require
 
-Migrations apply automatically on startup. A local `.env` (gitignored) can point at Neon, but the Docker Compose database stays available for offline development.
+Migrations apply automatically on startup. A local `backend/.env` (gitignored) can point at Neon, but the Docker Compose database stays available for offline development.
 
 ### Scheduled backups
 

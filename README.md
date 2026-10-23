@@ -168,7 +168,12 @@ Google sign-in uses the Google Identity Services **ID-token flow**: the browser 
 
 Behaviour:
 
-- Existing Google users sign in directly. An existing password account is **not** auto-linked to a Google identity: Google sign-in returns `409` so a Google user cannot take over an account created with an email and password. Sign in with the password instead.
+- Existing Google users sign in directly. An existing password account is **not** auto-linked to a Google identity: Google sign-in returns `409` with code `google_link_requires_password` so a Google user cannot take over an account created with an email and password. Sign in with the password instead.
+- If the Google subject (`sub`) behind an email changes — for example a Workspace user is deleted and re-created, or the address is reassigned — sign-in is rejected with code `google_account_conflict`. This is deliberate: silently re-linking would let whoever now controls the address take over the existing workspace. Google-only accounts therefore stay locked until an operator verifies the new owner out of band and clears the stale link:
+  ```sql
+  UPDATE users SET google_id = NULL WHERE email = 'user@example.com';
+  ```
+  The user can then sign in with Google again to link the new identity.
 - A Google account with no workspace is rejected with a clear "create a workspace" message; `/signup` then asks for the store name and creates the workspace and owner in one transaction.
 - Google-only users have no local password (`password_hash` is `NULL`); email/password login tells them to continue with Google.
 - If `GOOGLE_CLIENT_ID` is empty, `/auth/google` returns `503` and the frontend shows "Google sign-in is not configured".

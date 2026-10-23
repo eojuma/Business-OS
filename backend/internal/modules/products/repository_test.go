@@ -27,8 +27,14 @@ func setupTestDB(t *testing.T) (*gorm.DB, uuid.UUID) {
 	}
 
 	parsedURL, err := url.Parse(testDBURL)
-	if err != nil || parsedURL.Hostname() == "" || parsedURL.User == nil {
+	if err != nil {
 		t.Fatalf("invalid TEST_DATABASE_URL: %v", err)
+	}
+	if parsedURL.Hostname() == "" {
+		t.Fatalf("invalid TEST_DATABASE_URL: host is required")
+	}
+	if parsedURL.User == nil {
+		t.Fatalf("invalid TEST_DATABASE_URL: user is required")
 	}
 	if dbName := strings.TrimPrefix(parsedURL.Path, "/"); dbName == "" {
 		t.Fatalf("invalid TEST_DATABASE_URL: database name is required")

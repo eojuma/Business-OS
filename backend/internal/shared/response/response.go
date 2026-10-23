@@ -18,6 +18,17 @@ func Error(c *gin.Context, status int, message string) {
 	})
 }
 
+// ErrorWithCode writes an error JSON response with a stable, machine-readable
+// code alongside the human-readable message, so clients can branch on the
+// code instead of matching message text.
+func ErrorWithCode(c *gin.Context, status int, code, message string) {
+	c.JSON(status, gin.H{
+		"success": false,
+		"error":   message,
+		"code":    code,
+	})
+}
+
 // Paginated writes a paginated JSON response with the given data and pagination metadata.
 func Paginated(c *gin.Context, status int, data interface{}, page, perPage int, total int64) {
 	c.JSON(status, gin.H{

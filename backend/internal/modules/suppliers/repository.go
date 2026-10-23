@@ -191,6 +191,16 @@ type AgingTotals struct {
 	Total      int64 `json:"total"`
 }
 
+func daysPastDue(dueDate, asOf time.Time) int {
+	due := time.Date(dueDate.Year(), dueDate.Month(), dueDate.Day(), 0, 0, 0, 0, time.UTC)
+	ref := time.Date(asOf.Year(), asOf.Month(), asOf.Day(), 0, 0, 0, 0, time.UTC)
+	days := int(ref.Sub(due).Hours() / 24)
+	if days < 1 {
+		return 1
+	}
+	return days
+}
+
 func (r *repository) GetAging(businessID uuid.UUID, asOf time.Time) (*AgingReport, error) {
 	var suppliers []Supplier
 	err := r.db.Where("business_id = ? AND deleted_at IS NULL AND outstanding_balance > 0", businessID).
@@ -203,7 +213,7 @@ func (r *repository) GetAging(businessID uuid.UUID, asOf time.Time) (*AgingRepor
 	for _, s := range suppliers {
 		daysOverdue := 0
 		if s.DueDate != nil && s.DueDate.Before(asOf) {
-			daysOverdue = int(asOf.Sub(*s.DueDate).Hours() / 24)
+			daysOverdue = daysPastDue(*s.DueDate, asOf)
 		}
 
 		entry := AgingSupplier{

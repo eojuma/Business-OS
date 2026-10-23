@@ -34,6 +34,7 @@ func setupAuthTestDB(t *testing.T) (*gorm.DB, uuid.UUID) {
 
 	cfg := config.Load()
 	cfg.DBHost = parsedURL.Hostname()
+	cfg.DBPort = "5432" // PostgreSQL default when the URL omits a port
 	if port := parsedURL.Port(); port != "" {
 		cfg.DBPort = port
 	}

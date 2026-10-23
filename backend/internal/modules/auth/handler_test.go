@@ -42,7 +42,7 @@ func TestGoogleHandlerReturnsStableErrorCodes(t *testing.T) {
 			router := gin.New()
 			router.POST("/auth/google", handler.Google)
 
-			req := httptest.NewRequest(http.MethodPost, "/auth/google", bytes.NewBufferString(`{"credential":"token"}`))
+			req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/auth/google", bytes.NewBufferString(`{"credential":"token"}`))
 			req.Header.Set("Content-Type", "application/json")
 			recorder := httptest.NewRecorder()
 			router.ServeHTTP(recorder, req)

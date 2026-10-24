@@ -28,6 +28,8 @@ interface GoogleSignInProps {
   /** Called when an authenticated Google user has no workspace yet. */
   onWorkspaceRequired?: (credential: string) => void;
   onError?: (message: string) => void;
+  /** Called when the button is ready, e.g. so pages can clear stale errors. */
+  onReady?: () => void;
   text?: "signin_with" | "signup_with" | "continue_with";
   disabled?: boolean;
 }
@@ -38,12 +40,14 @@ interface GoogleSignInProps {
 // guard survives React Strict Mode double-mounts and route changes.
 let initializedClientId: string | null = null;
 let credentialHandler: ((credential: string) => void) | null = null;
+let credentialErrorHandler: ((message: string) => void) | null = null;
 
 const GIS_LOAD_TIMEOUT_MS = 10000;
 
 export function GoogleSignIn({
   onWorkspaceRequired,
   onError,
+  onReady,
   text = "continue_with",
   disabled = false,
 }: GoogleSignInProps) {
@@ -51,6 +55,7 @@ export function GoogleSignIn({
   const containerRef = useRef<HTMLDivElement>(null);
   const workspaceRequiredRef = useRef(onWorkspaceRequired);
   const errorRef = useRef(onError);
+  const readyRef = useRef(onReady);
   const [busy, setBusy] = useState(false);
   const [timedOut, setTimedOut] = useState(false);
   const [attempt, setAttempt] = useState(0);
@@ -62,6 +67,10 @@ export function GoogleSignIn({
   useEffect(() => {
     errorRef.current = onError;
   }, [onError]);
+
+  useEffect(() => {
+    readyRef.current = onReady;
+  }, [onReady]);
 
   const handleCredential = useCallback(
     async (credential: string) => {
@@ -88,11 +97,18 @@ export function GoogleSignIn({
   );
 
   // Keep the single GIS callback pointed at the latest component instance.
+  // Errors go through the module too, otherwise a cancelled sign-in after a
+  // route change would report to the unmounted page's state.
   useEffect(() => {
+    const reportError = (message: string) => errorRef.current?.(message);
     credentialHandler = handleCredential;
+    credentialErrorHandler = reportError;
     return () => {
       if (credentialHandler === handleCredential) {
         credentialHandler = null;
+      }
+      if (credentialErrorHandler === reportError) {
+        credentialErrorHandler = null;
       }
     };
   }, [handleCredential]);
@@ -116,7 +132,7 @@ export function GoogleSignIn({
             if (response.credential) {
               credentialHandler?.(response.credential);
             } else {
-              errorRef.current?.("Google sign-in was cancelled.");
+              credentialErrorHandler?.("Google sign-in was cancelled.");
             }
           },
         });
@@ -133,6 +149,7 @@ export function GoogleSignIn({
         width: 320,
         logo_alignment: "left",
       });
+      readyRef.current?.();
       return true;
     };
 

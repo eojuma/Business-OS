@@ -42,7 +42,25 @@ let initializedClientId: string | null = null;
 let credentialHandler: ((credential: string) => void) | null = null;
 let credentialErrorHandler: ((message: string) => void) | null = null;
 
+const GIS_SCRIPT_SRC = "https://accounts.google.com/gsi/client";
 const GIS_LOAD_TIMEOUT_MS = 10000;
+
+// The layout loads GIS once. If that load fails (offline, content blocker), the
+// tag is inert and polling can never recover, so a retry drops the stale tag
+// and injects a fresh one.
+function reloadGoogleScript() {
+  document
+    .querySelectorAll(`script[src="${GIS_SCRIPT_SRC}"]`)
+    .forEach((element) => element.remove());
+
+  const script = document.createElement("script");
+  script.id = "google-identity-services-retry";
+  script.src = GIS_SCRIPT_SRC;
+  script.async = true;
+  script.defer = true;
+  script.onerror = () => script.remove();
+  document.head.appendChild(script);
+}
 
 export function GoogleSignIn({
   onWorkspaceRequired,
@@ -153,6 +171,16 @@ export function GoogleSignIn({
       return true;
     };
 
+    // A layout-injected script that fails leaves an inert tag behind; drop it
+    // so a retry can inject a working one.
+    const layoutScript = document.querySelector<HTMLScriptElement>(
+      `script[src="${GIS_SCRIPT_SRC}"]`,
+    );
+    const onLayoutScriptError = () => layoutScript?.remove();
+    if (layoutScript && !window.google?.accounts?.id) {
+      layoutScript.addEventListener("error", onLayoutScriptError);
+    }
+
     // The script tag may not be injected yet (next/script) or may still be
     // loading, so poll briefly instead of waiting on an event that already
     // fired.
@@ -172,6 +200,7 @@ export function GoogleSignIn({
     return () => {
       cancelled = true;
       if (timer) clearTimeout(timer);
+      layoutScript?.removeEventListener("error", onLayoutScriptError);
     };
   }, [clientId, text, attempt]);
 
@@ -197,6 +226,9 @@ export function GoogleSignIn({
           type="button"
           onClick={() => {
             setTimedOut(false);
+            if (!window.google?.accounts?.id) {
+              reloadGoogleScript();
+            }
             setAttempt((n) => n + 1);
           }}
           className="mt-2 w-full text-center text-xs text-[#8a958d] underline"

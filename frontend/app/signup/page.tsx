@@ -136,6 +136,7 @@ export default function SignupPage() {
               <GoogleSignIn
                 onWorkspaceRequired={handleWorkspaceRequired}
                 onError={setError}
+                onReady={() => setError("")}
                 text="signup_with"
                 disabled={loading}
               />

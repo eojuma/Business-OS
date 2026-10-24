@@ -78,6 +78,7 @@ export default function LoginPage() {
             <GoogleSignIn
               onWorkspaceRequired={() => setNeedsWorkspace(true)}
               onError={setError}
+              onReady={() => setError("")}
               text="signin_with"
               disabled={loading}
             />

@@ -52,6 +52,8 @@ export function GoogleSignIn({
   const workspaceRequiredRef = useRef(onWorkspaceRequired);
   const errorRef = useRef(onError);
   const [busy, setBusy] = useState(false);
+  const [timedOut, setTimedOut] = useState(false);
+  const [attempt, setAttempt] = useState(0);
 
   useEffect(() => {
     workspaceRequiredRef.current = onWorkspaceRequired;
@@ -142,6 +144,7 @@ export function GoogleSignIn({
       if (cancelled) return;
       if (setup()) return;
       if (Date.now() > deadline) {
+        setTimedOut(true);
         errorRef.current?.("Could not load Google sign-in.");
         return;
       }
@@ -153,7 +156,7 @@ export function GoogleSignIn({
       cancelled = true;
       if (timer) clearTimeout(timer);
     };
-  }, [clientId, text]);
+  }, [clientId, text, attempt]);
 
   if (!clientId) {
     return (
@@ -164,12 +167,26 @@ export function GoogleSignIn({
   }
 
   return (
-    <div
-      id="google-btn"
-      ref={containerRef}
-      className={`flex min-h-[40px] justify-center ${
-        disabled || busy ? "pointer-events-none opacity-50" : ""
-      }`}
-    />
+    <>
+      <div
+        id="google-btn"
+        ref={containerRef}
+        className={`flex min-h-[40px] justify-center ${
+          disabled || busy ? "pointer-events-none opacity-50" : ""
+        }`}
+      />
+      {timedOut && (
+        <button
+          type="button"
+          onClick={() => {
+            setTimedOut(false);
+            setAttempt((n) => n + 1);
+          }}
+          className="mt-2 w-full text-center text-xs text-[#8a958d] underline"
+        >
+          Retry Google sign-in
+        </button>
+      )}
+    </>
   );
 }

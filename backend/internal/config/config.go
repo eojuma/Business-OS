@@ -155,4 +155,4 @@ func parseRedisURL(raw string) (host, port, password string) {
 		password, _ = u.User.Password()
 	}
 	return
-}   
+}

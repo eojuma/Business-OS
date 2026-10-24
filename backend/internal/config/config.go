@@ -3,6 +3,7 @@ package config
 
 import (
 	"fmt"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -48,6 +49,7 @@ type Config struct {
 // Load loads configuration from environment variables.
 func Load() *Config {
 	_ = godotenv.Load()
+	redisHost, redisPort, redisPassword := parseRedisURL(getEnv("REDIS_URL", "redis://localhost:6379"))
 
 	return &Config{
 		AppEnv:         getEnv("APP_ENV", "development"),
@@ -62,9 +64,9 @@ func Load() *Config {
 		DBName:     getEnv("DB_NAME", "businessos"),
 		DBSSLMode:  getEnv("DB_SSLMODE", "disable"),
 
-		RedisHost:     getEnv("REDIS_HOST", "localhost"),
-		RedisPort:     getEnv("REDIS_PORT", "6379"),
-		RedisPassword: getEnv("REDIS_PASSWORD", ""),
+		RedisHost:     redisHost,
+		RedisPort:     redisPort,
+		RedisPassword: redisPassword,
 
 		JWTSecret:      getEnv("JWT_SECRET", "dev_secret_change_me"),
 		JWTExpiryHours: getEnvInt("JWT_EXPIRY_HOURS", 24),
@@ -138,3 +140,19 @@ func getEnvInt(key string, fallback int) int {
 	}
 	return fallback
 }
+
+func parseRedisURL(raw string) (host, port, password string) {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return "localhost", "6379", ""
+	}
+	host = u.Hostname()
+	port = u.Port()
+	if port == "" {
+		port = "6379"
+	}
+	if u.User != nil {
+		password, _ = u.User.Password()
+	}
+	return
+}   

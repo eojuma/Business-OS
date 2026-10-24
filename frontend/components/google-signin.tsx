@@ -1,6 +1,8 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
+import { api } from "@/lib/api";
 
 type GoogleCredentialResponse = { credential?: string };
 
@@ -23,57 +25,101 @@ declare global {
 }
 
 interface GoogleSignInProps {
-  onCredential: (credential: string) => void;
+  /** Called when an authenticated Google user has no workspace yet. */
+  onWorkspaceRequired?: (credential: string) => void;
   onError?: (message: string) => void;
   text?: "signin_with" | "signup_with" | "continue_with";
   disabled?: boolean;
 }
 
-const SCRIPT_ID = "google-identity-services";
+// The GIS script is loaded once in app/layout.tsx. initialize() must run at
+// most once per client id: calling it again drops the previous credential
+// callback, which makes the flow hang after account selection. A module-level
+// guard survives React Strict Mode double-mounts and route changes.
+let initializedClientId: string | null = null;
+let credentialHandler: ((credential: string) => void) | null = null;
+
+const GIS_LOAD_TIMEOUT_MS = 10000;
 
 export function GoogleSignIn({
-  onCredential,
+  onWorkspaceRequired,
   onError,
   text = "continue_with",
   disabled = false,
 }: GoogleSignInProps) {
+  const router = useRouter();
   const containerRef = useRef<HTMLDivElement>(null);
-  const credentialRef = useRef(onCredential);
+  const workspaceRequiredRef = useRef(onWorkspaceRequired);
   const errorRef = useRef(onError);
+  const [busy, setBusy] = useState(false);
 
   useEffect(() => {
-    credentialRef.current = onCredential;
-  }, [onCredential]);
+    workspaceRequiredRef.current = onWorkspaceRequired;
+  }, [onWorkspaceRequired]);
 
   useEffect(() => {
     errorRef.current = onError;
   }, [onError]);
+
+  const handleCredential = useCallback(
+    async (credential: string) => {
+      setBusy(true);
+      try {
+        // api's baseURL already includes /api/v1 (NEXT_PUBLIC_API_URL).
+        const response = await api.post("/auth/google", { credential });
+        localStorage.setItem("token", response.data.data.token);
+        router.replace("/dashboard");
+      } catch (e: any) {
+        const code = e.response?.data?.code;
+        if (code === "workspace_required" && workspaceRequiredRef.current) {
+          workspaceRequiredRef.current(credential);
+        } else {
+          errorRef.current?.(
+            e.response?.data?.error || "Unable to sign in with Google",
+          );
+        }
+      } finally {
+        setBusy(false);
+      }
+    },
+    [router],
+  );
+
+  // Keep the single GIS callback pointed at the latest component instance.
+  useEffect(() => {
+    credentialHandler = handleCredential;
+    return () => {
+      if (credentialHandler === handleCredential) {
+        credentialHandler = null;
+      }
+    };
+  }, [handleCredential]);
 
   const clientId = process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID;
 
   useEffect(() => {
     if (!clientId) return;
     let cancelled = false;
-    let script: HTMLScriptElement | null = null;
+    let timer: ReturnType<typeof setTimeout> | null = null;
 
-    const render = () => {
-      if (cancelled || !containerRef.current) return;
+    const setup = (): boolean => {
+      if (cancelled || !containerRef.current) return false;
       const googleId = window.google?.accounts?.id;
-      if (!googleId) {
-        errorRef.current?.("Google sign-in could not be loaded.");
-        return;
-      }
+      if (!googleId) return false;
 
-      googleId.initialize({
-        client_id: clientId,
-        callback: (response) => {
-          if (response.credential) {
-            credentialRef.current(response.credential);
-          } else {
-            errorRef.current?.("Google sign-in was cancelled.");
-          }
-        },
-      });
+      if (initializedClientId !== clientId) {
+        googleId.initialize({
+          client_id: clientId,
+          callback: (response) => {
+            if (response.credential) {
+              credentialHandler?.(response.credential);
+            } else {
+              errorRef.current?.("Google sign-in was cancelled.");
+            }
+          },
+        });
+        initializedClientId = clientId;
+      }
 
       containerRef.current.innerHTML = "";
       googleId.renderButton(containerRef.current, {
@@ -85,52 +131,27 @@ export function GoogleSignIn({
         width: 320,
         logo_alignment: "left",
       });
+      return true;
     };
 
-    // Always drop a script that failed to load, even if this mount has already
-    // been unmounted. Otherwise a later mount would attach a load listener to
-    // an element that never fires again and the button would stay blank.
-    const reportLoadFailure = () => {
-      script?.remove();
-      if (!cancelled) {
+    // The script tag may not be injected yet (next/script) or may still be
+    // loading, so poll briefly instead of waiting on an event that already
+    // fired.
+    const deadline = Date.now() + GIS_LOAD_TIMEOUT_MS;
+    const check = () => {
+      if (cancelled) return;
+      if (setup()) return;
+      if (Date.now() > deadline) {
         errorRef.current?.("Could not load Google sign-in.");
+        return;
       }
+      timer = setTimeout(check, 100);
     };
-
-    const existing = document.getElementById(SCRIPT_ID) as HTMLScriptElement | null;
-    if (existing) {
-      if (window.google?.accounts?.id) {
-        render();
-        return () => {
-          cancelled = true;
-        };
-      }
-      script = existing;
-      const onLoad = () => {
-        if (!cancelled) render();
-      };
-      existing.addEventListener("load", onLoad);
-      existing.addEventListener("error", reportLoadFailure);
-      return () => {
-        cancelled = true;
-        existing.removeEventListener("load", onLoad);
-        existing.removeEventListener("error", reportLoadFailure);
-      };
-    }
-
-    script = document.createElement("script");
-    script.id = SCRIPT_ID;
-    script.src = "https://accounts.google.com/gsi/client";
-    script.async = true;
-    script.defer = true;
-    script.onload = () => {
-      if (!cancelled) render();
-    };
-    script.onerror = reportLoadFailure;
-    document.head.appendChild(script);
+    check();
 
     return () => {
       cancelled = true;
+      if (timer) clearTimeout(timer);
     };
   }, [clientId, text]);
 
@@ -144,8 +165,11 @@ export function GoogleSignIn({
 
   return (
     <div
+      id="google-btn"
       ref={containerRef}
-      className={`flex min-h-[40px] justify-center ${disabled ? "pointer-events-none opacity-50" : ""}`}
+      className={`flex min-h-[40px] justify-center ${
+        disabled || busy ? "pointer-events-none opacity-50" : ""
+      }`}
     />
   );
 }

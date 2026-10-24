@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useState } from "react";
+import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { ArrowRight, Store } from "lucide-react";
 import { api } from "@/lib/api";
@@ -30,29 +30,6 @@ export default function LoginPage() {
       setLoading(false);
     }
   }
-
-  const handleGoogle = useCallback(
-    async (credential: string) => {
-      setError("");
-      setNeedsWorkspace(false);
-      setLoading(true);
-      try {
-        const r = await api.post("/auth/google", { credential });
-        localStorage.setItem("token", r.data.data.token);
-        router.push("/dashboard");
-      } catch (e: any) {
-        const message = e.response?.data?.error || "Unable to sign in with Google";
-        if (e.response?.data?.code === "workspace_required") {
-          setNeedsWorkspace(true);
-        } else {
-          setError(message);
-        }
-      } finally {
-        setLoading(false);
-      }
-    },
-    [router],
-  );
 
   return (
     <main className="grid min-h-screen lg:grid-cols-2">
@@ -99,8 +76,9 @@ export default function LoginPage() {
             )}
 
             <GoogleSignIn
-              onCredential={handleGoogle}
+              onWorkspaceRequired={() => setNeedsWorkspace(true)}
               onError={setError}
+              onReady={() => setError("")}
               text="signin_with"
               disabled={loading}
             />

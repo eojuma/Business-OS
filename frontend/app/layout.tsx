@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import Script from "next/script";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -16,7 +17,16 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en">
-      <body className="antialiased">{children}</body>
+      <body className="antialiased">
+        {children}
+        {/* Google Identity Services is loaded once for the whole app; the
+            sign-in component only waits for window.google to appear. */}
+        <Script
+          id="google-identity-services"
+          src="https://accounts.google.com/gsi/client"
+          strategy="afterInteractive"
+        />
+      </body>
     </html>
   );
 }   

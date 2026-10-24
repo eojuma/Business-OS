@@ -71,37 +71,14 @@ export default function SignupPage() {
     }
   }
 
-  const handleGoogle = useCallback(
-    async (credentialValue: string) => {
-      const claims = decodeGoogleClaims(credentialValue);
-      if (claims.email) setEmail(claims.email);
-      if (claims.name) setOwnerName(claims.name);
-      setCredential(credentialValue);
-      setError("");
-      setNotice("");
-      setLoading(true);
-
-      try {
-        // Existing account: sign in immediately. A new account returns 409
-        // and the form below asks for the workspace details.
-        const r = await api.post("/auth/google", { credential: credentialValue });
-        localStorage.setItem("token", r.data.data.token);
-        router.push("/dashboard");
-      } catch (e: any) {
-        const code = e.response?.data?.code;
-        const message = e.response?.data?.error || "Unable to continue with Google";
-        if (code === "workspace_required") {
-          setNotice("Add your store details to finish creating the workspace.");
-        } else {
-          setError(message);
-          setCredential("");
-        }
-      } finally {
-        setLoading(false);
-      }
-    },
-    [router],
-  );
+  const handleWorkspaceRequired = useCallback((credentialValue: string) => {
+    const claims = decodeGoogleClaims(credentialValue);
+    if (claims.email) setEmail(claims.email);
+    if (claims.name) setOwnerName(claims.name);
+    setCredential(credentialValue);
+    setError("");
+    setNotice("Add your store details to finish creating the workspace.");
+  }, []);
 
   function useEmailInstead() {
     setCredential("");
@@ -157,8 +134,9 @@ export default function SignupPage() {
           {!googleMode && (
             <>
               <GoogleSignIn
-                onCredential={handleGoogle}
+                onWorkspaceRequired={handleWorkspaceRequired}
                 onError={setError}
+                onReady={() => setError("")}
                 text="signup_with"
                 disabled={loading}
               />

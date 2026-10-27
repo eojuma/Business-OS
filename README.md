@@ -160,7 +160,7 @@ Defaults in the templates target Docker Compose. When the API runs directly on t
 Two settings are common to both modes and worth checking before the first run:
 
 - `JWT_SECRET` — replace the placeholder outside local development.
-- `FRONTEND_URL` — comma-separated allowed browser origins; the API's CORS middleware rejects origins that are not listed.
+- `FRONTEND_URL` — comma-separated allowed browser origins. Outside production the API also allows `http://localhost:3000` and `http://127.0.0.1:3000` automatically; with `APP_ENV=production` only the configured list is allowed.
 
 ### 2. Run the full stack
 
@@ -251,7 +251,7 @@ mise run db:test:up   # start the test PostgreSQL instance
 |---|---|---|
 | `APP_ENV` | `development` | Enables production-only validation when set to `production` |
 | `APP_PORT` | `8080` | API listen port |
-| `FRONTEND_URL` | `http://localhost:3000` | Comma-separated allowed CORS origins |
+| `FRONTEND_URL` | `http://localhost:3000` | Comma-separated allowed CORS origins; the two localhost origins are added automatically only outside production |
 | `DB_HOST` | `localhost` | PostgreSQL host (`postgres` inside Compose) |
 | `DB_PORT` | `5432` | PostgreSQL port |
 | `DB_USER` / `DB_PASSWORD` / `DB_NAME` | `businessos` | PostgreSQL credentials and database |

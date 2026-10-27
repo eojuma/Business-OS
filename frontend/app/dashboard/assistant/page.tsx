@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Bot, Plus, Send, Sparkles, User, X } from "lucide-react";
 import { api } from "@/lib/api";
 import { useAssistantConversations } from "@/hooks/use-assistant-conversations";
@@ -40,8 +40,12 @@ export default function AssistantPage() {
   const focusInputRef = useRef(false);
   const scrollPositions = useRef<Record<string, number>>({});
   const prevActiveRef = useRef(activeId);
+  const switchedRef = useRef(false);
 
-  useEffect(() => {
+  // Restore the destination offset before paint when switching conversations.
+  // Without this, the browser clamps scrollTop, fires a scroll event, and
+  // handleScroll overwrites the saved offset before it can be applied.
+  useLayoutEffect(() => {
     if (!loaded) return;
     const element = scrollRef.current;
     if (!element) return;
@@ -49,11 +53,20 @@ export default function AssistantPage() {
     const switched = prevActiveRef.current !== activeId;
     prevActiveRef.current = activeId;
 
-    if (switched) {
-      const saved = scrollPositions.current[activeId];
-      element.scrollTop = saved ?? element.scrollHeight;
+    if (!switched) return;
+    switchedRef.current = true;
+    const saved = scrollPositions.current[activeId];
+    element.scrollTop = saved ?? element.scrollHeight;
+  }, [activeId, loaded]);
+
+  useEffect(() => {
+    if (!loaded) return;
+    if (switchedRef.current) {
+      switchedRef.current = false;
       return;
     }
+    const element = scrollRef.current;
+    if (!element) return;
     element.scrollTo({ top: element.scrollHeight, behavior: "smooth" });
   }, [activeId, loaded, entries.length, pendingId]);
 

@@ -208,6 +208,26 @@ export function mergeConversationStates(
   }
 
   const conversations = capConversations(merged, new Set([local.activeId, incoming.activeId]));
+
+  if (conversations.length === 0) {
+    // Both sides removed every chat (e.g. one tab closed each). Start a fresh
+    // chat with a deterministic id so concurrent tabs converge on it instead
+    // of each creating a different one.
+    const recovered: Conversation = {
+      id: "recovered",
+      title: NEW_CHAT_TITLE,
+      createdAt: 0,
+      updatedAt: 0,
+      entries: [],
+    };
+    const recoveredState: ConversationState = {
+      conversations: [recovered],
+      activeId: recovered.id,
+    };
+    if (Object.keys(removed).length > 0) recoveredState.removed = removed;
+    return recoveredState;
+  }
+
   const activeId = conversations.some((conversation) => conversation.id === local.activeId)
     ? local.activeId
     : conversations.some((conversation) => conversation.id === incoming.activeId)

@@ -224,7 +224,11 @@ export function mergeConversationStates(
       conversations: [recovered],
       activeId: recovered.id,
     };
-    if (Object.keys(removed).length > 0) recoveredState.removed = removed;
+    // Never carry a tombstone for the replacement itself: it would make the
+    // payload unloadable (parse drops every conversation) until the TTL ends.
+    const remaining = { ...removed };
+    delete remaining[recovered.id];
+    if (Object.keys(remaining).length > 0) recoveredState.removed = remaining;
     return recoveredState;
   }
 

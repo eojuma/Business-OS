@@ -40,6 +40,7 @@ export function useAssistantConversations(): AssistantConversations {
   const [state, setState] = useState<ConversationState>(initialConversationState);
   const [loaded, setLoaded] = useState(false);
   const storageKeyRef = useRef<string | null>(null);
+  const skipSaveRef = useRef(false);
 
   useEffect(() => {
     // Storage access can throw (disabled cookies, enterprise policy,
@@ -54,6 +55,12 @@ export function useAssistantConversations(): AssistantConversations {
 
   useEffect(() => {
     if (!loaded || !storageKeyRef.current) return;
+    if (skipSaveRef.current) {
+      // Adopting another tab's write is not a local change; saving the merge
+      // result again would make the tabs rewrite each other indefinitely.
+      skipSaveRef.current = false;
+      return;
+    }
     saveConversations(storageKeyRef.current, state);
   }, [loaded, state]);
 
@@ -66,6 +73,7 @@ export function useAssistantConversations(): AssistantConversations {
       if (!storageKeyRef.current || event.key !== storageKeyRef.current || !event.newValue) return;
       const incoming = parseConversationState(event.newValue);
       if (!incoming) return;
+      skipSaveRef.current = true;
       setState((previous) => mergeConversationStates(previous, incoming));
     };
     window.addEventListener("storage", onStorage);

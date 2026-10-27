@@ -182,6 +182,17 @@ describe("assistant conversation model", () => {
     expect(merged.removed?.[firstId]).toBe(10);
   });
 
+  it("falls back to a fresh chat when both tabs removed every conversation", () => {
+    const { state, firstId, secondId } = stateWithTwoConversations();
+    const closedFirst = removeConversation(state, firstId, 10);
+    const closedSecond = removeConversation(state, secondId, 11);
+
+    const merged = mergeConversationStates(closedFirst, closedSecond);
+    expect(merged.conversations).toHaveLength(1);
+    expect(merged.conversations[0].entries).toHaveLength(0);
+    expect(merged.activeId).toBe(merged.conversations[0].id);
+  });
+
   it("persists removal tombstones through storage", () => {
     const { state, firstId } = stateWithTwoConversations();
     const now = Date.now();

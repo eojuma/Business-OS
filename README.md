@@ -155,10 +155,11 @@ cp backend/.env.example backend/.env
 cp frontend/.env.example frontend/.env
 ```
 
-Defaults in the templates target Docker Compose. When the API runs directly on the host instead of inside Compose, set `DB_HOST=localhost` and `REDIS_URL=redis://localhost:6379`.
+The templates are host-oriented (`DB_HOST=localhost`, `REDIS_URL=redis://localhost:6379`). Docker Compose overrides both with the service names (`postgres`, `redis`), so the same file works in either mode.
 
-Two settings are common to both modes and worth checking before the first run:
+Settings worth checking before the first run:
 
+- `APP_ENV` — `development`, `test`, `staging` or `production` (case-insensitive). Production enables strict configuration validation and removes the implicit localhost CORS origins; unknown values abort startup.
 - `JWT_SECRET` — replace the placeholder outside local development.
 - `FRONTEND_URL` — comma-separated allowed browser origins. Outside production the API also allows `http://localhost:3000` and `http://127.0.0.1:3000` automatically; with `APP_ENV=production` only the configured list is allowed.
 
@@ -249,7 +250,7 @@ mise run db:test:up   # start the test PostgreSQL instance
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `APP_ENV` | `development` | Enables production-only validation when set to `production` |
+| `APP_ENV` | `development` | One of `development`, `test`, `staging`, `production` (case-insensitive). Unknown values abort startup; production enables strict validation and drops the implicit localhost CORS origins |
 | `APP_PORT` | `8080` | API listen port |
 | `FRONTEND_URL` | `http://localhost:3000` | Comma-separated allowed CORS origins; the two localhost origins are added automatically only outside production |
 | `DB_HOST` | `localhost` | PostgreSQL host (`postgres` inside Compose) |

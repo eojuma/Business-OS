@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Bot, Plus, Send, Sparkles, User, X } from "lucide-react";
 import { api } from "@/lib/api";
 import { useAssistantConversations } from "@/hooks/use-assistant-conversations";
@@ -32,8 +32,21 @@ export default function AssistantPage() {
 
   const entries = activeConversation.entries;
   const [input, setInput] = useState("");
-  const [pendingId, setPendingId] = useState<string | null>(null);
-  const loading = pendingId !== null;
+  // Pending requests are tracked per conversation so one chat thinking does
+  // not block composing or confirming in another.
+  const [pendingIds, setPendingIds] = useState<Record<string, boolean>>({});
+  const loading = Boolean(pendingIds[activeId]);
+  const setConversationPending = useCallback((conversationId: string, value: boolean) => {
+    setPendingIds((previous) => {
+      if (value) {
+        return previous[conversationId] ? previous : { ...previous, [conversationId]: true };
+      }
+      if (!previous[conversationId]) return previous;
+      const next = { ...previous };
+      delete next[conversationId];
+      return next;
+    });
+  }, []);
 
   const inputRef = useRef<HTMLInputElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -42,7 +55,7 @@ export default function AssistantPage() {
   const prevActiveRef = useRef(activeId);
   const switchedRef = useRef(false);
   const prevEntriesLenRef = useRef(entries.length);
-  const prevPendingRef = useRef(pendingId);
+  const prevPendingActiveRef = useRef(false);
 
   // Restore the destination offset before paint when switching conversations.
   // Without this, the browser clamps scrollTop, fires a scroll event, and
@@ -70,23 +83,19 @@ export default function AssistantPage() {
     const entriesChanged = entries.length !== prevEntriesLenRef.current;
     prevEntriesLenRef.current = entries.length;
 
-    const previousPending = prevPendingRef.current;
-    prevPendingRef.current = pendingId;
-    const pendingChanged = pendingId !== previousPending;
-    const pendingIsActive = pendingId === activeId;
-    const pendingWasActive = previousPending === activeId;
+    const pendingActive = Boolean(pendingIds[activeId]);
+    const pendingChanged = pendingActive !== prevPendingActiveRef.current;
+    prevPendingActiveRef.current = pendingActive;
 
     // A switch is restored by the layout effect above; appends are handled
     // below. Requests belonging to another chat must not move this one.
     if (switched) return;
-    if (!entriesChanged && !(pendingChanged && (pendingIsActive || pendingWasActive))) {
-      return;
-    }
+    if (!entriesChanged && !pendingChanged) return;
 
     const element = scrollRef.current;
     if (!element) return;
     element.scrollTo({ top: element.scrollHeight, behavior: "smooth" });
-  }, [activeId, loaded, entries.length, pendingId]);
+  }, [activeId, loaded, entries.length, pendingIds]);
 
   useEffect(() => {
     if (!loading && focusInputRef.current) {
@@ -102,7 +111,7 @@ export default function AssistantPage() {
   async function handleSend(e: React.FormEvent) {
     e.preventDefault();
     const text = input.trim();
-    if (!text || pendingId) return;
+    if (!text || loading) return;
 
     const conversationId = activeId;
     const history = entries
@@ -112,7 +121,7 @@ export default function AssistantPage() {
     setInput("");
     focusInputRef.current = true;
     appendEntry(conversationId, { role: "user", text });
-    setPendingId(conversationId);
+    setConversationPending(conversationId, true);
 
     try {
       const res = await api.post("/assistant/interpret", { text, history });
@@ -129,14 +138,14 @@ export default function AssistantPage() {
         text: err.response?.data?.error || "Something went wrong understanding that.",
       });
     } finally {
-      setPendingId((current) => (current === conversationId ? null : current));
+      setConversationPending(conversationId, false);
     }
   }
 
   async function handleConfirm(index: number, preview: Preview) {
     const conversationId = activeId;
     focusInputRef.current = true;
-    setPendingId(conversationId);
+    setConversationPending(conversationId, true);
 
     try {
       const res = await api.post("/assistant/confirm", {
@@ -156,7 +165,7 @@ export default function AssistantPage() {
         text: err.response?.data?.error || "Failed to record the sale.",
       });
     } finally {
-      setPendingId((current) => (current === conversationId ? null : current));
+      setConversationPending(conversationId, false);
     }
   }
 
@@ -174,7 +183,7 @@ export default function AssistantPage() {
     inputRef.current?.focus();
   }
 
-  const thinking = pendingId === activeId;
+  const thinking = loading;
 
   return (
     <div className="mx-auto flex h-[calc(100dvh-6rem)] w-full max-w-3xl flex-col sm:h-[calc(100dvh-7rem)] md:h-[calc(100dvh-3rem)] lg:h-[calc(100dvh-4rem)]">

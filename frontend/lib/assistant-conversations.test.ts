@@ -173,6 +173,36 @@ describe("assistant conversation model", () => {
     expect(conversation?.entries.map((entry) => entry.text)).toEqual(["newer"]);
   });
 
+  it("does not resurrect a chat closed in another tab", () => {
+    const { state, firstId } = stateWithTwoConversations();
+    const closed = removeConversation(state, firstId, 10);
+
+    const merged = mergeConversationStates(state, closed);
+    expect(merged.conversations.some((conversation) => conversation.id === firstId)).toBe(false);
+    expect(merged.removed?.[firstId]).toBe(10);
+  });
+
+  it("persists removal tombstones through storage", () => {
+    const { state, firstId } = stateWithTwoConversations();
+    const now = Date.now();
+    const closed = removeConversation(state, firstId, now);
+
+    const parsed = parseConversationState(serializeConversationState(closed, now));
+    expect(parsed?.removed?.[firstId]).toBe(now);
+    expect(parsed?.conversations.some((conversation) => conversation.id === firstId)).toBe(false);
+  });
+
+  it("writes identical payloads regardless of local conversation order", () => {
+    const { state } = stateWithTwoConversations();
+    const now = Date.now();
+    const reversed: ConversationState = {
+      ...state,
+      conversations: [...state.conversations].reverse(),
+    };
+
+    expect(serializeConversationState(state, now)).toBe(serializeConversationState(reversed, now));
+  });
+
   it("trims old entries but keeps the derived title", () => {
     let state = emptyState(0);
     const id = state.activeId;

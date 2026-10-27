@@ -7,6 +7,7 @@ import {
   getActiveConversation,
   initialConversationState,
   loadConversations,
+  readStoredValue,
   removeConversation,
   saveConversations,
   selectConversation as selectConversationInState,
@@ -39,7 +40,10 @@ export function useAssistantConversations(): AssistantConversations {
   const storageKeyRef = useRef<string | null>(null);
 
   useEffect(() => {
-    const token = typeof window === "undefined" ? null : window.localStorage.getItem("token");
+    // Storage access can throw (disabled cookies, enterprise policy,
+    // sandboxed iframes); the guarded read returns null so the page falls
+    // back to an in-memory session and still leaves the loading state.
+    const token = readStoredValue("token");
     const key = conversationStorageKey(token);
     storageKeyRef.current = key;
     setState(loadConversations(key));

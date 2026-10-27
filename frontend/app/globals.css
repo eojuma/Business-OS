@@ -16,3 +16,10 @@ button:disabled { cursor: not-allowed; }
   .btn-secondary { @apply inline-flex items-center justify-center gap-2 rounded-lg border border-[#d9e0d9] bg-white px-4 py-2.5 text-sm font-semibold text-[#344139] transition hover:bg-[#f2f5f1] disabled:opacity-50; }
   .eyebrow { @apply text-[11px] font-bold uppercase tracking-[0.14em] text-[#718078]; }
 }
+@layer utilities {
+  .chat-scroll { scrollbar-width: thin; scrollbar-color: #cfd8d1 transparent; }
+  .chat-scroll::-webkit-scrollbar { width: 8px; }
+  .chat-scroll::-webkit-scrollbar-track { background: transparent; }
+  .chat-scroll::-webkit-scrollbar-thumb { background: #cfd8d1; border-radius: 9999px; }
+  .chat-scroll::-webkit-scrollbar-thumb:hover { background: #b9c6bc; }
+}

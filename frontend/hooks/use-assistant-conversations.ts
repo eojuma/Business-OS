@@ -10,6 +10,7 @@ import {
   mergeConversationStates,
   parseConversationState,
   readStoredValue,
+  serializeConversationState,
   removeConversation,
   saveConversations,
   selectConversation as selectConversationInState,
@@ -40,7 +41,9 @@ export function useAssistantConversations(): AssistantConversations {
   const [state, setState] = useState<ConversationState>(initialConversationState);
   const [loaded, setLoaded] = useState(false);
   const storageKeyRef = useRef<string | null>(null);
-  const skipSaveRef = useRef(false);
+  // Payload adopted from another tab; the save effect skips exactly that
+  // snapshot so it is not re-broadcast, while genuine local edits still save.
+  const adoptedSnapshotRef = useRef<string | null>(null);
 
   useEffect(() => {
     // Storage access can throw (disabled cookies, enterprise policy,
@@ -55,10 +58,11 @@ export function useAssistantConversations(): AssistantConversations {
 
   useEffect(() => {
     if (!loaded || !storageKeyRef.current) return;
-    if (skipSaveRef.current) {
-      // Adopting another tab's write is not a local change; saving the merge
-      // result again would make the tabs rewrite each other indefinitely.
-      skipSaveRef.current = false;
+    const payload = serializeConversationState(state);
+    if (adoptedSnapshotRef.current === payload) {
+      // Adopting another tab's write is not a local change; saving it again
+      // would make the tabs rewrite each other indefinitely.
+      adoptedSnapshotRef.current = null;
       return;
     }
     saveConversations(storageKeyRef.current, state);
@@ -73,8 +77,11 @@ export function useAssistantConversations(): AssistantConversations {
       if (!storageKeyRef.current || event.key !== storageKeyRef.current || !event.newValue) return;
       const incoming = parseConversationState(event.newValue);
       if (!incoming) return;
-      skipSaveRef.current = true;
-      setState((previous) => mergeConversationStates(previous, incoming));
+      setState((previous) => {
+        const merged = mergeConversationStates(previous, incoming);
+        adoptedSnapshotRef.current = serializeConversationState(merged);
+        return merged;
+      });
     };
     window.addEventListener("storage", onStorage);
     return () => window.removeEventListener("storage", onStorage);

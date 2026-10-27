@@ -41,9 +41,8 @@ export function useAssistantConversations(): AssistantConversations {
   const [state, setState] = useState<ConversationState>(initialConversationState);
   const [loaded, setLoaded] = useState(false);
   const storageKeyRef = useRef<string | null>(null);
-  // Payload adopted from another tab; the save effect skips exactly that
-  // snapshot so it is not re-broadcast, while genuine local edits still save.
-  const adoptedSnapshotRef = useRef<string | null>(null);
+  // True while the next state change comes from adopting another tab's write.
+  const adoptedRef = useRef(false);
 
   useEffect(() => {
     // Storage access can throw (disabled cookies, enterprise policy,
@@ -59,11 +58,17 @@ export function useAssistantConversations(): AssistantConversations {
   useEffect(() => {
     if (!loaded || !storageKeyRef.current) return;
     const payload = serializeConversationState(state);
-    if (adoptedSnapshotRef.current === payload) {
-      // Adopting another tab's write is not a local change; saving it again
-      // would make the tabs rewrite each other indefinitely.
-      adoptedSnapshotRef.current = null;
-      return;
+    if (adoptedRef.current) {
+      adoptedRef.current = false;
+      const stored = parseConversationState(readStoredValue(storageKeyRef.current));
+      // Comparing content (activeId ignored) tells us whether this merge added
+      // anything. Identical content would be a pointless write and, worse,
+      // re-broadcast the other tab's snapshot for ever; a merge that added
+      // chats must be persisted so a reload cannot lose them.
+      if (stored) {
+        const comparable = serializeConversationState({ ...stored, activeId: state.activeId });
+        if (comparable === payload) return;
+      }
     }
     saveConversations(storageKeyRef.current, state);
   }, [loaded, state]);
@@ -77,11 +82,8 @@ export function useAssistantConversations(): AssistantConversations {
       if (!storageKeyRef.current || event.key !== storageKeyRef.current || !event.newValue) return;
       const incoming = parseConversationState(event.newValue);
       if (!incoming) return;
-      setState((previous) => {
-        const merged = mergeConversationStates(previous, incoming);
-        adoptedSnapshotRef.current = serializeConversationState(merged);
-        return merged;
-      });
+      adoptedRef.current = true;
+      setState((previous) => mergeConversationStates(previous, incoming));
     };
     window.addEventListener("storage", onStorage);
     return () => window.removeEventListener("storage", onStorage);
@@ -90,25 +92,30 @@ export function useAssistantConversations(): AssistantConversations {
   const activeConversation = useMemo(() => getActiveConversation(state), [state]);
 
   const appendEntry = useCallback((conversationId: string, entry: ChatEntry) => {
+    adoptedRef.current = false;
     setState((previous) => appendEntryToState(previous, conversationId, entry));
   }, []);
 
   const updateEntry = useCallback(
     (conversationId: string, index: number, patch: Partial<Pick<ChatEntry, "resolved">>) => {
+      adoptedRef.current = false;
       setState((previous) => updateEntryInState(previous, conversationId, index, patch));
     },
     [],
   );
 
   const newConversation = useCallback(() => {
+    adoptedRef.current = false;
     setState((previous) => startConversation(previous));
   }, []);
 
   const selectConversation = useCallback((id: string) => {
+    adoptedRef.current = false;
     setState((previous) => selectConversationInState(previous, id));
   }, []);
 
   const closeConversation = useCallback((id: string) => {
+    adoptedRef.current = false;
     setState((previous) => removeConversation(previous, id));
   }, []);
 

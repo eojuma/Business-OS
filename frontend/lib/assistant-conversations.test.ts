@@ -10,6 +10,7 @@ import {
   loadConversations,
   MAX_CONVERSATIONS,
   MAX_ENTRIES,
+  mergeConversationStates,
   parseConversationState,
   removeConversation,
   saveConversations,
@@ -126,6 +127,50 @@ describe("assistant conversation model", () => {
     }
     expect(state.conversations).toHaveLength(MAX_CONVERSATIONS);
     expect(state.conversations[0].id).toBe(state.activeId);
+  });
+
+  it("evicts the least recently updated chat, not the one on screen", () => {
+    let state = emptyState(0);
+    for (let i = 1; i <= MAX_CONVERSATIONS; i += 1) {
+      state = appendEntry(state, state.activeId, { role: "user", text: `chat ${i}` }, i);
+      state = startConversation(state, i);
+    }
+
+    // Open the oldest chat, then start a new one.
+    const oldest = state.conversations[state.conversations.length - 1];
+    const secondOldest = state.conversations[state.conversations.length - 2];
+    state = selectConversation(state, oldest.id);
+    const next = startConversation(state, MAX_CONVERSATIONS + 1);
+
+    expect(next.conversations).toHaveLength(MAX_CONVERSATIONS);
+    expect(next.conversations.some((conversation) => conversation.id === oldest.id)).toBe(true);
+    expect(next.conversations.some((conversation) => conversation.id === secondOldest.id)).toBe(false);
+    expect(next.conversations.some((conversation) => conversation.id === next.activeId)).toBe(true);
+  });
+
+  it("merges another tab's snapshot without losing either side's chats", () => {
+    const localBase = emptyState(1);
+    const local = appendEntry(localBase, localBase.activeId, { role: "user", text: "local chat" }, 2);
+
+    const remoteBase = emptyState(10);
+    const remote = appendEntry(remoteBase, remoteBase.activeId, { role: "user", text: "remote chat" }, 11);
+
+    const merged = mergeConversationStates(local, remote);
+    expect(merged.conversations.map((conversation) => conversation.id).sort()).toEqual(
+      [localBase.activeId, remoteBase.activeId].sort(),
+    );
+    expect(merged.activeId).toBe(localBase.activeId);
+  });
+
+  it("keeps the most recently updated copy of a shared chat when merging", () => {
+    const base = emptyState(1);
+    const id = base.activeId;
+    const older = appendEntry(base, id, { role: "user", text: "old" }, 2);
+    const newer = appendEntry(base, id, { role: "user", text: "newer" }, 5);
+
+    const merged = mergeConversationStates(older, newer);
+    const conversation = merged.conversations.find((item) => item.id === id);
+    expect(conversation?.entries.map((entry) => entry.text)).toEqual(["newer"]);
   });
 
   it("trims old entries but keeps the derived title", () => {

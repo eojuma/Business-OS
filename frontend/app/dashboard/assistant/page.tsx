@@ -41,6 +41,8 @@ export default function AssistantPage() {
   const scrollPositions = useRef<Record<string, number>>({});
   const prevActiveRef = useRef(activeId);
   const switchedRef = useRef(false);
+  const prevEntriesLenRef = useRef(entries.length);
+  const prevPendingRef = useRef(pendingId);
 
   // Restore the destination offset before paint when switching conversations.
   // Without this, the browser clamps scrollTop, fires a scroll event, and
@@ -61,10 +63,26 @@ export default function AssistantPage() {
 
   useEffect(() => {
     if (!loaded) return;
-    if (switchedRef.current) {
-      switchedRef.current = false;
+
+    const switched = switchedRef.current;
+    switchedRef.current = false;
+
+    const entriesChanged = entries.length !== prevEntriesLenRef.current;
+    prevEntriesLenRef.current = entries.length;
+
+    const previousPending = prevPendingRef.current;
+    prevPendingRef.current = pendingId;
+    const pendingChanged = pendingId !== previousPending;
+    const pendingIsActive = pendingId === activeId;
+    const pendingWasActive = previousPending === activeId;
+
+    // A switch is restored by the layout effect above; appends are handled
+    // below. Requests belonging to another chat must not move this one.
+    if (switched) return;
+    if (!entriesChanged && !(pendingChanged && (pendingIsActive || pendingWasActive))) {
       return;
     }
+
     const element = scrollRef.current;
     if (!element) return;
     element.scrollTo({ top: element.scrollHeight, behavior: "smooth" });

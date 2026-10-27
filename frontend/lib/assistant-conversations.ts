@@ -50,6 +50,21 @@ function browserStorage(): StorageLike | undefined {
   }
 }
 
+// readStoredValue mirrors the guarded access used by loadConversations so a
+// browser that throws on localStorage access degrades to an in-memory session
+// instead of taking the page down.
+export function readStoredValue(
+  key: string,
+  store: StorageLike | undefined = browserStorage(),
+): string | null {
+  if (!store) return null;
+  try {
+    return store.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
 export function newId(): string {
   if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
     return crypto.randomUUID();

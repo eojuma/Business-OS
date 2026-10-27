@@ -27,6 +27,8 @@ export interface Conversation {
 export interface ConversationState {
   conversations: Conversation[];
   activeId: string;
+  /** Tombstones for chats removed in this or another tab (id -> deletedAt). */
+  removed?: Record<string, number>;
 }
 
 export interface StorageLike {
@@ -38,6 +40,9 @@ export const STORAGE_VERSION = 1;
 export const MAX_CONVERSATIONS = 30;
 export const MAX_ENTRIES = 200;
 export const NEW_CHAT_TITLE = "New chat";
+// Tombstones are garbage-collected after this window; no open tab can still
+// hold a copy older than this in practice.
+const TOMBSTONE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const TITLE_LIMIT = 42;
 const STORAGE_PREFIX = "business-os:assistant:conversations";
 
@@ -180,17 +185,26 @@ export function mergeConversationStates(
   local: ConversationState,
   incoming: ConversationState,
 ): ConversationState {
+  // Deletions are authoritative: a tombstone from either tab removes the
+  // conversation, so closing a chat in one tab is not undone by another.
+  const removed: Record<string, number> = { ...(incoming.removed ?? {}) };
+  for (const [id, deletedAt] of Object.entries(local.removed ?? {})) {
+    removed[id] = Math.max(deletedAt, removed[id] ?? 0);
+  }
+
   const incomingById = new Map(incoming.conversations.map((conversation) => [conversation.id, conversation]));
   const merged: Conversation[] = [];
   const seen = new Set<string>();
 
   for (const conversation of local.conversations) {
+    if (removed[conversation.id] !== undefined) continue;
     const other = incomingById.get(conversation.id);
     merged.push(other && other.updatedAt > conversation.updatedAt ? other : conversation);
     seen.add(conversation.id);
   }
   for (const conversation of incoming.conversations) {
-    if (!seen.has(conversation.id)) merged.push(conversation);
+    if (removed[conversation.id] !== undefined || seen.has(conversation.id)) continue;
+    merged.push(conversation);
   }
 
   const conversations = capConversations(merged, new Set([local.activeId, incoming.activeId]));
@@ -199,7 +213,9 @@ export function mergeConversationStates(
     : conversations.some((conversation) => conversation.id === incoming.activeId)
       ? incoming.activeId
       : conversations[0].id;
-  return { conversations, activeId };
+  const state: ConversationState = { conversations, activeId };
+  if (Object.keys(removed).length > 0) state.removed = removed;
+  return state;
 }
 
 export function startConversation(state: ConversationState, now = Date.now()): ConversationState {
@@ -225,17 +241,22 @@ export function selectConversation(state: ConversationState, id: string): Conver
   return { ...state, activeId: id };
 }
 
-export function removeConversation(state: ConversationState, id: string): ConversationState {
+export function removeConversation(
+  state: ConversationState,
+  id: string,
+  now = Date.now(),
+): ConversationState {
   if (state.conversations.length <= 1) return state;
   const index = state.conversations.findIndex((conversation) => conversation.id === id);
   if (index === -1) return state;
 
   const conversations = state.conversations.filter((conversation) => conversation.id !== id);
+  const removed = { ...(state.removed ?? {}), [id]: now };
   if (state.activeId !== id) {
-    return { ...state, conversations };
+    return { ...state, conversations, removed };
   }
   const next = conversations[Math.min(index, conversations.length - 1)];
-  return { conversations, activeId: next.id };
+  return { conversations, activeId: next.id, removed };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -257,11 +278,28 @@ function isConversation(value: unknown): value is Conversation {
   return Array.isArray(value.entries) && value.entries.every(isChatEntry);
 }
 
-export function serializeConversationState(state: ConversationState): string {
+function activeTombstones(
+  removed: Record<string, number> | undefined,
+  now: number,
+): Record<string, number> {
+  if (!removed) return {};
+  const cutoff = now - TOMBSTONE_TTL_MS;
+  return Object.fromEntries(
+    Object.entries(removed).filter(([, deletedAt]) => deletedAt >= cutoff),
+  );
+}
+
+export function serializeConversationState(state: ConversationState, now = Date.now()): string {
+  // Canonical (id) order means two tabs holding the same content write the
+  // same bytes, so storage events cannot ping-pong on ordering alone.
+  const conversations = [...state.conversations].sort((a, b) =>
+    a.id < b.id ? -1 : a.id > b.id ? 1 : 0,
+  );
   return JSON.stringify({
     version: STORAGE_VERSION,
-    conversations: state.conversations,
+    conversations,
     activeId: state.activeId,
+    removed: activeTombstones(state.removed, now),
   });
 }
 
@@ -274,13 +312,25 @@ export function parseConversationState(raw: string | null): ConversationState | 
       return null;
     }
 
-    const conversations = parsed.conversations.filter(isConversation);
+    const removed: Record<string, number> = {};
+    if (isRecord(parsed.removed)) {
+      for (const [id, deletedAt] of Object.entries(parsed.removed)) {
+        if (typeof deletedAt === "number") removed[id] = deletedAt;
+      }
+    }
+
+    const conversations = parsed.conversations
+      .filter(isConversation)
+      .filter((conversation) => removed[conversation.id] === undefined)
+      .sort((a, b) => b.updatedAt - a.updatedAt);
     if (conversations.length === 0) return null;
 
     const activeId = conversations.some((conversation) => conversation.id === parsed.activeId)
       ? parsed.activeId
       : conversations[0].id;
-    return { conversations, activeId };
+    const state: ConversationState = { conversations, activeId };
+    if (Object.keys(removed).length > 0) state.removed = removed;
+    return state;
   } catch {
     return null;
   }

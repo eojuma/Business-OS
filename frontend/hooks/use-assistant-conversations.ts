@@ -7,6 +7,8 @@ import {
   getActiveConversation,
   initialConversationState,
   loadConversations,
+  mergeConversationStates,
+  parseConversationState,
   readStoredValue,
   removeConversation,
   saveConversations,
@@ -54,6 +56,21 @@ export function useAssistantConversations(): AssistantConversations {
     if (!loaded || !storageKeyRef.current) return;
     saveConversations(storageKeyRef.current, state);
   }, [loaded, state]);
+
+  // Another tab writing the same key fires a storage event here. Merge its
+  // snapshot (newest copy per conversation) instead of overwriting its chats
+  // with this tab's stale state.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const onStorage = (event: StorageEvent) => {
+      if (!storageKeyRef.current || event.key !== storageKeyRef.current || !event.newValue) return;
+      const incoming = parseConversationState(event.newValue);
+      if (!incoming) return;
+      setState((previous) => mergeConversationStates(previous, incoming));
+    };
+    window.addEventListener("storage", onStorage);
+    return () => window.removeEventListener("storage", onStorage);
+  }, []);
 
   const activeConversation = useMemo(() => getActiveConversation(state), [state]);
 

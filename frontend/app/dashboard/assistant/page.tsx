@@ -43,7 +43,7 @@ export default function AssistantPage() {
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
-  }, [entries, loading]);
+  }, [entries.length, loading]);
 
   useEffect(() => {
     if (!loading && focusInputRef.current) {

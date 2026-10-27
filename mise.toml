@@ -1,0 +1,167 @@
+# Local mirror of the checks in .github/workflows/ci.yml
+# Run everything with: mise run check
+# Fast (no database) with: mise run check:unit
+
+[tools]
+go = "1.25.0"
+node = "20"
+golangci-lint = "2.15.0"
+
+# ---------------------------------------------------------------- frontend
+
+[tasks."frontend:install"]
+description = "Install frontend dependencies (npm ci)"
+dir = "frontend"
+run = "npm ci"
+
+[tasks."frontend:lint"]
+description = "Run ESLint (same as CI Frontend Lint)"
+dir = "frontend"
+run = "npm run lint"
+
+[tasks."frontend:typecheck"]
+description = "Run TypeScript type check (same as CI Frontend Type Check)"
+dir = "frontend"
+run = "npx tsc --noEmit"
+
+[tasks."frontend:build"]
+description = "Build Next.js app (same as CI Frontend Build)"
+dir = "frontend"
+run = "npm run build"
+[tasks."frontend:build".env]
+NEXT_PUBLIC_API_URL = "http://localhost:8080/api/v1"
+
+[tasks."frontend:check"]
+description = "Run all frontend CI checks"
+run = '''
+set -e
+mise run frontend:install
+mise run frontend:lint
+mise run frontend:typecheck
+mise run frontend:build
+'''
+
+# ----------------------------------------------------------------- backend
+
+[tasks."backend:verify"]
+description = "Verify go.mod/go.sum and that go mod tidy is clean"
+dir = "backend"
+run = '''
+set -e
+go mod verify
+go mod tidy -diff
+'''
+
+[tasks."backend:build"]
+description = "Build the backend (same as CI Backend Build)"
+dir = "backend"
+run = "go build -v ./..."
+
+[tasks."backend:vet"]
+description = "Run go vet (same as CI Backend Vet)"
+dir = "backend"
+run = "go vet ./..."
+
+[tasks."backend:fmt"]
+description = "Fail if any Go file is not gofmt-formatted (same as CI Backend Format)"
+dir = "backend"
+run = '''
+set -e
+unformatted="$(gofmt -l .)"
+if [ -n "$unformatted" ]; then
+  echo "The following files are not formatted:"
+  echo "$unformatted"
+  exit 1
+fi
+'''
+
+[tasks."backend:fmt:fix"]
+description = "Format the backend with gofmt"
+dir = "backend"
+run = "gofmt -w ."
+
+[tasks."backend:lint"]
+description = "Run golangci-lint (same as CI Backend Lint)"
+dir = "backend"
+run = "golangci-lint run --timeout=5m"
+
+[tasks."backend:test"]
+description = "Run backend tests; integration tests run only if TEST_DATABASE_URL is set"
+dir = "backend"
+run = "go test -race -timeout 30m -coverprofile=coverage.out -covermode=atomic ./..."
+
+[tasks."backend:test:integration"]
+description = "Run backend tests including integration tests against the local Postgres"
+dir = "backend"
+run = '''
+set -e
+export TEST_DATABASE_URL="${TEST_DATABASE_URL:-postgres://businessos:businessos@localhost:5432/businessos_test?sslmode=disable}"
+go test -race -timeout 30m -coverprofile=coverage.out -covermode=atomic ./...
+'''
+
+[tasks."db:test:up"]
+description = "Start Postgres and create the businessos_test database if missing"
+run = '''
+set -e
+docker compose up -d postgres
+ready=false
+i=0
+while [ "$i" -lt 60 ]; do
+  if docker compose exec -T postgres pg_isready >/dev/null 2>&1; then
+    ready=true
+    break
+  fi
+  i=$((i + 1))
+  sleep 1
+done
+if [ "$ready" != true ]; then
+  echo "PostgreSQL did not become ready within 60 seconds." >&2
+  docker compose logs --tail=50 postgres >&2 || true
+  exit 1
+fi
+db_user="$(docker compose exec -T postgres printenv POSTGRES_USER | tr -d '\r')"
+if ! docker compose exec -T postgres psql -U "$db_user" -tAc "SELECT 1 FROM pg_database WHERE datname='businessos_test'" | grep -q 1; then
+  docker compose exec -T postgres psql -U "$db_user" -c "CREATE DATABASE businessos_test"
+fi
+'''
+
+[tasks."backend:check"]
+description = "Run all backend CI checks"
+run = '''
+set -e
+mise run backend:verify
+mise run backend:build
+mise run backend:vet
+mise run backend:fmt
+mise run backend:lint
+mise run backend:test
+'''
+
+# --------------------------------------------------------------- aggregate
+
+[tasks."check:unit"]
+description = "Run all CI checks without needing Postgres"
+run = '''
+set -e
+unset TEST_DATABASE_URL
+mise run backend:check
+mise run frontend:check
+'''
+
+[tasks.check]
+description = "Run all CI checks locally, including integration tests (starts Postgres)"
+alias = "ci"
+run = '''
+set -e
+mise run db:test:up
+mise run backend:verify
+mise run backend:build
+mise run backend:vet
+mise run backend:fmt
+mise run backend:lint
+mise run backend:test:integration
+mise run frontend:install
+mise run frontend:lint
+mise run frontend:typecheck
+mise run frontend:build
+'''

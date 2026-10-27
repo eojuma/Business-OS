@@ -3,14 +3,15 @@ package notifications
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 
-	"github.com/businessos/backend/internal/config"
 	"github.com/businessos/backend/internal/modules/business"
 	"github.com/businessos/backend/internal/modules/products"
 	"github.com/businessos/backend/internal/shared/database"
@@ -48,21 +49,34 @@ func setupTestDB(t *testing.T) (*gorm.DB, uuid.UUID) {
 		t.Skip("TEST_DATABASE_URL not set, skipping integration test")
 	}
 
-	cfg := config.Load()
-	cfg.DBName = "businessos_test"
-	cfg.DBHost = "localhost"
-	cfg.DBPort = "5432"
-	cfg.DBUser = "businessos"
-	cfg.DBPassword = "businessos"
-	cfg.DBSSLMode = "disable"
+	parsedURL, err := url.Parse(testDBURL)
+	if err != nil {
+		t.Fatalf("invalid TEST_DATABASE_URL: %v", err)
+	}
+	if parsedURL.Hostname() == "" {
+		t.Fatalf("invalid TEST_DATABASE_URL: host is required")
+	}
+	if parsedURL.User == nil {
+		t.Fatalf("invalid TEST_DATABASE_URL: user is required")
+	}
+	if dbName := strings.TrimPrefix(parsedURL.Path, "/"); dbName == "" {
+		t.Fatalf("invalid TEST_DATABASE_URL: database name is required")
+	}
 
-	db := database.NewPostgres(cfg)
+	db := database.NewPostgresFromURL(testDBURL)
+
+	// Pin the pool to a single connection so the session-level
+	// SET search_path below applies to every query, including the
+	// migration connection pinned by migrations.Up.
+	if sqlDB, err := db.DB(); err == nil {
+		sqlDB.SetMaxOpenConns(1)
+	}
 
 	// Verify database is reachable
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if err := db.WithContext(ctx).Exec("SELECT 1").Error; err != nil {
-		t.Skipf("Database not reachable, skipping integration test: %v", err)
+		t.Fatalf("Database not reachable: %v", err)
 	}
 
 	if err := migrations.Up(db); err != nil {

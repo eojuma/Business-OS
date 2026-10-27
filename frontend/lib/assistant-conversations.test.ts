@@ -11,6 +11,7 @@ import {
   MAX_CONVERSATIONS,
   MAX_ENTRIES,
   mergeConversationStates,
+  NEW_CHAT_TITLE,
   parseConversationState,
   removeConversation,
   saveConversations,
@@ -191,6 +192,36 @@ describe("assistant conversation model", () => {
     expect(merged.conversations).toHaveLength(1);
     expect(merged.conversations[0].entries).toHaveLength(0);
     expect(merged.activeId).toBe(merged.conversations[0].id);
+  });
+
+  it("does not tombstone its own recovered chat", () => {
+    const recovered = {
+      id: "recovered",
+      title: NEW_CHAT_TITLE,
+      createdAt: 0,
+      updatedAt: 0,
+      entries: [],
+    };
+    const other = { ...recovered, id: "other-chat", createdAt: 5, updatedAt: 5 };
+    const local: ConversationState = {
+      conversations: [recovered],
+      activeId: recovered.id,
+      removed: { [other.id]: 10 },
+    };
+    const incoming: ConversationState = {
+      conversations: [other],
+      activeId: other.id,
+      removed: { [recovered.id]: 11 },
+    };
+
+    const merged = mergeConversationStates(local, incoming);
+    expect(merged.conversations).toHaveLength(1);
+    expect(merged.conversations[0].id).toBe("recovered");
+    expect(merged.removed?.["recovered"]).toBeUndefined();
+
+    // The state must remain loadable from storage.
+    const parsed = parseConversationState(serializeConversationState(merged, Date.now()));
+    expect(parsed?.conversations[0].id).toBe("recovered");
   });
 
   it("persists removal tombstones through storage", () => {

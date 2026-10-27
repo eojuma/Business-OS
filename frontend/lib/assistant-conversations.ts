@@ -12,6 +12,8 @@ export interface Preview {
 export interface ChatEntry {
   role: "user" | "assistant";
   text: string;
+  /** When the entry was appended; used to merge concurrent tab edits. */
+  at?: number;
   preview?: Preview; // only set on assistant entries that are awaiting confirmation
   resolved?: boolean; // true once confirmed or dismissed — hides the buttons
 }
@@ -125,10 +127,11 @@ export function appendEntry(
   const conversations = state.conversations.map((conversation) => {
     if (conversation.id !== conversationId) return conversation;
     changed = true;
-    const combined = [...conversation.entries, entry];
+    const storedEntry: ChatEntry = { ...entry, at: entry.at ?? now };
+    const combined = [...conversation.entries, storedEntry];
     const entries = combined.slice(-MAX_ENTRIES);
     const title =
-      conversation.title === NEW_CHAT_TITLE && entry.role === "user" && entry.text.trim()
+      conversation.title === NEW_CHAT_TITLE && storedEntry.role === "user" && storedEntry.text.trim()
         ? deriveTitle(combined)
         : conversation.title;
     return { ...conversation, entries, title, updatedAt: now };
@@ -178,6 +181,36 @@ function capConversations(conversations: Conversation[], keep: Set<string>): Con
   return conversations.filter((conversation) => !evicted.has(conversation.id));
 }
 
+function entryKey(entry: ChatEntry): string {
+  return `${entry.at ?? 0}|${entry.role}|${entry.text}`;
+}
+
+// mergeConversationCopies combines two versions of the same chat. Entries are
+// append-only, so the union keeps messages written in either tab; resolved
+// flags are sticky. Copies predating entry timestamps fall back to the newer.
+function mergeConversationCopies(local: Conversation, incoming: Conversation): Conversation {
+  const newer = incoming.updatedAt > local.updatedAt ? incoming : local;
+  const canMergeEntries =
+    local.entries.every((entry) => typeof entry.at === "number") &&
+    incoming.entries.every((entry) => typeof entry.at === "number");
+  if (!canMergeEntries) return newer;
+
+  const byKey = new Map<string, ChatEntry>();
+  for (const entry of [...local.entries, ...incoming.entries]) {
+    const key = entryKey(entry);
+    const existing = byKey.get(key);
+    if (!existing) {
+      byKey.set(key, entry);
+    } else if (entry.resolved && !existing.resolved) {
+      byKey.set(key, { ...existing, resolved: true });
+    }
+  }
+
+  const entries = [...byKey.values()].sort((a, b) => (a.at ?? 0) - (b.at ?? 0)).slice(-MAX_ENTRIES);
+  const title = newer.title === NEW_CHAT_TITLE ? deriveTitle(entries) : newer.title;
+  return { ...newer, entries, title, updatedAt: Math.max(local.updatedAt, incoming.updatedAt) };
+}
+
 // mergeConversationStates reconciles a snapshot written by another tab with
 // the local state, keeping the most recently updated copy of each chat so one
 // tab cannot silently overwrite the other's history.
@@ -199,7 +232,7 @@ export function mergeConversationStates(
   for (const conversation of local.conversations) {
     if (removed[conversation.id] !== undefined) continue;
     const other = incomingById.get(conversation.id);
-    merged.push(other && other.updatedAt > conversation.updatedAt ? other : conversation);
+    merged.push(other ? mergeConversationCopies(conversation, other) : conversation);
     seen.add(conversation.id);
   }
   for (const conversation of incoming.conversations) {
@@ -252,7 +285,7 @@ export function startConversation(state: ConversationState, now = Date.now()): C
     [conversation, ...state.conversations],
     new Set([conversation.id, active.id]),
   );
-  return { conversations, activeId: conversation.id };
+  return { ...state, conversations, activeId: conversation.id };
 }
 
 export function selectConversation(state: ConversationState, id: string): ConversationState {
@@ -291,6 +324,7 @@ function isChatEntry(value: unknown): value is ChatEntry {
   if (!isRecord(value)) return false;
   if (value.role !== "user" && value.role !== "assistant") return false;
   if (typeof value.text !== "string") return false;
+  if (value.at !== undefined && typeof value.at !== "number") return false;
   return value.preview === undefined || isRecord(value.preview);
 }
 

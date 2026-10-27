@@ -33,3 +33,38 @@ func TestParseOriginsDeduplicatesAndTrims(t *testing.T) {
 		t.Fatalf("origins = %v, want %v", got, want)
 	}
 }
+
+func TestLoadNormalizesAppEnv(t *testing.T) {
+	t.Setenv("APP_ENV", " Production ")
+	cfg := Load()
+	if cfg.AppEnv != "production" {
+		t.Fatalf("APP_ENV = %q, want %q", cfg.AppEnv, "production")
+	}
+	if !cfg.IsProduction() {
+		t.Fatal("expected production mode")
+	}
+}
+
+func TestIsProductionNormalizesAppEnv(t *testing.T) {
+	for _, env := range []string{"production", "Production", " PRODUCTION "} {
+		if !(&Config{AppEnv: env}).IsProduction() {
+			t.Fatalf("APP_ENV %q was not treated as production", env)
+		}
+	}
+}
+
+func TestValidateRejectsUnknownAppEnv(t *testing.T) {
+	for _, env := range []string{"", "prod", "Producton", "live"} {
+		if err := (&Config{AppEnv: env}).Validate(); err == nil {
+			t.Fatalf("APP_ENV %q was accepted, want a validation error", env)
+		}
+	}
+}
+
+func TestValidateAllowsKnownNonProductionEnvs(t *testing.T) {
+	for _, env := range []string{"development", "test", "staging", "Staging"} {
+		if err := (&Config{AppEnv: env}).Validate(); err != nil {
+			t.Fatalf("APP_ENV %q rejected: %v", env, err)
+		}
+	}
+}

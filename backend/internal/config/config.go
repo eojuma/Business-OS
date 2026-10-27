@@ -49,7 +49,7 @@ type Config struct {
 // Load loads configuration from environment variables.
 func Load() *Config {
 	_ = godotenv.Load()
-	appEnv := getEnv("APP_ENV", "development")
+	appEnv := normalizeEnv(getEnv("APP_ENV", "development"))
 	redisHost, redisPort, redisPassword := parseRedisURL(getEnv("REDIS_URL", "redis://localhost:6379"))
 
 	return &Config{
@@ -82,14 +82,36 @@ func Load() *Config {
 	}
 }
 
-// IsProduction returns true if the application is running in production mode.
+// IsProduction reports whether the application runs in production mode.
+// The comparison is normalized so values such as "Production" cannot
+// silently disable production safeguards.
 func (c *Config) IsProduction() bool {
-	return c.AppEnv == "production"
+	return normalizeEnv(c.AppEnv) == "production"
 }
 
-// Validate validates the configuration for production readiness.
+// normalizeEnv canonicalizes APP_ENV values (case and surrounding spaces).
+func normalizeEnv(value string) string {
+	return strings.ToLower(strings.TrimSpace(value))
+}
+
+// validEnv reports whether APP_ENV is a supported environment name.
+func validEnv(env string) bool {
+	switch env {
+	case "development", "test", "staging", "production":
+		return true
+	default:
+		return false
+	}
+}
+
+// Validate validates the configuration for production readiness. Unknown
+// APP_ENV values are rejected so a typo cannot skip the checks below.
 func (c *Config) Validate() error {
-	if !c.IsProduction() {
+	env := normalizeEnv(c.AppEnv)
+	if !validEnv(env) {
+		return fmt.Errorf("APP_ENV must be one of development, test, staging, production (got %q)", c.AppEnv)
+	}
+	if env != "production" {
 		return nil
 	}
 	if c.JWTSecret == "dev_secret_change_me" || c.JWTSecret == "change_me_in_production" || len(c.JWTSecret) < 32 {

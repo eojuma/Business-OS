@@ -48,7 +48,7 @@ services:
       DB_PASSWORD: ${DB_PASSWORD:-businessos}
       DB_NAME: ${DB_NAME:-businessos}
       DB_SSLMODE: disable
-      REDIS_HOST: redis
+      REDIS_URL: redis://redis:6379
     ports:
       - "8080:8080"
     depends_on:

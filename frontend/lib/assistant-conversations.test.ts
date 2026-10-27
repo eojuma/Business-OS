@@ -163,7 +163,7 @@ describe("assistant conversation model", () => {
     expect(merged.activeId).toBe(localBase.activeId);
   });
 
-  it("keeps the most recently updated copy of a shared chat when merging", () => {
+  it("unions a shared chat and keeps the latest updatedAt", () => {
     const base = emptyState(1);
     const id = base.activeId;
     const older = appendEntry(base, id, { role: "user", text: "old" }, 2);
@@ -171,7 +171,8 @@ describe("assistant conversation model", () => {
 
     const merged = mergeConversationStates(older, newer);
     const conversation = merged.conversations.find((item) => item.id === id);
-    expect(conversation?.entries.map((entry) => entry.text)).toEqual(["newer"]);
+    expect(conversation?.entries.map((entry) => entry.text)).toEqual(["old", "newer"]);
+    expect(conversation?.updatedAt).toBe(5);
   });
 
   it("does not resurrect a chat closed in another tab", () => {
@@ -222,6 +223,37 @@ describe("assistant conversation model", () => {
     // The state must remain loadable from storage.
     const parsed = parseConversationState(serializeConversationState(merged, Date.now()));
     expect(parsed?.conversations[0].id).toBe("recovered");
+  });
+
+  it("keeps messages written concurrently in the same chat", () => {
+    const base = emptyState(1);
+    const id = base.activeId;
+    const tabA = appendEntry(base, id, { role: "user", text: "from A" }, 10);
+    const tabB = appendEntry(base, id, { role: "user", text: "from B" }, 11);
+
+    const merged = mergeConversationStates(tabA, tabB);
+    const conversation = merged.conversations.find((item) => item.id === id);
+    expect(conversation?.entries.map((entry) => entry.text)).toEqual(["from A", "from B"]);
+  });
+
+  it("merges a resolved flag from the other tab's copy", () => {
+    const base = emptyState(1);
+    const id = base.activeId;
+    const withPreview = appendEntry(base, id, { role: "assistant", text: "preview" }, 10);
+    const resolved = updateEntry(withPreview, id, 0, { resolved: true }, 11);
+
+    const merged = mergeConversationStates(withPreview, resolved);
+    const conversation = merged.conversations.find((item) => item.id === id);
+    expect(conversation?.entries[0].resolved).toBe(true);
+  });
+
+  it("keeps tombstones when starting a new chat", () => {
+    const { state, firstId } = stateWithTwoConversations();
+    const closed = removeConversation(state, firstId, 10);
+    const withMessage = appendEntry(closed, closed.activeId, { role: "user", text: "hello" }, 11);
+
+    const next = startConversation(withMessage, 12);
+    expect(next.removed?.[firstId]).toBe(10);
   });
 
   it("persists removal tombstones through storage", () => {

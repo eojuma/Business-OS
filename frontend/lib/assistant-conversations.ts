@@ -156,16 +156,63 @@ export function updateEntry(
   return changed ? { ...state, conversations } : state;
 }
 
+// capConversations trims to MAX_CONVERSATIONS without evicting the chats in
+// `keep` (the one being opened and the one on screen), dropping the least
+// recently updated of the rest.
+function capConversations(conversations: Conversation[], keep: Set<string>): Conversation[] {
+  if (conversations.length <= MAX_CONVERSATIONS) return conversations;
+
+  const excess = conversations.length - MAX_CONVERSATIONS;
+  const evictable = conversations
+    .filter((conversation) => !keep.has(conversation.id))
+    .sort((a, b) => a.updatedAt - b.updatedAt)
+    .slice(0, excess);
+  if (evictable.length === 0) return conversations;
+
+  const evicted = new Set(evictable.map((conversation) => conversation.id));
+  return conversations.filter((conversation) => !evicted.has(conversation.id));
+}
+
+// mergeConversationStates reconciles a snapshot written by another tab with
+// the local state, keeping the most recently updated copy of each chat so one
+// tab cannot silently overwrite the other's history.
+export function mergeConversationStates(
+  local: ConversationState,
+  incoming: ConversationState,
+): ConversationState {
+  const incomingById = new Map(incoming.conversations.map((conversation) => [conversation.id, conversation]));
+  const merged: Conversation[] = [];
+  const seen = new Set<string>();
+
+  for (const conversation of local.conversations) {
+    const other = incomingById.get(conversation.id);
+    merged.push(other && other.updatedAt > conversation.updatedAt ? other : conversation);
+    seen.add(conversation.id);
+  }
+  for (const conversation of incoming.conversations) {
+    if (!seen.has(conversation.id)) merged.push(conversation);
+  }
+
+  const conversations = capConversations(merged, new Set([local.activeId, incoming.activeId]));
+  const activeId = conversations.some((conversation) => conversation.id === local.activeId)
+    ? local.activeId
+    : conversations.some((conversation) => conversation.id === incoming.activeId)
+      ? incoming.activeId
+      : conversations[0].id;
+  return { conversations, activeId };
+}
+
 export function startConversation(state: ConversationState, now = Date.now()): ConversationState {
   const active = getActiveConversation(state);
   // Reuse an untouched draft instead of stacking empty "New chat" tabs.
   if (active && active.entries.length === 0) return state;
 
   const conversation = createConversation(now);
-  return {
-    conversations: [conversation, ...state.conversations].slice(0, MAX_CONVERSATIONS),
-    activeId: conversation.id,
-  };
+  const conversations = capConversations(
+    [conversation, ...state.conversations],
+    new Set([conversation.id, active.id]),
+  );
+  return { conversations, activeId: conversation.id };
 }
 
 export function selectConversation(state: ConversationState, id: string): ConversationState {

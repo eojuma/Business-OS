@@ -559,7 +559,7 @@ export default function SuppliersPage() {
           </div>
         ) : loadError ? (
           <div className="p-10 text-center">
-            <AlertCircle className="mx-auto text-red-500" />
+            <AlertCircle className="mx-auto text-danger" />
             <p className="mt-3 font-semibold">Could not load suppliers</p>
             <p className="mt-1 text-sm text-muted">{loadError}</p>
             <button
@@ -631,7 +631,7 @@ export default function SuppliersPage() {
                         <span
                           className={
                             overdue
-                              ? "text-xs font-semibold text-red-600"
+                              ? "text-xs font-semibold text-danger"
                               : "text-xs text-muted"
                           }
                         >
@@ -786,7 +786,7 @@ export default function SuppliersPage() {
                 <p className="eyebrow">Due date</p>
                 <p
                   className={`mt-1 text-sm font-semibold ${
-                    selectedOverdue ? "text-red-600" : "text-foreground"
+                    selectedOverdue ? "text-danger" : "text-foreground"
                   }`}
                 >
                   {formatDate(paymentSupplier.due_date)}
@@ -847,7 +847,7 @@ export default function SuppliersPage() {
                 />
               </label>
               {paymentError && (
-                <p className="rounded-lg bg-red-50 p-3 text-sm text-red-700">
+                <p className="rounded-lg bg-danger-soft p-3 text-sm text-danger">
                   {paymentError}
                 </p>
               )}
@@ -875,7 +875,7 @@ export default function SuppliersPage() {
               {historyLoading ? (
                 <p className="mt-3 text-sm text-muted">Loading payments…</p>
               ) : historyError ? (
-                <div className="mt-3 rounded-lg bg-red-50 p-3 text-sm text-red-700">
+                <div className="mt-3 rounded-lg bg-danger-soft p-3 text-sm text-danger">
                   <p>{historyError}</p>
                   <button
                     type="button"

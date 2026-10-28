@@ -43,10 +43,15 @@ function applyTheme(resolved: ResolvedTheme) {
 
 function storedTheme(): Theme {
   if (typeof window === "undefined") return "system";
-  const value = window.localStorage.getItem(STORAGE_KEY);
-  return value === "light" || value === "dark" || value === "system"
-    ? value
-    : "system";
+  try {
+    const value = window.localStorage.getItem(STORAGE_KEY);
+    return value === "light" || value === "dark" || value === "system"
+      ? value
+      : "system";
+  } catch {
+    // Storage can be unavailable; fall back to the system preference.
+    return "system";
+  }
 }
 
 /**

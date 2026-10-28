@@ -38,7 +38,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     return () => { active = false; clearInterval(id); };
   }, []);
   function logout() { localStorage.removeItem("token"); router.push("/login"); }
-  return <div className="min-h-screen bg-background">
+  return <div className="min-h-dvh bg-background">
     <header className="sticky top-0 z-30 flex h-16 items-center justify-between border-b border-border bg-card/95 px-4 backdrop-blur md:hidden">
       <button aria-label="Open navigation" onClick={() => setOpen(true)} className="rounded-lg p-2 text-muted hover:bg-hover"><Menu size={21}/></button>
       <Link href="/dashboard" className="font-bold tracking-tight">Business <span className="text-primary">OS</span></Link><ThemeToggle />
@@ -47,7 +47,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       <div className="mb-8 flex items-center justify-between px-2"><Link href="/dashboard" className="text-lg font-bold tracking-tight">Business <span className="text-primary">OS</span></Link><button className="p-1 md:hidden" onClick={() => setOpen(false)} aria-label="Close navigation"><X size={19}/></button></div>
       <p className="eyebrow px-2 pb-2">Workspace</p><nav className="space-y-0.5">{nav.map(({href,label,icon:Icon}) => { const active = href === "/dashboard" ? pathname === href : pathname.startsWith(href); return <Link key={href} href={href} onClick={() => setOpen(false)} className={`flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition ${active ? "bg-primary-soft text-primary-hover" : "text-muted hover:bg-hover hover:text-foreground"}`}><Icon size={17}/><span>{label}</span>{href === "/dashboard/notifications" && unread > 0 && <span className="ml-auto rounded-full bg-primary-solid px-1.5 py-0.5 text-[10px] font-bold text-white">{unread > 99 ? "99+" : unread}</span>}{active && <ChevronRight size={15} className={href === "/dashboard/notifications" && unread > 0 ? "" : "ml-auto"}/>}</Link>})}</nav>
       <div className="mt-auto space-y-1 border-t border-border-subtle pt-4"><div className="mb-2 px-1"><ThemeToggle className="w-full justify-center" /></div><Link href="/dashboard/settings" className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-sm text-muted hover:bg-hover"><Settings size={17}/> Settings</Link><button onClick={logout} className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-sm text-muted hover:bg-hover"><LogOut size={17}/> Sign out</button></div>
-    </aside><div className="md:pl-64"><main className="mx-auto min-h-screen max-w-[1480px] p-4 sm:p-6 lg:p-8">{children}</main></div>
+    </aside><div className="md:pl-64"><main className="mx-auto min-h-[calc(100dvh-4rem)] max-w-[1480px] p-4 sm:p-6 md:min-h-dvh lg:p-8">{children}</main></div>
     {open && <button aria-label="Close navigation overlay" className="fixed inset-0 z-30 bg-black/20 md:hidden" onClick={() => setOpen(false)}/>} 
   </div>;
 }

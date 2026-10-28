@@ -11,7 +11,8 @@ type User struct {
 	BusinessID   uuid.UUID `gorm:"type:uuid;index;not null" json:"business_id"`
 	Name         string    `gorm:"not null" json:"name"`
 	Email        string    `gorm:"uniqueIndex;not null" json:"email"`
-	PasswordHash string    `gorm:"not null" json:"-"`
+	PasswordHash *string   `gorm:"type:text" json:"-"`
+	GoogleID     *string   `gorm:"type:text" json:"-"`
 	Role         string    `gorm:"not null;default:'owner'" json:"role"`
 	Active       bool      `gorm:"default:true" json:"active"`
 	CreatedAt    time.Time `json:"created_at"`

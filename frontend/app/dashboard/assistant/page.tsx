@@ -1,74 +1,164 @@
 "use client";
 
-import { useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { Bot, Menu, Send, Sparkles, User } from "lucide-react";
 import { api } from "@/lib/api";
-
-interface Preview {
-  Kind: "sale" | "answer";
-  Understood: boolean;
-  ProductID: string;
-  ProductName: string;
-  Quantity: number;
-  UnitPrice: number; // cents
-  TotalAmount: number; // cents
-  Message: string;
-}
-
-interface ChatEntry {
-  role: "user" | "assistant";
-  text: string;
-  preview?: Preview; // only set on assistant entries that are awaiting confirmation
-  resolved?: boolean; // true once confirmed or dismissed — hides the buttons
-}
+import { AssistantChatMenu } from "@/components/assistant-chat-menu";
+import { useAssistantConversations } from "@/hooks/use-assistant-conversations";
+import type { Preview } from "@/lib/assistant-conversations";
 
 function formatMoney(cents: number): string {
   return (cents / 100).toFixed(2);
 }
 
+function requestErrorMessage(err: unknown, fallback: string): string {
+  const response = (err as { response?: { status?: number; data?: { error?: string } } }).response;
+  if (response?.status === 401) {
+    return "Your session expired. Please sign in again.";
+  }
+  return response?.data?.error || fallback;
+}
+
+const suggestions = [
+  { label: "Record a sale", prompt: "sold 3 cement" },
+  { label: "Profit today", prompt: "what's my profit today?" },
+  { label: "Low stock", prompt: "which products are low on stock?" },
+  { label: "Who owes me?", prompt: "who owes me money?" },
+];
+
 export default function AssistantPage() {
-  const [entries, setEntries] = useState<ChatEntry[]>([]);
+  const {
+    conversations,
+    activeId,
+    activeConversation,
+    loaded,
+    appendEntry,
+    updateEntry,
+    newConversation,
+    selectConversation,
+    closeConversation,
+    renameConversation,
+  } = useAssistantConversations();
+
+  const entries = activeConversation.entries;
   const [input, setInput] = useState("");
-  const [loading, setLoading] = useState(false);
+  // Pending requests are tracked per conversation so one chat thinking does
+  // not block composing or confirming in another.
+  const [pendingIds, setPendingIds] = useState<Record<string, boolean>>({});
+  const loading = Boolean(pendingIds[activeId]);
+  const setConversationPending = useCallback((conversationId: string, value: boolean) => {
+    setPendingIds((previous) => {
+      if (value) {
+        return previous[conversationId] ? previous : { ...previous, [conversationId]: true };
+      }
+      if (!previous[conversationId]) return previous;
+      const next = { ...previous };
+      delete next[conversationId];
+      return next;
+    });
+  }, []);
+
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menuButtonRef = useRef<HTMLButtonElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const focusInputRef = useRef(false);
+  const scrollPositions = useRef<Record<string, number>>({});
+  const prevActiveRef = useRef(activeId);
+  const switchedRef = useRef(false);
+  const prevEntriesLenRef = useRef(entries.length);
+  const prevPendingActiveRef = useRef(false);
+
+  // Restore the destination offset before paint when switching conversations.
+  // Without this, the browser clamps scrollTop, fires a scroll event, and
+  // handleScroll overwrites the saved offset before it can be applied.
+  useLayoutEffect(() => {
+    if (!loaded) return;
+    const element = scrollRef.current;
+    if (!element) return;
+
+    const switched = prevActiveRef.current !== activeId;
+    prevActiveRef.current = activeId;
+
+    if (!switched) return;
+    switchedRef.current = true;
+    const saved = scrollPositions.current[activeId];
+    element.scrollTop = saved ?? element.scrollHeight;
+  }, [activeId, loaded]);
+
+  useEffect(() => {
+    if (!loaded) return;
+
+    const switched = switchedRef.current;
+    switchedRef.current = false;
+
+    const entriesChanged = entries.length !== prevEntriesLenRef.current;
+    prevEntriesLenRef.current = entries.length;
+
+    const pendingActive = Boolean(pendingIds[activeId]);
+    const pendingChanged = pendingActive !== prevPendingActiveRef.current;
+    prevPendingActiveRef.current = pendingActive;
+
+    // A switch is restored by the layout effect above; appends are handled
+    // below. Requests belonging to another chat must not move this one.
+    if (switched) return;
+    if (!entriesChanged && !pendingChanged) return;
+
+    const element = scrollRef.current;
+    if (!element) return;
+    element.scrollTo({ top: element.scrollHeight, behavior: "smooth" });
+  }, [activeId, loaded, entries.length, pendingIds]);
+
+  useEffect(() => {
+    if (!loading && focusInputRef.current) {
+      focusInputRef.current = false;
+      inputRef.current?.focus();
+    }
+  }, [loading]);
+
+  function handleScroll(e: React.UIEvent<HTMLDivElement>) {
+    scrollPositions.current[activeId] = e.currentTarget.scrollTop;
+  }
 
   async function handleSend(e: React.FormEvent) {
     e.preventDefault();
-    if (!input.trim()) return;
-
     const text = input.trim();
-    setInput("");
+    if (!text || loading) return;
+
+    const conversationId = activeId;
     const history = entries
       .slice(-6)
       .map((entry) => ({ role: entry.role, text: entry.text }));
-    setEntries((prev) => [...prev, { role: "user", text }]);
-    setLoading(true);
+
+    setInput("");
+    focusInputRef.current = true;
+    appendEntry(conversationId, { role: "user", text });
+    setConversationPending(conversationId, true);
 
     try {
       const res = await api.post("/assistant/interpret", { text, history });
       const preview: Preview = res.data.data;
 
-      setEntries((prev) => [
-        ...prev,
-        {
-          role: "assistant",
-          text: preview.Message,
-          preview: preview.Kind === "sale" && preview.Understood ? preview : undefined,
-        },
-      ]);
-    } catch (err: any) {
-      setEntries((prev) => [
-        ...prev,
-        {
-          role: "assistant",
-          text: err.response?.data?.error || "Something went wrong understanding that.",
-        },
-      ]);
+      appendEntry(conversationId, {
+        role: "assistant",
+        text: preview.Message,
+        preview: preview.Kind === "sale" && preview.Understood ? preview : undefined,
+      });
+    } catch (err) {
+      appendEntry(conversationId, {
+        role: "assistant",
+        text: requestErrorMessage(err, "Something went wrong understanding that."),
+      });
     } finally {
-      setLoading(false);
+      setConversationPending(conversationId, false);
     }
   }
 
   async function handleConfirm(index: number, preview: Preview) {
-    setLoading(true);
+    const conversationId = activeId;
+    focusInputRef.current = true;
+    setConversationPending(conversationId, true);
+
     try {
       const res = await api.post("/assistant/confirm", {
         product_id: preview.ProductID,
@@ -76,101 +166,239 @@ export default function AssistantPage() {
       });
       const sale = res.data.data;
 
-      setEntries((prev) => {
-        const next = [...prev];
-        next[index] = { ...next[index], resolved: true };
-        return [
-          ...next,
-          {
-            role: "assistant",
-            text: `Sale recorded — total KSh ${formatMoney(sale.TotalAmount)}.`,
-          },
-        ];
+      updateEntry(conversationId, index, { resolved: true });
+      appendEntry(conversationId, {
+        role: "assistant",
+        text: `Sale recorded — total KSh ${formatMoney(sale.TotalAmount)}.`,
       });
-    } catch (err: any) {
-      setEntries((prev) => [
-        ...prev,
-        {
-          role: "assistant",
-          text: err.response?.data?.error || "Failed to record the sale.",
-        },
-      ]);
+    } catch (err) {
+      appendEntry(conversationId, {
+        role: "assistant",
+        text: requestErrorMessage(err, "Failed to record the sale."),
+      });
     } finally {
-      setLoading(false);
+      setConversationPending(conversationId, false);
     }
   }
 
   function handleDismiss(index: number) {
-    setEntries((prev) => {
-      const next = [...prev];
-      next[index] = { ...next[index], resolved: true };
-      return next;
-    });
+    updateEntry(activeId, index, { resolved: true });
   }
 
+  function closeMenu() {
+    setMenuOpen(false);
+    menuButtonRef.current?.focus();
+  }
+
+  function handleNewConversation() {
+    newConversation();
+    setMenuOpen(false);
+    inputRef.current?.focus();
+  }
+
+  function handleSelectConversation(id: string) {
+    selectConversation(id);
+    setMenuOpen(false);
+    inputRef.current?.focus();
+  }
+
+  function handleSuggestion(prompt: string) {
+    if (entries.length > 0) newConversation();
+    setInput(prompt);
+    setMenuOpen(false);
+    inputRef.current?.focus();
+  }
+
+  function applySuggestion(prompt: string) {
+    setInput(prompt);
+    inputRef.current?.focus();
+  }
+
+  const thinking = loading;
+
   return (
-    <main className="flex min-h-screen flex-col p-8">
-      <h1 className="mb-2 text-2xl font-semibold">Assistant</h1>
-      <p className="mb-6 text-sm text-muted">
-        Try &quot;sold 3 cement&quot; to record a sale, or ask &quot;what&apos;s my
-        profit today?&quot;. Nothing is saved until you confirm.
-      </p>
-
-      <div className="mb-4 max-w-2xl flex-1 space-y-3">
-        {entries.length === 0 && (
-          <p className="text-sm text-subtle">No messages yet.</p>
-        )}
-
-        {entries.map((entry, index) => (
-          <div
-            key={index}
-            className={`rounded-lg p-3 text-sm ${
-              entry.role === "user"
-                ? "ml-auto max-w-[80%] bg-brand-600 text-white"
-                : "max-w-[80%] bg-surface-muted text-foreground"
-            }`}
-          >
-            <p>{entry.text}</p>
-
-            {entry.preview && !entry.resolved && (
-              <div className="mt-3 flex gap-2">
-                <button
-                  onClick={() => handleConfirm(index, entry.preview!)}
-                  disabled={loading}
-                  className="rounded bg-brand-700 px-3 py-1 text-white disabled:opacity-50"
-                >
-                  Confirm
-                </button>
-                <button
-                  onClick={() => handleDismiss(index)}
-                  disabled={loading}
-                  className="rounded border border-border px-3 py-1 text-muted"
-                >
-                  Cancel
-                </button>
-              </div>
-            )}
-          </div>
-        ))}
-      </div>
-
-      <form onSubmit={handleSend} className="flex max-w-2xl gap-2">
-        <input
-          type="text"
-          placeholder='e.g. "sold 3 cement"'
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          className="flex-1 rounded border border-border px-3 py-2"
-          disabled={loading}
+    <div className="mx-auto flex h-[calc(100dvh-6rem)] w-full max-w-3xl flex-col sm:h-[calc(100dvh-7rem)] md:h-[calc(100dvh-3rem)] lg:h-[calc(100dvh-4rem)]">
+      <section className="panel relative flex min-h-0 flex-1 flex-col overflow-hidden">
+        <AssistantChatMenu
+          open={menuOpen}
+          conversations={conversations}
+          activeId={activeId}
+          suggestions={suggestions}
+          onClose={closeMenu}
+          onSelect={handleSelectConversation}
+          onNewChat={handleNewConversation}
+          onRename={renameConversation}
+          onDelete={closeConversation}
+          onSuggestion={handleSuggestion}
         />
-        <button
-          type="submit"
-          disabled={loading || !input.trim()}
-          className="rounded bg-brand-600 px-4 py-2 text-white disabled:opacity-50"
+        <header className="shrink-0 border-b border-border-subtle px-4 py-3 sm:px-5">
+          <div className="flex items-center gap-2">
+            <button
+              ref={menuButtonRef}
+              type="button"
+              onClick={() => setMenuOpen((current) => !current)}
+              aria-label="Chats"
+              aria-expanded={menuOpen}
+              aria-controls="assistant-chat-menu"
+              className="rounded-lg p-2 text-muted transition hover:bg-hover"
+            >
+              <Menu size={18} />
+            </button>
+            <span className="rounded-xl bg-primary-soft p-2 text-primary">
+              <Bot size={18} />
+            </span>
+            <div className="min-w-0 flex-1">
+              <p className="eyebrow">AI workspace</p>
+              <h1 className="truncate text-lg font-bold tracking-tight sm:text-xl">Assistant</h1>
+            </div>
+          </div>
+          <p className="mt-2 truncate text-sm text-muted">
+            {entries.length > 0
+              ? activeConversation.title
+              : "Record a sale or ask about stock, profit and balances. Nothing is saved until you confirm."}
+          </p>
+        </header>
+
+        <div
+          ref={scrollRef}
+          onScroll={handleScroll}
+          className="chat-scroll flex-1 space-y-3 overflow-y-auto overscroll-contain px-4 py-4 sm:px-6"
+          role="log"
+          aria-live="polite"
+          aria-busy={loading}
         >
-          {loading ? "..." : "Send"}
-        </button>
-      </form>
-    </main>
+          {!loaded && (
+            <div className="flex h-full items-center justify-center text-sm text-subtle">
+              Loading chats…
+            </div>
+          )}
+
+          {loaded && entries.length === 0 && (
+            <div className="flex h-full flex-col items-center justify-center px-2 text-center">
+              <span className="rounded-2xl bg-primary-soft p-3 text-primary">
+                <Sparkles size={22} />
+              </span>
+              <p className="mt-3 text-sm font-semibold">Start with a question or a sale</p>
+              <p className="mt-1 max-w-sm text-xs text-muted">
+                The assistant can look things up instantly, and asks you to confirm
+                before recording a sale.
+              </p>
+              <div className="mt-4 flex flex-wrap justify-center gap-2">
+                {suggestions.map((suggestion) => (
+                  <button
+                    key={suggestion.prompt}
+                    type="button"
+                    onClick={() => applySuggestion(suggestion.prompt)}
+                    className="rounded-full border border-border bg-card px-3 py-1.5 text-xs font-semibold text-foreground transition hover:bg-hover"
+                  >
+                    {suggestion.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {loaded &&
+            entries.map((entry, index) => (
+              <div
+                key={index}
+                className={`flex gap-2 ${entry.role === "user" ? "justify-end" : "justify-start"}`}
+              >
+                {entry.role === "assistant" && (
+                  <span className="mt-0.5 hidden h-7 w-7 shrink-0 items-center justify-center rounded-full bg-primary-soft text-primary sm:flex">
+                    <Bot size={14} />
+                  </span>
+                )}
+
+                <div
+                  className={`max-w-[85%] rounded-2xl px-3.5 py-2.5 text-sm sm:max-w-[75%] ${
+                    entry.role === "user"
+                      ? "rounded-br-sm bg-primary-solid text-white"
+                      : "rounded-bl-sm border border-border bg-background text-foreground"
+                  }`}
+                >
+                  <p className="whitespace-pre-wrap break-words">{entry.text}</p>
+
+                  {entry.preview && !entry.resolved && (
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        onClick={() => handleConfirm(index, entry.preview!)}
+                        disabled={loading}
+                        className="btn-primary px-3 py-1.5 text-xs"
+                      >
+                        Confirm
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleDismiss(index)}
+                        disabled={loading}
+                        className="btn-secondary px-3 py-1.5 text-xs"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  )}
+                </div>
+
+                {entry.role === "user" && (
+                  <span className="mt-0.5 hidden h-7 w-7 shrink-0 items-center justify-center rounded-full bg-border-subtle text-muted sm:flex">
+                    <User size={14} />
+                  </span>
+                )}
+              </div>
+            ))}
+
+          {thinking && (
+            <div
+              className="flex items-center gap-2"
+              role="status"
+              aria-label="Assistant is thinking"
+            >
+              <span className="hidden h-7 w-7 shrink-0 items-center justify-center rounded-full bg-primary-soft text-primary sm:flex">
+                <Bot size={14} />
+              </span>
+              <div className="flex items-center gap-1.5 rounded-2xl rounded-bl-sm border border-border bg-background px-3.5 py-3 text-sm text-muted">
+                <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-primary-solid [animation-delay:-0.2s]" />
+                <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-primary-solid [animation-delay:-0.1s]" />
+                <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-primary-solid" />
+                <span className="ml-1">Thinking</span>
+              </div>
+            </div>
+          )}
+        </div>
+
+        <form
+          onSubmit={handleSend}
+          className="shrink-0 border-t border-border-subtle bg-card p-3 sm:p-4"
+        >
+          <div className="flex items-center gap-2">
+            <input
+              ref={inputRef}
+              type="text"
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              placeholder='e.g. "sold 3 cement"'
+              className="field min-w-0 flex-1"
+              disabled={loading}
+              aria-label="Message the assistant"
+              autoComplete="off"
+            />
+            <button
+              type="submit"
+              disabled={loading || !input.trim()}
+              className="btn-primary shrink-0 px-4"
+              aria-label="Send message"
+            >
+              <Send size={16} />
+              <span className="hidden sm:inline">{loading ? "Sending" : "Send"}</span>
+            </button>
+          </div>
+          <p className="mt-1.5 hidden text-[11px] text-subtle sm:block">
+            Nothing is saved until you confirm a sale.
+          </p>
+        </form>
+      </section>
+    </div>
   );
 }

@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import Script from "next/script";
 import "./globals.css";
 import { ThemeProvider } from "@/lib/theme-provider";
 
@@ -25,7 +26,16 @@ export default function RootLayout({
         <script dangerouslySetInnerHTML={{ __html: themeScript }} />
       </head>
       <body className="antialiased">
-        <ThemeProvider>{children}</ThemeProvider>
+        <ThemeProvider>
+          {children}
+          {/* Google Identity Services is loaded once for the whole app; the
+              sign-in component only waits for window.google to appear. */}
+          <Script
+            id="google-identity-services"
+            src="https://accounts.google.com/gsi/client"
+            strategy="afterInteractive"
+          />
+        </ThemeProvider>
       </body>
     </html>
   );

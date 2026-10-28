@@ -77,3 +77,10 @@ button:disabled { cursor: not-allowed; }
   .btn-secondary { @apply inline-flex items-center justify-center gap-2 rounded-lg border border-border bg-card px-4 py-2.5 text-sm font-semibold text-foreground transition hover:bg-hover disabled:opacity-50; }
   .eyebrow { @apply text-[11px] font-bold uppercase tracking-[0.14em] text-muted; }
 }
+@layer utilities {
+  .chat-scroll { scrollbar-width: thin; scrollbar-color: #cfd8d1 transparent; }
+  .chat-scroll::-webkit-scrollbar { width: 8px; }
+  .chat-scroll::-webkit-scrollbar-track { background: transparent; }
+  .chat-scroll::-webkit-scrollbar-thumb { background: #cfd8d1; border-radius: 9999px; }
+  .chat-scroll::-webkit-scrollbar-thumb:hover { background: #b9c6bc; }
+}

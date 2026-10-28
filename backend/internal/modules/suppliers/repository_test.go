@@ -3,7 +3,10 @@ package suppliers
 import (
 	"context"
 	"fmt"
+	"math"
+	"net/url"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -11,7 +14,6 @@ import (
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 
-	"github.com/businessos/backend/internal/config"
 	"github.com/businessos/backend/internal/modules/business"
 	"github.com/businessos/backend/internal/shared/database"
 	"github.com/businessos/backend/internal/shared/migrations"
@@ -26,21 +28,21 @@ func setupTestDB(t *testing.T) (*gorm.DB, uuid.UUID) {
 		t.Skip("TEST_DATABASE_URL not set, skipping integration test")
 	}
 
-	cfg := config.Load()
+	parsedURL, err := url.Parse(testDBURL)
+	if err != nil {
+		t.Fatalf("invalid TEST_DATABASE_URL: %v", err)
+	}
+	if parsedURL.Hostname() == "" {
+		t.Fatalf("invalid TEST_DATABASE_URL: host is required")
+	}
+	if parsedURL.User == nil {
+		t.Fatalf("invalid TEST_DATABASE_URL: user is required")
+	}
+	if dbName := strings.TrimPrefix(parsedURL.Path, "/"); dbName == "" {
+		t.Fatalf("invalid TEST_DATABASE_URL: database name is required")
+	}
 
-	// Parse TEST_DATABASE_URL for host, port, user, password, dbname
-	// Format: postgres://user:password@host:port/dbname?sslmode=disable
-	// For simplicity, we'll parse basic format
-	_ = testDBURL // suppress unused warning for now
-
-	cfg.DBName = "businessos_test"
-	cfg.DBHost = "localhost"
-	cfg.DBPort = "5432"
-	cfg.DBUser = "businessos"
-	cfg.DBPassword = "businessos"
-	cfg.DBSSLMode = "disable"
-
-	db := database.NewPostgres(cfg)
+	db := database.NewPostgresFromURL(testDBURL)
 
 	// Pin the pool to a single connection so the session-level
 	// SET search_path below applies to every query, including
@@ -53,7 +55,7 @@ func setupTestDB(t *testing.T) (*gorm.DB, uuid.UUID) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if err := db.WithContext(ctx).Exec("SELECT 1").Error; err != nil {
-		t.Skipf("Database not reachable, skipping integration test: %v", err)
+		t.Fatalf("Database not reachable: %v", err)
 	}
 
 	if err := migrations.Up(db); err != nil {
@@ -207,6 +209,80 @@ func TestRepositoryList(t *testing.T) {
 	}
 	if len(all) != 3 {
 		t.Fatalf("len = %d, want 3 including archived", len(all))
+	}
+}
+
+func TestRepositoryListPaginated(t *testing.T) {
+	db, businessID := setupTestDB(t)
+	repo := NewRepository(db)
+
+	seed := []Supplier{
+		{BusinessID: businessID, Name: "Alpha Hardware", Phone: "0700111222", Email: "alpha@example.com"},
+		{BusinessID: businessID, Name: "Bravo Cement", Phone: "0700333444", Email: "bravo@example.com"},
+		{BusinessID: businessID, Name: "Charlie Steel", Phone: "0700555666", Email: "charlie@example.com"},
+	}
+	for i := range seed {
+		if err := db.Create(&seed[i]).Error; err != nil {
+			t.Fatalf("create supplier %q: %v", seed[i].Name, err)
+		}
+	}
+	if err := db.Create(&Supplier{
+		BusinessID: businessID,
+		Name:       "Archived Supplier",
+		DeletedAt:  gorm.DeletedAt{Time: time.Now(), Valid: true},
+	}).Error; err != nil {
+		t.Fatalf("create archived supplier: %v", err)
+	}
+
+	items, total, err := repo.ListPaginated(businessID, 1, 2, "", false)
+	if err != nil {
+		t.Fatalf("ListPaginated failed: %v", err)
+	}
+	if total != 3 || len(items) != 2 {
+		t.Fatalf("total = %d, len = %d, want total 3 and len 2", total, len(items))
+	}
+	if items[0].Name != "Alpha Hardware" || items[1].Name != "Bravo Cement" {
+		t.Fatalf("page 1 = %q, %q", items[0].Name, items[1].Name)
+	}
+
+	items, total, err = repo.ListPaginated(businessID, 2, 2, "", false)
+	if err != nil {
+		t.Fatalf("ListPaginated page 2 failed: %v", err)
+	}
+	if total != 3 || len(items) != 1 || items[0].Name != "Charlie Steel" {
+		t.Fatalf("page 2 total = %d, len = %d", total, len(items))
+	}
+
+	items, total, err = repo.ListPaginated(businessID, 1, 10, "bravo", false)
+	if err != nil {
+		t.Fatalf("search by name failed: %v", err)
+	}
+	if total != 1 || len(items) != 1 || items[0].Name != "Bravo Cement" {
+		t.Fatalf("name search total = %d, len = %d", total, len(items))
+	}
+
+	items, total, err = repo.ListPaginated(businessID, 1, 10, "0700555", false)
+	if err != nil {
+		t.Fatalf("search by phone failed: %v", err)
+	}
+	if total != 1 || len(items) != 1 || items[0].Name != "Charlie Steel" {
+		t.Fatalf("phone search total = %d, len = %d", total, len(items))
+	}
+
+	items, total, err = repo.ListPaginated(businessID, 1, 10, "ALPHA@EXAMPLE.COM", false)
+	if err != nil {
+		t.Fatalf("search by email failed: %v", err)
+	}
+	if total != 1 || len(items) != 1 || items[0].Name != "Alpha Hardware" {
+		t.Fatalf("email search total = %d, len = %d", total, len(items))
+	}
+
+	_, total, err = repo.ListPaginated(businessID, 1, 10, "", true)
+	if err != nil {
+		t.Fatalf("ListPaginated including archived failed: %v", err)
+	}
+	if total != 4 {
+		t.Fatalf("total including archived = %d, want 4", total)
 	}
 }
 
@@ -742,5 +818,49 @@ func TestSupplierNameIndex(t *testing.T) {
 	// Performance check
 	if elapsed > 1*time.Second {
 		t.Logf("List took %v (may need index optimization)", elapsed)
+	}
+}
+
+func TestEscapeLike(t *testing.T) {
+	tests := map[string]string{
+		"plain":  "plain",
+		"50%":    `50\%`,
+		"a_b":    `a\_b`,
+		`a\b`:    `a\\b`,
+		"100%_x": `100\%\_x`,
+	}
+	for input, want := range tests {
+		if got := escapeLike(input); got != want {
+			t.Fatalf("escapeLike(%q) = %q, want %q", input, got, want)
+		}
+	}
+}
+
+func TestPaginatedOffset(t *testing.T) {
+	tests := []struct {
+		name  string
+		page  int
+		limit int
+		want  int
+		ok    bool
+	}{
+		{name: "first page", page: 1, limit: 20, want: 0, ok: true},
+		{name: "third page", page: 3, limit: 20, want: 40, ok: true},
+		{name: "zero page", page: 0, limit: 20, ok: false},
+		{name: "negative page", page: -1, limit: 20, ok: false},
+		{name: "zero limit", page: 1, limit: 0, ok: false},
+		{name: "too large page", page: math.MaxInt, limit: 100, ok: false},
+		{name: "overflow wrapping to zero", page: math.MaxInt/2 + 2, limit: 4, ok: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, ok := paginatedOffset(tt.page, tt.limit)
+			if ok != tt.ok || (ok && got != tt.want) {
+				t.Fatalf(
+					"paginatedOffset(%d, %d) = (%d, %t), want (%d, %t)",
+					tt.page, tt.limit, got, ok, tt.want, tt.ok,
+				)
+			}
+		})
 	}
 }

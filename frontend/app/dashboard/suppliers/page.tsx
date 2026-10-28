@@ -667,7 +667,7 @@ export default function SuppliersPage() {
           </div>
         )}
 
-        {!loadError && (
+        {!loadError && !loading && (
           <div className="flex flex-col gap-3 border-t border-[#eef1ed] p-4 sm:flex-row sm:items-center sm:justify-between">
             <p className="text-sm text-[#718078]">
               {meta.total === 0
@@ -741,7 +741,9 @@ export default function SuppliersPage() {
         <div
           className="fixed inset-0 z-50 flex items-end justify-center bg-black/30 p-0 sm:items-center sm:p-4"
           role="presentation"
-          onClick={closePayments}
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) closePayments();
+          }}
         >
           <div
             ref={paymentPanelRef}

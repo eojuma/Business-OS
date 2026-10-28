@@ -1,6 +1,7 @@
 package suppliers
 
 import (
+	"database/sql"
 	"strings"
 	"time"
 
@@ -53,26 +54,40 @@ func escapeLike(value string) string {
 
 func (r *repository) ListPaginated(businessID uuid.UUID, page, limit int, search string, includeArchived bool) ([]Supplier, int64, error) {
 	var suppliers []Supplier
-	query := r.db
-	if includeArchived {
-		query = query.Unscoped()
-	}
-	query = query.Model(&Supplier{}).Where("business_id = ?", businessID)
-	if search != "" {
-		term := "%" + escapeLike(strings.ToLower(search)) + "%"
-		query = query.Where(
-			`LOWER(name) LIKE ? ESCAPE '\' OR LOWER(phone) LIKE ? ESCAPE '\' OR LOWER(email) LIKE ? ESCAPE '\'`,
-			term, term, term,
-		)
-	}
-
 	var total int64
-	if err := query.Count(&total).Error; err != nil {
-		return nil, 0, err
-	}
 
-	query = query.Offset((page - 1) * limit).Limit(limit).Order("name asc, id asc")
-	if err := query.Find(&suppliers).Error; err != nil {
+	// Count and page must come from the same snapshot, otherwise concurrent
+	// writes can make meta.total disagree with the returned rows.
+	err := r.db.Transaction(func(tx *gorm.DB) error {
+		query := tx
+		if includeArchived {
+			query = query.Unscoped()
+		}
+		query = query.Model(&Supplier{}).Where("business_id = ?", businessID)
+		if search != "" {
+			term := "%" + escapeLike(strings.ToLower(search)) + "%"
+			query = query.Where(
+				`LOWER(name) LIKE ? ESCAPE '\' OR LOWER(phone) LIKE ? ESCAPE '\' OR LOWER(email) LIKE ? ESCAPE '\'`,
+				term, term, term,
+			)
+		}
+
+		if err := query.Count(&total).Error; err != nil {
+			return err
+		}
+
+		// A very large page can overflow the offset multiplication; return an
+		// empty page with the true total instead of the first page.
+		offset := int64(page-1) * int64(limit)
+		if page < 1 || limit < 1 || offset < 0 {
+			suppliers = []Supplier{}
+			return nil
+		}
+
+		query = query.Offset(int(offset)).Limit(limit).Order("name asc, id asc")
+		return query.Find(&suppliers).Error
+	}, &sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: true})
+	if err != nil {
 		return nil, 0, err
 	}
 	return suppliers, total, nil

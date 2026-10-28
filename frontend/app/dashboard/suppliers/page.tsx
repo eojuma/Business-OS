@@ -162,9 +162,17 @@ export default function SuppliersPage() {
         signal: controller.signal,
       })
       .then((response) => {
-        const nextItems: Supplier[] = response.data.data || [];
+        // A paginated response wraps the rows and metadata inside `data`;
+        // fall back to a bare array for the unpaginated shape.
+        const payload = response.data?.data;
+        const paginated = payload && !Array.isArray(payload) ? payload : undefined;
+        const nextItems: Supplier[] = Array.isArray(payload)
+          ? payload
+          : Array.isArray(paginated?.data)
+            ? paginated.data
+            : [];
         const nextMeta: Meta =
-          response.data.meta || {
+          paginated?.meta || {
             page,
             limit,
             total: nextItems.length,

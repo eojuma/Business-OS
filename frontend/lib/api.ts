@@ -26,10 +26,34 @@ export function shouldRedirectOnUnauthorized(
   return !AUTH_PAGES.some((page) => pathname === page || pathname.startsWith(`${page}/`));
 }
 
+/**
+ * A 401 is only actionable if it came from the token currently in use. A late
+ * response from an earlier token (for example a request in flight while the
+ * user signs in again) must not clear the newer session. When the stored token
+ * cannot be read, keep the redirect path: an expired session is the likelier
+ * explanation than a race.
+ */
+export function isCurrentSession(
+  failedAuth: string | undefined,
+  currentToken: string | null,
+): boolean {
+  if (!currentToken || !failedAuth) return true;
+  return failedAuth === `Bearer ${currentToken}`;
+}
+
 let redirecting = false;
 
-function handleUnauthorized(): void {
+function handleUnauthorized(failedAuth: string | undefined): void {
   if (typeof window === "undefined" || redirecting) return;
+
+  let currentToken: string | null = null;
+  try {
+    currentToken = window.localStorage.getItem("token");
+  } catch {
+    // Storage can be unavailable; fall through to the redirect below.
+  }
+  if (!isCurrentSession(failedAuth, currentToken)) return;
+
   // Guard against a burst of parallel 401s triggering several navigations.
   redirecting = true;
   try {
@@ -61,7 +85,7 @@ api.interceptors.response.use(
   (response) => response,
   (error: unknown) => {
     const details = error as {
-      config?: { url?: string };
+      config?: { url?: string; headers?: { Authorization?: string } };
       response?: { status?: number };
     };
     if (
@@ -72,7 +96,7 @@ api.interceptors.response.use(
         window.location.pathname,
       )
     ) {
-      handleUnauthorized();
+      handleUnauthorized(details.config?.headers?.Authorization);
     }
     return Promise.reject(error);
   },

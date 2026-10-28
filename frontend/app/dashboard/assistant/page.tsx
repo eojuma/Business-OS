@@ -11,6 +11,14 @@ function formatMoney(cents: number): string {
   return (cents / 100).toFixed(2);
 }
 
+function requestErrorMessage(err: unknown, fallback: string): string {
+  const response = (err as { response?: { status?: number; data?: { error?: string } } }).response;
+  if (response?.status === 401) {
+    return "Your session expired. Please sign in again.";
+  }
+  return response?.data?.error || fallback;
+}
+
 const suggestions = [
   { label: "Record a sale", prompt: "sold 3 cement" },
   { label: "Profit today", prompt: "what's my profit today?" },
@@ -136,10 +144,10 @@ export default function AssistantPage() {
         text: preview.Message,
         preview: preview.Kind === "sale" && preview.Understood ? preview : undefined,
       });
-    } catch (err: any) {
+    } catch (err) {
       appendEntry(conversationId, {
         role: "assistant",
-        text: err.response?.data?.error || "Something went wrong understanding that.",
+        text: requestErrorMessage(err, "Something went wrong understanding that."),
       });
     } finally {
       setConversationPending(conversationId, false);
@@ -163,10 +171,10 @@ export default function AssistantPage() {
         role: "assistant",
         text: `Sale recorded — total KSh ${formatMoney(sale.TotalAmount)}.`,
       });
-    } catch (err: any) {
+    } catch (err) {
       appendEntry(conversationId, {
         role: "assistant",
-        text: err.response?.data?.error || "Failed to record the sale.",
+        text: requestErrorMessage(err, "Failed to record the sale."),
       });
     } finally {
       setConversationPending(conversationId, false);

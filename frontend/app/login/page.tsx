@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { ArrowRight, Store } from "lucide-react";
 import { api } from "@/lib/api";
@@ -13,7 +13,14 @@ export default function LoginPage() {
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [needsWorkspace, setNeedsWorkspace] = useState(false);
+  const [sessionExpired, setSessionExpired] = useState(false);
   const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    // Read the query in an effect so the page stays hydration-safe without a
+    // useSearchParams Suspense boundary.
+    setSessionExpired(new URLSearchParams(window.location.search).get("expired") === "1");
+  }, []);
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -62,6 +69,11 @@ export default function LoginPage() {
           <p className="mt-2 text-sm text-[#718078]">Your operating picture is waiting.</p>
 
           <form onSubmit={submit} className="mt-8 space-y-4">
+            {sessionExpired && (
+              <p className="rounded-lg bg-amber-50 p-3 text-sm text-amber-800">
+                Your session expired. Please sign in again.
+              </p>
+            )}
             {error && (
               <p className="rounded-lg bg-red-50 p-3 text-sm text-red-700">{error}</p>
             )}

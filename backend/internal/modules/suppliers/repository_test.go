@@ -3,6 +3,7 @@ package suppliers
 import (
 	"context"
 	"fmt"
+	"math"
 	"net/url"
 	"os"
 	"strings"
@@ -832,5 +833,34 @@ func TestEscapeLike(t *testing.T) {
 		if got := escapeLike(input); got != want {
 			t.Fatalf("escapeLike(%q) = %q, want %q", input, got, want)
 		}
+	}
+}
+
+func TestPaginatedOffset(t *testing.T) {
+	tests := []struct {
+		name  string
+		page  int
+		limit int
+		want  int
+		ok    bool
+	}{
+		{name: "first page", page: 1, limit: 20, want: 0, ok: true},
+		{name: "third page", page: 3, limit: 20, want: 40, ok: true},
+		{name: "zero page", page: 0, limit: 20, ok: false},
+		{name: "negative page", page: -1, limit: 20, ok: false},
+		{name: "zero limit", page: 1, limit: 0, ok: false},
+		{name: "too large page", page: math.MaxInt, limit: 100, ok: false},
+		{name: "overflow wrapping to zero", page: math.MaxInt/2 + 2, limit: 4, ok: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, ok := paginatedOffset(tt.page, tt.limit)
+			if ok != tt.ok || (ok && got != tt.want) {
+				t.Fatalf(
+					"paginatedOffset(%d, %d) = (%d, %t), want (%d, %t)",
+					tt.page, tt.limit, got, ok, tt.want, tt.ok,
+				)
+			}
+		})
 	}
 }

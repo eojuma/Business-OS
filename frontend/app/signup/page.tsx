@@ -130,9 +130,9 @@ export default function SignupPage() {
             <h2 className="text-2xl font-bold">Create your workspace</h2>
           </div>
 
-          {error && <p className="rounded-lg bg-red-50 p-3 text-sm text-red-700">{error}</p>}
+          {error && <p className="rounded-lg bg-danger-soft p-3 text-sm text-danger">{error}</p>}
           {notice && (
-            <p className="rounded-lg bg-amber-50 p-3 text-sm text-amber-800">{notice}</p>
+            <p className="rounded-lg bg-warning-soft p-3 text-sm text-warning-strong">{notice}</p>
           )}
 
           {!googleMode && (

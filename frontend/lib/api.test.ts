@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { isAuthRequest, isCurrentSession, shouldRedirectOnUnauthorized } from "./api";
+import {
+  isAuthRequest,
+  isCurrentSession,
+  shouldRedirectOnUnauthorized,
+  shouldThrottleRedirect,
+} from "./api";
 
 describe("session expiry handling", () => {
   it("redirects a 401 from a protected endpoint", () => {
@@ -29,11 +34,32 @@ describe("session expiry handling", () => {
     expect(shouldRedirectOnUnauthorized(401, "/assistant/interpret", "/logins")).toBe(true);
   });
 
-  it("detects auth request urls", () => {
+  it("detects auth request urls by path", () => {
     expect(isAuthRequest("/auth/login")).toBe(true);
+    expect(isAuthRequest("/auth/login?next=/dashboard")).toBe(true);
     expect(isAuthRequest("https://api.example.com/api/v1/auth/google")).toBe(true);
     expect(isAuthRequest("/assistant/interpret")).toBe(false);
     expect(isAuthRequest(undefined)).toBe(false);
+  });
+
+  it("does not treat protected endpoints under an auth prefix as auth calls", () => {
+    expect(isAuthRequest("/auth/google/unlink")).toBe(false);
+    expect(isAuthRequest("/auth/login-help")).toBe(false);
+    expect(shouldRedirectOnUnauthorized(401, "/auth/google/unlink", "/dashboard")).toBe(true);
+  });
+});
+
+describe("redirect cooldown", () => {
+  it("does not throttle before the first redirect", () => {
+    expect(shouldThrottleRedirect(0, 1000)).toBe(false);
+  });
+
+  it("collapses redirects inside the cooldown window", () => {
+    expect(shouldThrottleRedirect(1000, 1500)).toBe(true);
+  });
+
+  it("allows a new redirect once the window has passed", () => {
+    expect(shouldThrottleRedirect(1000, 5000)).toBe(false);
   });
 });
 

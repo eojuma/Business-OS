@@ -33,6 +33,9 @@ type Payment = {
   created_at: string;
 };
 
+const FOCUSABLE_SELECTOR =
+  'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
 type Meta = {
   page: number;
   limit: number;
@@ -126,7 +129,11 @@ export default function SuppliersPage() {
   const toastIdRef = useRef(0);
   const historyRequestRef = useRef(0);
   const paymentDialogRef = useRef(0);
+  const dialogFocusedRef = useRef(0);
+  const paymentPanelRef = useRef<HTMLDivElement>(null);
+  const paymentOpenerRef = useRef<HTMLElement | null>(null);
   const amountRef = useRef<HTMLInputElement>(null);
+  const closeButtonRef = useRef<HTMLButtonElement>(null);
 
   const pushToast = useCallback((tone: "success" | "error", message: string) => {
     const id = ++toastIdRef.current;
@@ -225,10 +232,49 @@ export default function SuppliersPage() {
     if (!paymentSupplier) return;
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = "hidden";
-    amountRef.current?.focus();
+
+    // Focus once per opened dialog: the amount input, or the close button when
+    // the amount is disabled because there is no balance to pay.
+    if (dialogFocusedRef.current !== paymentDialogRef.current) {
+      dialogFocusedRef.current = paymentDialogRef.current;
+      if (paymentSupplier.outstanding_balance <= 0) {
+        closeButtonRef.current?.focus();
+      } else {
+        amountRef.current?.focus();
+      }
+    }
 
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") closePayments();
+      if (event.key === "Escape") {
+        closePayments();
+        return;
+      }
+      if (event.key !== "Tab") return;
+
+      const panel = paymentPanelRef.current;
+      if (!panel) return;
+      const focusable = Array.from(
+        panel.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR),
+      ).filter((element) => element.offsetParent !== null);
+      if (focusable.length === 0) {
+        event.preventDefault();
+        panel.focus();
+        return;
+      }
+
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      const active = document.activeElement;
+      const inside = active instanceof HTMLElement && active !== panel && panel.contains(active);
+      if (event.shiftKey) {
+        if (active === first || !inside) {
+          event.preventDefault();
+          last.focus();
+        }
+      } else if (active === last || !inside) {
+        event.preventDefault();
+        first.focus();
+      }
     };
     window.addEventListener("keydown", onKeyDown);
 
@@ -237,6 +283,14 @@ export default function SuppliersPage() {
       window.removeEventListener("keydown", onKeyDown);
     };
   }, [paymentSupplier, closePayments]);
+
+  // Return focus to the control that opened the dialog when it closes.
+  useEffect(() => {
+    if (paymentSupplier) return;
+    const opener = paymentOpenerRef.current;
+    paymentOpenerRef.current = null;
+    opener?.focus();
+  }, [paymentSupplier]);
 
   async function createSupplier(event: React.FormEvent) {
     event.preventDefault();
@@ -295,6 +349,8 @@ export default function SuppliersPage() {
 
   function openPayments(supplier: Supplier) {
     paymentDialogRef.current += 1;
+    paymentOpenerRef.current =
+      document.activeElement instanceof HTMLElement ? document.activeElement : null;
     setPaymentSupplier(supplier);
     setAmount("");
     setNote("");
@@ -338,6 +394,10 @@ export default function SuppliersPage() {
       setItems((previous) =>
         previous.map((item) => (item.id === updated.id ? updated : item)),
       );
+      setPaymentSupplier((current) =>
+        current && current.id === updated.id ? updated : current,
+      );
+      setReloadKey((value) => value + 1);
       pushToast(
         "success",
         `Payment recorded. ${updated.name}'s balance is now ${formatMoney(
@@ -684,6 +744,8 @@ export default function SuppliersPage() {
           onClick={closePayments}
         >
           <div
+            ref={paymentPanelRef}
+            tabIndex={-1}
             role="dialog"
             aria-modal="true"
             aria-labelledby="payment-title"
@@ -701,6 +763,7 @@ export default function SuppliersPage() {
                 </p>
               </div>
               <button
+                ref={closeButtonRef}
                 type="button"
                 onClick={closePayments}
                 className="rounded-lg p-2 text-[#718078] transition hover:bg-[#f2f5f1]"

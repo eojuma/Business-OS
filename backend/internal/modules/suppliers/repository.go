@@ -2,6 +2,7 @@ package suppliers
 
 import (
 	"database/sql"
+	"math"
 	"strings"
 	"time"
 
@@ -46,6 +47,16 @@ func (r *repository) List(businessID uuid.UUID, includeArchived bool) ([]Supplie
 	return suppliers, err
 }
 
+// paginatedOffset converts a page and page size into a SQL offset. It reports
+// false for invalid values or when the multiplication would overflow (checked
+// before multiplying, since a wrapped result can also be zero or positive).
+func paginatedOffset(page, limit int) (int, bool) {
+	if page < 1 || limit < 1 || page-1 > math.MaxInt/limit {
+		return 0, false
+	}
+	return (page - 1) * limit, true
+}
+
 // escapeLike makes user input literal inside a LIKE pattern so "%" and "_"
 // match themselves instead of acting as wildcards.
 func escapeLike(value string) string {
@@ -76,15 +87,13 @@ func (r *repository) ListPaginated(businessID uuid.UUID, page, limit int, search
 			return err
 		}
 
-		// A very large page can overflow the offset multiplication; return an
-		// empty page with the true total instead of the first page.
-		offset := int64(page-1) * int64(limit)
-		if page < 1 || limit < 1 || offset < 0 {
+		offset, ok := paginatedOffset(page, limit)
+		if !ok {
 			suppliers = []Supplier{}
 			return nil
 		}
 
-		query = query.Offset(int(offset)).Limit(limit).Order("name asc, id asc")
+		query = query.Offset(offset).Limit(limit).Order("name asc, id asc")
 		return query.Find(&suppliers).Error
 	}, &sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: true})
 	if err != nil {

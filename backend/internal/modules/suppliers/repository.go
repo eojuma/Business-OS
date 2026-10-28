@@ -1,6 +1,9 @@
 package suppliers
 
 import (
+	"database/sql"
+	"math"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -12,6 +15,7 @@ type Repository interface {
 	Create(*Supplier) error
 	FindByID(id, businessID uuid.UUID) (*Supplier, error)
 	List(businessID uuid.UUID, includeArchived bool) ([]Supplier, error)
+	ListPaginated(businessID uuid.UUID, page, limit int, search string, includeArchived bool) ([]Supplier, int64, error)
 	Update(*Supplier) error
 	Delete(id, businessID uuid.UUID) error
 	Restore(id, businessID uuid.UUID) error
@@ -41,6 +45,61 @@ func (r *repository) List(businessID uuid.UUID, includeArchived bool) ([]Supplie
 	}
 	err := query.Where("business_id = ?", businessID).Order("name asc").Find(&suppliers).Error
 	return suppliers, err
+}
+
+// paginatedOffset converts a page and page size into a SQL offset. It reports
+// false for invalid values or when the multiplication would overflow (checked
+// before multiplying, since a wrapped result can also be zero or positive).
+func paginatedOffset(page, limit int) (int, bool) {
+	if page < 1 || limit < 1 || page-1 > math.MaxInt/limit {
+		return 0, false
+	}
+	return (page - 1) * limit, true
+}
+
+// escapeLike makes user input literal inside a LIKE pattern so "%" and "_"
+// match themselves instead of acting as wildcards.
+func escapeLike(value string) string {
+	return strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(value)
+}
+
+func (r *repository) ListPaginated(businessID uuid.UUID, page, limit int, search string, includeArchived bool) ([]Supplier, int64, error) {
+	var suppliers []Supplier
+	var total int64
+
+	// Count and page must come from the same snapshot, otherwise concurrent
+	// writes can make meta.total disagree with the returned rows.
+	err := r.db.Transaction(func(tx *gorm.DB) error {
+		query := tx
+		if includeArchived {
+			query = query.Unscoped()
+		}
+		query = query.Model(&Supplier{}).Where("business_id = ?", businessID)
+		if search != "" {
+			term := "%" + escapeLike(strings.ToLower(search)) + "%"
+			query = query.Where(
+				`LOWER(name) LIKE ? ESCAPE '\' OR LOWER(phone) LIKE ? ESCAPE '\' OR LOWER(email) LIKE ? ESCAPE '\'`,
+				term, term, term,
+			)
+		}
+
+		if err := query.Count(&total).Error; err != nil {
+			return err
+		}
+
+		offset, ok := paginatedOffset(page, limit)
+		if !ok {
+			suppliers = []Supplier{}
+			return nil
+		}
+
+		query = query.Offset(offset).Limit(limit).Order("name asc, id asc")
+		return query.Find(&suppliers).Error
+	}, &sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: true})
+	if err != nil {
+		return nil, 0, err
+	}
+	return suppliers, total, nil
 }
 
 func (r *repository) Update(s *Supplier) error {

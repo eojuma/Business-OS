@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/businessos/backend/internal/shared/middleware"
 	"github.com/businessos/backend/internal/shared/response"
@@ -86,12 +87,65 @@ func (h *Handler) List(c *gin.Context) {
 		}
 		includeArchived = parsed
 	}
-	items, err := h.service.List(businessID, includeArchived)
+	search := strings.TrimSpace(c.Query("search"))
+	rawPage := c.Query("page")
+	rawLimit := c.Query("limit")
+
+	// Preserve the existing unpaginated response for callers that only need
+	// the full list (for example, the purchase form's supplier picker).
+	if rawPage == "" && rawLimit == "" && search == "" {
+		items, err := h.service.List(businessID, includeArchived)
+		if err != nil {
+			response.Error(c, http.StatusInternalServerError, "failed to list suppliers")
+			return
+		}
+		response.Success(c, http.StatusOK, items)
+		return
+	}
+
+	page := 1
+	if rawPage != "" {
+		parsed, err := strconv.Atoi(rawPage)
+		if err != nil || parsed < 1 {
+			response.Error(c, http.StatusBadRequest, "invalid page")
+			return
+		}
+		page = parsed
+	}
+
+	limit := 20
+	if rawLimit != "" {
+		parsed, err := strconv.Atoi(rawLimit)
+		if err != nil || parsed < 1 {
+			response.Error(c, http.StatusBadRequest, "invalid limit")
+			return
+		}
+		if parsed > 100 {
+			parsed = 100
+		}
+		limit = parsed
+	}
+
+	items, total, err := h.service.ListPaginated(businessID, page, limit, search, includeArchived)
 	if err != nil {
 		response.Error(c, http.StatusInternalServerError, "failed to list suppliers")
 		return
 	}
-	response.Success(c, http.StatusOK, items)
+
+	totalPages := int64(0)
+	if total > 0 {
+		totalPages = (total + int64(limit) - 1) / int64(limit)
+	}
+
+	response.Success(c, http.StatusOK, gin.H{
+		"data": items,
+		"meta": gin.H{
+			"page":       page,
+			"limit":      limit,
+			"total":      total,
+			"totalPages": totalPages,
+		},
+	})
 }
 
 func (h *Handler) Get(c *gin.Context) {

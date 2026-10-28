@@ -12,6 +12,7 @@ import {
   readStoredValue,
   serializeConversationState,
   removeConversation,
+  renameConversation as renameConversationInState,
   saveConversations,
   selectConversation as selectConversationInState,
   startConversation,
@@ -35,6 +36,7 @@ export interface AssistantConversations {
   newConversation: () => void;
   selectConversation: (id: string) => void;
   closeConversation: (id: string) => void;
+  renameConversation: (id: string, title: string) => void;
 }
 
 export function useAssistantConversations(): AssistantConversations {
@@ -119,6 +121,11 @@ export function useAssistantConversations(): AssistantConversations {
     setState((previous) => removeConversation(previous, id));
   }, []);
 
+  const renameConversation = useCallback((id: string, title: string) => {
+    adoptedRef.current = false;
+    setState((previous) => renameConversationInState(previous, id, title));
+  }, []);
+
   return {
     conversations: state.conversations,
     activeId: state.activeId,
@@ -129,5 +136,6 @@ export function useAssistantConversations(): AssistantConversations {
     newConversation,
     selectConversation,
     closeConversation,
+    renameConversation,
   };
 }

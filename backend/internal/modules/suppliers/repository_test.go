@@ -819,3 +819,18 @@ func TestSupplierNameIndex(t *testing.T) {
 		t.Logf("List took %v (may need index optimization)", elapsed)
 	}
 }
+
+func TestEscapeLike(t *testing.T) {
+	tests := map[string]string{
+		"plain":  "plain",
+		"50%":    `50\%`,
+		"a_b":    `a\_b`,
+		`a\b`:    `a\\b`,
+		"100%_x": `100\%\_x`,
+	}
+	for input, want := range tests {
+		if got := escapeLike(input); got != want {
+			t.Fatalf("escapeLike(%q) = %q, want %q", input, got, want)
+		}
+	}
+}

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isAuthRequest, shouldRedirectOnUnauthorized } from "./api";
+import { isAuthRequest, isCurrentSession, shouldRedirectOnUnauthorized } from "./api";
 
 describe("session expiry handling", () => {
   it("redirects a 401 from a protected endpoint", () => {
@@ -34,5 +34,24 @@ describe("session expiry handling", () => {
     expect(isAuthRequest("https://api.example.com/api/v1/auth/google")).toBe(true);
     expect(isAuthRequest("/assistant/interpret")).toBe(false);
     expect(isAuthRequest(undefined)).toBe(false);
+  });
+});
+
+describe("stale unauthorized responses", () => {
+  it("treats a 401 from the current token as actionable", () => {
+    expect(isCurrentSession("Bearer token-a", "token-a")).toBe(true);
+  });
+
+  it("ignores a 401 from a token that has since been replaced", () => {
+    expect(isCurrentSession("Bearer token-a", "token-b")).toBe(false);
+  });
+
+  it("keeps the redirect path when the stored token is unavailable", () => {
+    expect(isCurrentSession("Bearer token-a", null)).toBe(true);
+    expect(isCurrentSession(undefined, null)).toBe(true);
+  });
+
+  it("keeps the redirect path when the failed request carried no header", () => {
+    expect(isCurrentSession(undefined, "token-a")).toBe(true);
   });
 });

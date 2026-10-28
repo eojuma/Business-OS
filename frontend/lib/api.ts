@@ -5,10 +5,23 @@ const AUTH_PAGES = ["/login", "/signup"];
 
 export const SESSION_EXPIRED_URL = "/login?expired=1";
 
-/** True for endpoints where a 401 means bad credentials, not an expired session. */
+/**
+ * True for endpoints where a 401 means bad credentials, not an expired
+ * session. Matching is done on the URL path so a protected endpoint such as
+ * `/auth/google/unlink`, or a query string mentioning an auth route, is not
+ * mistaken for the auth call itself.
+ */
 export function isAuthRequest(url?: string): boolean {
   if (!url) return false;
-  return AUTH_ROUTES.some((route) => url.includes(route));
+
+  let pathname: string;
+  try {
+    pathname = new URL(url, "http://localhost").pathname;
+  } catch {
+    pathname = url.split(/[?#]/)[0];
+  }
+  const normalized = pathname.replace(/\/+$/, "");
+  return AUTH_ROUTES.some((route) => normalized === route || normalized.endsWith(route));
 }
 
 /**
@@ -41,10 +54,22 @@ export function isCurrentSession(
   return failedAuth === `Bearer ${currentToken}`;
 }
 
-let redirecting = false;
+const REDIRECT_COOLDOWN_MS = 3000;
+let lastRedirectAt = 0;
+
+/** Collapses a burst of parallel 401s into one navigation without sticking. */
+export function shouldThrottleRedirect(
+  lastRedirectAt: number,
+  now: number,
+  cooldownMs = REDIRECT_COOLDOWN_MS,
+): boolean {
+  return lastRedirectAt !== 0 && now - lastRedirectAt < cooldownMs;
+}
 
 function handleUnauthorized(failedAuth: string | undefined): void {
-  if (typeof window === "undefined" || redirecting) return;
+  if (typeof window === "undefined") return;
+  const now = Date.now();
+  if (shouldThrottleRedirect(lastRedirectAt, now)) return;
 
   let currentToken: string | null = null;
   try {
@@ -54,8 +79,10 @@ function handleUnauthorized(failedAuth: string | undefined): void {
   }
   if (!isCurrentSession(failedAuth, currentToken)) return;
 
-  // Guard against a burst of parallel 401s triggering several navigations.
-  redirecting = true;
+  // A cooldown rather than a permanent flag: it collapses parallel 401s but
+  // still allows a later attempt if the navigation is blocked or the page is
+  // restored from the back/forward cache.
+  lastRedirectAt = now;
   try {
     window.localStorage.removeItem("token");
   } catch {

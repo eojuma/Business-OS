@@ -118,6 +118,7 @@ export default function SuppliersPage() {
   const [savingPayment, setSavingPayment] = useState(false);
   const [payments, setPayments] = useState<Payment[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyError, setHistoryError] = useState("");
 
   const [toasts, setToasts] = useState<Toast[]>([]);
 
@@ -265,13 +266,9 @@ export default function SuppliersPage() {
     }
   }
 
-  function openPayments(supplier: Supplier) {
-    setPaymentSupplier(supplier);
-    setAmount("");
-    setNote("");
-    setPaymentError("");
-    setPayments([]);
+  const loadPayments = useCallback((supplier: Supplier) => {
     setHistoryLoading(true);
+    setHistoryError("");
 
     const requestId = ++historyRequestRef.current;
     api
@@ -283,8 +280,7 @@ export default function SuppliersPage() {
       })
       .catch((error: any) => {
         if (historyRequestRef.current === requestId) {
-          pushToast(
-            "error",
+          setHistoryError(
             error.response?.data?.error || "Could not load payment history.",
           );
         }
@@ -292,6 +288,16 @@ export default function SuppliersPage() {
       .finally(() => {
         if (historyRequestRef.current === requestId) setHistoryLoading(false);
       });
+  }, []);
+
+  function openPayments(supplier: Supplier) {
+    setPaymentSupplier(supplier);
+    setAmount("");
+    setNote("");
+    setPaymentError("");
+    setPayments([]);
+    setHistoryError("");
+    loadPayments(supplier);
   }
 
   async function submitPayment(event: React.FormEvent) {
@@ -787,6 +793,17 @@ export default function SuppliersPage() {
               </div>
               {historyLoading ? (
                 <p className="mt-3 text-sm text-[#718078]">Loading payments…</p>
+              ) : historyError ? (
+                <div className="mt-3 rounded-lg bg-red-50 p-3 text-sm text-red-700">
+                  <p>{historyError}</p>
+                  <button
+                    type="button"
+                    onClick={() => paymentSupplier && loadPayments(paymentSupplier)}
+                    className="mt-2 text-xs font-semibold underline"
+                  >
+                    Try again
+                  </button>
+                </div>
               ) : payments.length === 0 ? (
                 <p className="mt-3 text-sm text-[#718078]">No payments recorded yet.</p>
               ) : (

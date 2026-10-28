@@ -125,6 +125,7 @@ export default function SuppliersPage() {
   const firstQueryRef = useRef(true);
   const toastIdRef = useRef(0);
   const historyRequestRef = useRef(0);
+  const paymentDialogRef = useRef(0);
   const amountRef = useRef<HTMLInputElement>(null);
 
   const pushToast = useCallback((tone: "success" | "error", message: string) => {
@@ -210,10 +211,12 @@ export default function SuppliersPage() {
 
   const closePayments = useCallback(() => {
     historyRequestRef.current += 1;
+    paymentDialogRef.current += 1;
     setPaymentSupplier(null);
     setAmount("");
     setNote("");
     setPaymentError("");
+    setSavingPayment(false);
     setPayments([]);
     setHistoryLoading(false);
   }, []);
@@ -291,10 +294,12 @@ export default function SuppliersPage() {
   }, []);
 
   function openPayments(supplier: Supplier) {
+    paymentDialogRef.current += 1;
     setPaymentSupplier(supplier);
     setAmount("");
     setNote("");
     setPaymentError("");
+    setSavingPayment(false);
     setPayments([]);
     setHistoryError("");
     loadPayments(supplier);
@@ -302,17 +307,19 @@ export default function SuppliersPage() {
 
   async function submitPayment(event: React.FormEvent) {
     event.preventDefault();
-    if (!paymentSupplier) return;
+    if (!paymentSupplier || savingPayment) return;
 
+    const supplier = paymentSupplier;
+    const dialogId = paymentDialogRef.current;
     const cents = Math.round(Number(amount) * 100);
     if (!Number.isFinite(cents) || cents <= 0) {
       setPaymentError("Enter an amount greater than zero.");
       return;
     }
-    if (cents > paymentSupplier.outstanding_balance) {
+    if (cents > supplier.outstanding_balance) {
       setPaymentError(
         `Amount cannot exceed the outstanding balance of ${formatMoney(
-          paymentSupplier.outstanding_balance,
+          supplier.outstanding_balance,
         )}.`,
       );
       return;
@@ -321,11 +328,13 @@ export default function SuppliersPage() {
     setPaymentError("");
     setSavingPayment(true);
     try {
-      const response = await api.post(`/suppliers/${paymentSupplier.id}/payments`, {
+      const response = await api.post(`/suppliers/${supplier.id}/payments`, {
         amount: cents,
         note: note.trim(),
       });
       const updated: Supplier = response.data.data;
+      // The row update and toast are dialog-independent; the dialog-only
+      // state is applied solely when the same dialog is still open.
       setItems((previous) =>
         previous.map((item) => (item.id === updated.id ? updated : item)),
       );
@@ -335,14 +344,20 @@ export default function SuppliersPage() {
           updated.outstanding_balance,
         )}.`,
       );
-      closePayments();
+      if (paymentDialogRef.current === dialogId) {
+        closePayments();
+      }
     } catch (error: any) {
       const message =
         error.response?.data?.error || "Could not record the payment. Try again.";
-      setPaymentError(message);
       pushToast("error", message);
+      if (paymentDialogRef.current === dialogId) {
+        setPaymentError(message);
+      }
     } finally {
-      setSavingPayment(false);
+      if (paymentDialogRef.current === dialogId) {
+        setSavingPayment(false);
+      }
     }
   }
 
@@ -744,9 +759,10 @@ export default function SuppliersPage() {
                 <button
                   type="button"
                   className="btn-secondary mb-0.5 px-3 py-2 text-xs"
-                  onClick={() =>
-                    setAmount((paymentSupplier.outstanding_balance / 100).toFixed(2))
-                  }
+                  onClick={() => {
+                    setAmount((paymentSupplier.outstanding_balance / 100).toFixed(2));
+                    setPaymentError("");
+                  }}
                   disabled={savingPayment || paymentSupplier.outstanding_balance <= 0}
                 >
                   Pay full

@@ -146,7 +146,7 @@ export default function CustomersPage() {
                 <td className="py-2">{c.name}</td>
                 <td className="py-2">{c.phone || "—"}</td>
                 <td className="py-2 text-right">
-                  <span className={c.balance > 0 ? "text-orange-600" : "text-subtle"}>
+                  <span className={c.balance > 0 ? "text-warning-strong" : "text-subtle"}>
                     KSh {formatMoney(c.balance)}
                   </span>
                 </td>

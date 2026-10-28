@@ -3,6 +3,7 @@ package config
 
 import (
 	"fmt"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -31,6 +32,10 @@ type Config struct {
 	JWTSecret      string
 	JWTExpiryHours int
 
+	// GoogleClientID is the OAuth 2.0 Web client ID used to verify Google
+	// Identity Services ID tokens. When empty, /auth/google returns 503.
+	GoogleClientID string
+
 	AIProvider string
 	AIAPIKey   string
 	AIModel    string
@@ -44,12 +49,14 @@ type Config struct {
 // Load loads configuration from environment variables.
 func Load() *Config {
 	_ = godotenv.Load()
+	appEnv := normalizeEnv(getEnv("APP_ENV", "development"))
+	redisHost, redisPort, redisPassword := parseRedisURL(getEnv("REDIS_URL", "redis://localhost:6379"))
 
 	return &Config{
-		AppEnv:         getEnv("APP_ENV", "development"),
+		AppEnv:         appEnv,
 		AppPort:        getEnv("APP_PORT", "8080"),
 		FrontendURL:    getEnv("FRONTEND_URL", "http://localhost:3000"),
-		AllowedOrigins: parseOrigins(getEnv("FRONTEND_URL", "http://localhost:3000")),
+		AllowedOrigins: parseOrigins(getEnv("FRONTEND_URL", "http://localhost:3000"), appEnv == "production"),
 
 		DBHost:     getEnv("DB_HOST", "localhost"),
 		DBPort:     getEnv("DB_PORT", "5432"),
@@ -58,12 +65,14 @@ func Load() *Config {
 		DBName:     getEnv("DB_NAME", "businessos"),
 		DBSSLMode:  getEnv("DB_SSLMODE", "disable"),
 
-		RedisHost:     getEnv("REDIS_HOST", "localhost"),
-		RedisPort:     getEnv("REDIS_PORT", "6379"),
-		RedisPassword: getEnv("REDIS_PASSWORD", ""),
+		RedisHost:     redisHost,
+		RedisPort:     redisPort,
+		RedisPassword: redisPassword,
 
 		JWTSecret:      getEnv("JWT_SECRET", "dev_secret_change_me"),
 		JWTExpiryHours: getEnvInt("JWT_EXPIRY_HOURS", 24),
+
+		GoogleClientID: getEnv("GOOGLE_CLIENT_ID", ""),
 
 		AIProvider: getEnv("AI_PROVIDER", "gemini"),
 		AIAPIKey:   getEnv("AI_API_KEY", ""),
@@ -73,14 +82,36 @@ func Load() *Config {
 	}
 }
 
-// IsProduction returns true if the application is running in production mode.
+// IsProduction reports whether the application runs in production mode.
+// The comparison is normalized so values such as "Production" cannot
+// silently disable production safeguards.
 func (c *Config) IsProduction() bool {
-	return c.AppEnv == "production"
+	return normalizeEnv(c.AppEnv) == "production"
 }
 
-// Validate validates the configuration for production readiness.
+// normalizeEnv canonicalizes APP_ENV values (case and surrounding spaces).
+func normalizeEnv(value string) string {
+	return strings.ToLower(strings.TrimSpace(value))
+}
+
+// validEnv reports whether APP_ENV is a supported environment name.
+func validEnv(env string) bool {
+	switch env {
+	case "development", "test", "staging", "production":
+		return true
+	default:
+		return false
+	}
+}
+
+// Validate validates the configuration for production readiness. Unknown
+// APP_ENV values are rejected so a typo cannot skip the checks below.
 func (c *Config) Validate() error {
-	if !c.IsProduction() {
+	env := normalizeEnv(c.AppEnv)
+	if !validEnv(env) {
+		return fmt.Errorf("APP_ENV must be one of development, test, staging, production (got %q)", c.AppEnv)
+	}
+	if env != "production" {
 		return nil
 	}
 	if c.JWTSecret == "dev_secret_change_me" || c.JWTSecret == "change_me_in_production" || len(c.JWTSecret) < 32 {
@@ -95,9 +126,10 @@ func (c *Config) Validate() error {
 	return nil
 }
 
-// parseOrigins splits a comma-separated FRONTEND_URL into an allowlist and
-// always includes the local development origins so `npm run dev` keeps working.
-func parseOrigins(raw string) []string {
+// parseOrigins splits a comma-separated FRONTEND_URL into an allowlist.
+// Outside production it also allows the local development origins so
+// `npm run dev` keeps working; production trusts only configured origins.
+func parseOrigins(raw string, production bool) []string {
 	seen := make(map[string]bool)
 	origins := make([]string, 0)
 	add := func(origin string) {
@@ -111,8 +143,10 @@ func parseOrigins(raw string) []string {
 	for _, origin := range strings.Split(raw, ",") {
 		add(origin)
 	}
-	add("http://localhost:3000")
-	add("http://127.0.0.1:3000")
+	if !production {
+		add("http://localhost:3000")
+		add("http://127.0.0.1:3000")
+	}
 
 	return origins
 }
@@ -131,4 +165,20 @@ func getEnvInt(key string, fallback int) int {
 		}
 	}
 	return fallback
+}
+
+func parseRedisURL(raw string) (host, port, password string) {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return "localhost", "6379", ""
+	}
+	host = u.Hostname()
+	port = u.Port()
+	if port == "" {
+		port = "6379"
+	}
+	if u.User != nil {
+		password, _ = u.User.Password()
+	}
+	return
 }

@@ -164,6 +164,25 @@ export function updateEntry(
   return changed ? { ...state, conversations } : state;
 }
 
+// renameConversation gives a chat an explicit name. Auto-titling only applies
+// while the title is still the default, so a manual name is never overwritten.
+export function renameConversation(
+  state: ConversationState,
+  id: string,
+  title: string,
+  now = Date.now(),
+): ConversationState {
+  const nextTitle = title.trim().replace(/\s+/g, " ").slice(0, TITLE_LIMIT) || NEW_CHAT_TITLE;
+
+  let changed = false;
+  const conversations = state.conversations.map((conversation) => {
+    if (conversation.id !== id || conversation.title === nextTitle) return conversation;
+    changed = true;
+    return { ...conversation, title: nextTitle, updatedAt: now };
+  });
+  return changed ? { ...state, conversations } : state;
+}
+
 // capConversations trims to MAX_CONVERSATIONS without evicting the chats in
 // `keep` (the one being opened and the one on screen), dropping the least
 // recently updated of the rest.

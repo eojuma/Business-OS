@@ -45,6 +45,12 @@ func (r *repository) List(businessID uuid.UUID, includeArchived bool) ([]Supplie
 	return suppliers, err
 }
 
+// escapeLike makes user input literal inside a LIKE pattern so "%" and "_"
+// match themselves instead of acting as wildcards.
+func escapeLike(value string) string {
+	return strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(value)
+}
+
 func (r *repository) ListPaginated(businessID uuid.UUID, page, limit int, search string, includeArchived bool) ([]Supplier, int64, error) {
 	var suppliers []Supplier
 	query := r.db
@@ -53,9 +59,9 @@ func (r *repository) ListPaginated(businessID uuid.UUID, page, limit int, search
 	}
 	query = query.Model(&Supplier{}).Where("business_id = ?", businessID)
 	if search != "" {
-		term := "%" + strings.ToLower(search) + "%"
+		term := "%" + escapeLike(strings.ToLower(search)) + "%"
 		query = query.Where(
-			"LOWER(name) LIKE ? OR LOWER(phone) LIKE ? OR LOWER(email) LIKE ?",
+			`LOWER(name) LIKE ? ESCAPE '\' OR LOWER(phone) LIKE ? ESCAPE '\' OR LOWER(email) LIKE ? ESCAPE '\'`,
 			term, term, term,
 		)
 	}

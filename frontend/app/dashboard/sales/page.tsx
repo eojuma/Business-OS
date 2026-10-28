@@ -392,7 +392,14 @@ function ReceiptView({
       <style>{`
         @media print {
           body * { visibility: hidden; }
-          #receipt-print, #receipt-print * { visibility: visible; }
+          #receipt-print, #receipt-print * {
+            visibility: visible;
+            /* Browsers print on white paper and omit backgrounds, so force a
+               print-safe palette instead of inheriting the dark theme. */
+            color: #111827 !important;
+            background: #ffffff !important;
+            border-color: #9ca3af !important;
+          }
           #receipt-print { position: absolute; left: 0; top: 0; width: 100%; box-shadow: none; border: none; }
           .no-print { display: none !important; }
         }

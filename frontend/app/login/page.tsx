@@ -74,15 +74,15 @@ export default function LoginPage() {
 
           <form onSubmit={submit} className="mt-8 space-y-4">
             {sessionExpired && (
-              <p className="rounded-lg bg-amber-50 p-3 text-sm text-amber-800">
+              <p className="rounded-lg bg-warning-soft p-3 text-sm text-warning-strong">
                 Your session expired. Please sign in again.
               </p>
             )}
             {error && (
-              <p className="rounded-lg bg-red-50 p-3 text-sm text-red-700">{error}</p>
+              <p className="rounded-lg bg-danger-soft p-3 text-sm text-danger">{error}</p>
             )}
             {needsWorkspace && (
-              <p className="rounded-lg bg-amber-50 p-3 text-sm text-amber-800">
+              <p className="rounded-lg bg-warning-soft p-3 text-sm text-warning-strong">
                 No workspace is linked to that Google account.{" "}
                 <Link href="/signup" className="font-semibold underline">
                   Create a workspace

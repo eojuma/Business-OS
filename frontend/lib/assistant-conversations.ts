@@ -21,6 +21,10 @@ export interface ChatEntry {
 export interface Conversation {
   id: string;
   title: string;
+  /** True once the user names the chat; auto-titling then never overrides it. */
+  titleCustomized?: boolean;
+  /** When the title last changed, so a newer message cannot outrank a rename. */
+  titleUpdatedAt?: number;
   createdAt: number;
   updatedAt: number;
   entries: ChatEntry[];
@@ -130,11 +134,19 @@ export function appendEntry(
     const storedEntry: ChatEntry = { ...entry, at: entry.at ?? now };
     const combined = [...conversation.entries, storedEntry];
     const entries = combined.slice(-MAX_ENTRIES);
-    const title =
-      conversation.title === NEW_CHAT_TITLE && storedEntry.role === "user" && storedEntry.text.trim()
-        ? deriveTitle(combined)
-        : conversation.title;
-    return { ...conversation, entries, title, updatedAt: now };
+    const shouldDeriveTitle =
+      !conversation.titleCustomized &&
+      conversation.title === NEW_CHAT_TITLE &&
+      storedEntry.role === "user" &&
+      storedEntry.text.trim().length > 0;
+    const title = shouldDeriveTitle ? deriveTitle(combined) : conversation.title;
+    return {
+      ...conversation,
+      entries,
+      title,
+      titleUpdatedAt: shouldDeriveTitle ? now : conversation.titleUpdatedAt,
+      updatedAt: now,
+    };
   });
   return changed ? { ...state, conversations } : state;
 }
@@ -164,6 +176,59 @@ export function updateEntry(
   return changed ? { ...state, conversations } : state;
 }
 
+// renameConversation gives a chat an explicit name. Auto-titling only applies
+// while the title is still the default, so a manual name is never overwritten.
+export function renameConversation(
+  state: ConversationState,
+  id: string,
+  title: string,
+  now = Date.now(),
+): ConversationState {
+  const flattened = title.trim().replace(/\s+/g, " ");
+  const nextTitle = flattened.slice(0, TITLE_LIMIT).trimEnd() || NEW_CHAT_TITLE;
+  // A typed name (even "New chat") is deliberate and exempt from auto-titling;
+  // clearing the field restores the default so auto-titling can resume.
+  const customized = flattened.length > 0;
+
+  let changed = false;
+  const conversations = state.conversations.map((conversation) => {
+    if (
+      conversation.id !== id ||
+      (conversation.title === nextTitle && Boolean(conversation.titleCustomized) === customized)
+    ) {
+      return conversation;
+    }
+    changed = true;
+    return {
+      ...conversation,
+      title: nextTitle,
+      titleCustomized: customized,
+      titleUpdatedAt: now,
+      updatedAt: now,
+    };
+  });
+  return changed ? { ...state, conversations } : state;
+}
+
+// pickTitleSource chooses which copy owns the title: a manual name always wins
+// over an auto-derived one (another tab may append a message unaware of the
+// rename), and between equally-ranked copies the most recent title change wins.
+function pickTitleSource(
+  local: Conversation,
+  incoming: Conversation,
+  newer: Conversation,
+): Conversation {
+  if (Boolean(local.titleCustomized) !== Boolean(incoming.titleCustomized)) {
+    return local.titleCustomized ? local : incoming;
+  }
+  const localTitleAt = local.titleUpdatedAt ?? 0;
+  const incomingTitleAt = incoming.titleUpdatedAt ?? 0;
+  if (localTitleAt !== incomingTitleAt) {
+    return localTitleAt > incomingTitleAt ? local : incoming;
+  }
+  return newer;
+}
+
 // capConversations trims to MAX_CONVERSATIONS without evicting the chats in
 // `keep` (the one being opened and the one on screen), dropping the least
 // recently updated of the rest.
@@ -190,10 +255,16 @@ function entryKey(entry: ChatEntry): string {
 // flags are sticky. Copies predating entry timestamps fall back to the newer.
 function mergeConversationCopies(local: Conversation, incoming: Conversation): Conversation {
   const newer = incoming.updatedAt > local.updatedAt ? incoming : local;
+  const titleSource = pickTitleSource(local, incoming, newer);
+  const titleFields = {
+    title: titleSource.title,
+    titleCustomized: titleSource.titleCustomized,
+    titleUpdatedAt: titleSource.titleUpdatedAt,
+  };
   const canMergeEntries =
     local.entries.every((entry) => typeof entry.at === "number") &&
     incoming.entries.every((entry) => typeof entry.at === "number");
-  if (!canMergeEntries) return newer;
+  if (!canMergeEntries) return { ...newer, ...titleFields };
 
   const byKey = new Map<string, ChatEntry>();
   for (const entry of [...local.entries, ...incoming.entries]) {
@@ -207,8 +278,17 @@ function mergeConversationCopies(local: Conversation, incoming: Conversation): C
   }
 
   const entries = [...byKey.values()].sort((a, b) => (a.at ?? 0) - (b.at ?? 0)).slice(-MAX_ENTRIES);
-  const title = newer.title === NEW_CHAT_TITLE ? deriveTitle(entries) : newer.title;
-  return { ...newer, entries, title, updatedAt: Math.max(local.updatedAt, incoming.updatedAt) };
+  const title =
+    titleFields.title === NEW_CHAT_TITLE && !titleFields.titleCustomized
+      ? deriveTitle(entries)
+      : titleFields.title;
+  return {
+    ...newer,
+    ...titleFields,
+    entries,
+    title,
+    updatedAt: Math.max(local.updatedAt, incoming.updatedAt),
+  };
 }
 
 // mergeConversationStates reconciles a snapshot written by another tab with
@@ -332,6 +412,8 @@ function isConversation(value: unknown): value is Conversation {
   if (!isRecord(value)) return false;
   if (typeof value.id !== "string" || value.id.length === 0) return false;
   if (typeof value.title !== "string") return false;
+  if (value.titleCustomized !== undefined && typeof value.titleCustomized !== "boolean") return false;
+  if (value.titleUpdatedAt !== undefined && typeof value.titleUpdatedAt !== "number") return false;
   if (typeof value.createdAt !== "number" || typeof value.updatedAt !== "number") return false;
   return Array.isArray(value.entries) && value.entries.every(isChatEntry);
 }

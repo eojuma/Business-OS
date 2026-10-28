@@ -1,8 +1,9 @@
 "use client";
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { Bot, Plus, Send, Sparkles, User, X } from "lucide-react";
+import { Bot, Menu, Send, Sparkles, User } from "lucide-react";
 import { api } from "@/lib/api";
+import { AssistantChatMenu } from "@/components/assistant-chat-menu";
 import { useAssistantConversations } from "@/hooks/use-assistant-conversations";
 import type { Preview } from "@/lib/assistant-conversations";
 
@@ -28,6 +29,7 @@ export default function AssistantPage() {
     newConversation,
     selectConversation,
     closeConversation,
+    renameConversation,
   } = useAssistantConversations();
 
   const entries = activeConversation.entries;
@@ -48,6 +50,8 @@ export default function AssistantPage() {
     });
   }, []);
 
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menuButtonRef = useRef<HTMLButtonElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const focusInputRef = useRef(false);
@@ -173,8 +177,27 @@ export default function AssistantPage() {
     updateEntry(activeId, index, { resolved: true });
   }
 
+  function closeMenu() {
+    setMenuOpen(false);
+    menuButtonRef.current?.focus();
+  }
+
   function handleNewConversation() {
     newConversation();
+    setMenuOpen(false);
+    inputRef.current?.focus();
+  }
+
+  function handleSelectConversation(id: string) {
+    selectConversation(id);
+    setMenuOpen(false);
+    inputRef.current?.focus();
+  }
+
+  function handleSuggestion(prompt: string) {
+    if (entries.length > 0) newConversation();
+    setInput(prompt);
+    setMenuOpen(false);
     inputRef.current?.focus();
   }
 
@@ -187,72 +210,46 @@ export default function AssistantPage() {
 
   return (
     <div className="mx-auto flex h-[calc(100dvh-6rem)] w-full max-w-3xl flex-col sm:h-[calc(100dvh-7rem)] md:h-[calc(100dvh-3rem)] lg:h-[calc(100dvh-4rem)]">
-      <section className="panel flex min-h-0 flex-1 flex-col overflow-hidden">
-        <header className="shrink-0 border-b border-[#eef1ed] px-4 py-4 sm:px-6">
-          <div className="flex items-start gap-3">
-            <span className="rounded-xl bg-[#e7f4ec] p-2.5 text-[#16794c]">
+      <section className="panel relative flex min-h-0 flex-1 flex-col overflow-hidden">
+        <AssistantChatMenu
+          open={menuOpen}
+          conversations={conversations}
+          activeId={activeId}
+          suggestions={suggestions}
+          onClose={closeMenu}
+          onSelect={handleSelectConversation}
+          onNewChat={handleNewConversation}
+          onRename={renameConversation}
+          onDelete={closeConversation}
+          onSuggestion={handleSuggestion}
+        />
+        <header className="shrink-0 border-b border-[#eef1ed] px-4 py-3 sm:px-5">
+          <div className="flex items-center gap-2">
+            <button
+              ref={menuButtonRef}
+              type="button"
+              onClick={() => setMenuOpen((current) => !current)}
+              aria-label="Chats"
+              aria-expanded={menuOpen}
+              aria-controls="assistant-chat-menu"
+              className="rounded-lg p-2 text-[#4f5c53] transition hover:bg-[#f2f5f1]"
+            >
+              <Menu size={18} />
+            </button>
+            <span className="rounded-xl bg-[#e7f4ec] p-2 text-[#16794c]">
               <Bot size={18} />
             </span>
-            <div className="min-w-0">
+            <div className="min-w-0 flex-1">
               <p className="eyebrow">AI workspace</p>
-              <h1 className="mt-0.5 text-xl font-bold tracking-tight sm:text-2xl">Assistant</h1>
-              <p className="mt-1 text-sm text-[#718078]">
-                Record a sale or ask about stock, profit and balances. Nothing is saved
-                until you confirm.
-              </p>
+              <h1 className="truncate text-lg font-bold tracking-tight sm:text-xl">Assistant</h1>
             </div>
           </div>
+          <p className="mt-2 truncate text-sm text-[#718078]">
+            {entries.length > 0
+              ? activeConversation.title
+              : "Record a sale or ask about stock, profit and balances. Nothing is saved until you confirm."}
+          </p>
         </header>
-
-        <div className="flex shrink-0 items-center gap-2 border-b border-[#eef1ed] px-3 py-2">
-          <div
-            className="chat-scroll flex min-w-0 flex-1 items-center gap-1 overflow-x-auto"
-            aria-label="Conversations"
-          >
-            {conversations.map((conversation) => {
-              const isActive = conversation.id === activeId;
-              return (
-                <div
-                  key={conversation.id}
-                  className={`group flex shrink-0 items-center gap-1 rounded-lg border px-2.5 py-1.5 text-xs transition ${
-                    isActive
-                      ? "border-[#16794c] bg-[#e7f4ec] text-[#12633e]"
-                      : "border-transparent text-[#647168] hover:bg-[#f2f5f1]"
-                  }`}
-                >
-                  <button
-                    type="button"
-                    onClick={() => selectConversation(conversation.id)}
-                    aria-current={isActive ? "page" : undefined}
-                    className="max-w-[150px] truncate font-semibold"
-                    title={conversation.title}
-                  >
-                    {conversation.title}
-                  </button>
-                  {conversations.length > 1 && (
-                    <button
-                      type="button"
-                      onClick={() => closeConversation(conversation.id)}
-                      aria-label={`Close ${conversation.title}`}
-                      className="rounded p-0.5 text-[#8a958d] transition hover:bg-[#d9e0d9] hover:text-[#17211b]"
-                    >
-                      <X size={12} />
-                    </button>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-          <button
-            type="button"
-            onClick={handleNewConversation}
-            className="btn-secondary shrink-0 px-2.5 py-1.5 text-xs"
-            aria-label="New chat"
-          >
-            <Plus size={14} />
-            <span className="hidden sm:inline">New chat</span>
-          </button>
-        </div>
 
         <div
           ref={scrollRef}

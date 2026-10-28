@@ -14,6 +14,7 @@ import {
   NEW_CHAT_TITLE,
   parseConversationState,
   removeConversation,
+  renameConversation,
   saveConversations,
   selectConversation,
   serializeConversationState,
@@ -103,6 +104,35 @@ describe("assistant conversation model", () => {
     const resolved = updateEntry(withEntry, base.activeId, 0, { resolved: true }, 3);
     expect(resolved.conversations[0].entries[0].resolved).toBe(true);
     expect(updateEntry(resolved, base.activeId, 5, { resolved: false })).toBe(resolved);
+  });
+
+  it("renames a conversation and normalises whitespace", () => {
+    const base = emptyState(1);
+    const renamed = renameConversation(base, base.activeId, "  Cement   restock  ", 2);
+
+    expect(renamed.conversations[0].title).toBe("Cement restock");
+    expect(renamed.conversations[0].updatedAt).toBe(2);
+  });
+
+  it("falls back to the default title for an empty rename", () => {
+    const base = emptyState(1);
+    const named = renameConversation(base, base.activeId, "Named chat", 2);
+    const cleared = renameConversation(named, named.activeId, "   ", 3);
+
+    expect(cleared.conversations[0].title).toBe("New chat");
+  });
+
+  it("keeps a manual name when new messages arrive", () => {
+    const base = emptyState(1);
+    const named = renameConversation(base, base.activeId, "Quarterly review", 2);
+    const after = appendEntry(named, named.activeId, { role: "user", text: "hello" }, 3);
+
+    expect(after.conversations[0].title).toBe("Quarterly review");
+  });
+
+  it("ignores renames for an unknown conversation", () => {
+    const base = emptyState(1);
+    expect(renameConversation(base, "missing", "Name", 2)).toBe(base);
   });
 
   it("starts a new conversation when the active one has messages", () => {

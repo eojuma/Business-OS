@@ -206,7 +206,7 @@ export function GoogleSignIn({
 
   if (!clientId) {
     return (
-      <p className="rounded-lg border border-dashed border-[#d9e0d9] p-3 text-center text-xs text-[#8a958d]">
+      <p className="rounded-lg border border-dashed border-border p-3 text-center text-xs text-subtle">
         Google sign-in is not configured.
       </p>
     );
@@ -231,7 +231,7 @@ export function GoogleSignIn({
             }
             setAttempt((n) => n + 1);
           }}
-          className="mt-2 w-full text-center text-xs text-[#8a958d] underline"
+          className="mt-2 w-full text-center text-xs text-subtle underline"
         >
           Retry Google sign-in
         </button>

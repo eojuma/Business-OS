@@ -231,7 +231,7 @@ export default function AssistantPage() {
           onDelete={closeConversation}
           onSuggestion={handleSuggestion}
         />
-        <header className="shrink-0 border-b border-[#eef1ed] px-4 py-3 sm:px-5">
+        <header className="shrink-0 border-b border-border-subtle px-4 py-3 sm:px-5">
           <div className="flex items-center gap-2">
             <button
               ref={menuButtonRef}
@@ -240,11 +240,11 @@ export default function AssistantPage() {
               aria-label="Chats"
               aria-expanded={menuOpen}
               aria-controls="assistant-chat-menu"
-              className="rounded-lg p-2 text-[#4f5c53] transition hover:bg-[#f2f5f1]"
+              className="rounded-lg p-2 text-muted transition hover:bg-hover"
             >
               <Menu size={18} />
             </button>
-            <span className="rounded-xl bg-[#e7f4ec] p-2 text-[#16794c]">
+            <span className="rounded-xl bg-primary-soft p-2 text-primary">
               <Bot size={18} />
             </span>
             <div className="min-w-0 flex-1">
@@ -252,7 +252,7 @@ export default function AssistantPage() {
               <h1 className="truncate text-lg font-bold tracking-tight sm:text-xl">Assistant</h1>
             </div>
           </div>
-          <p className="mt-2 truncate text-sm text-[#718078]">
+          <p className="mt-2 truncate text-sm text-muted">
             {entries.length > 0
               ? activeConversation.title
               : "Record a sale or ask about stock, profit and balances. Nothing is saved until you confirm."}
@@ -268,18 +268,18 @@ export default function AssistantPage() {
           aria-busy={loading}
         >
           {!loaded && (
-            <div className="flex h-full items-center justify-center text-sm text-[#8a958d]">
+            <div className="flex h-full items-center justify-center text-sm text-subtle">
               Loading chats…
             </div>
           )}
 
           {loaded && entries.length === 0 && (
             <div className="flex h-full flex-col items-center justify-center px-2 text-center">
-              <span className="rounded-2xl bg-[#e7f4ec] p-3 text-[#16794c]">
+              <span className="rounded-2xl bg-primary-soft p-3 text-primary">
                 <Sparkles size={22} />
               </span>
               <p className="mt-3 text-sm font-semibold">Start with a question or a sale</p>
-              <p className="mt-1 max-w-sm text-xs text-[#718078]">
+              <p className="mt-1 max-w-sm text-xs text-muted">
                 The assistant can look things up instantly, and asks you to confirm
                 before recording a sale.
               </p>
@@ -289,7 +289,7 @@ export default function AssistantPage() {
                     key={suggestion.prompt}
                     type="button"
                     onClick={() => applySuggestion(suggestion.prompt)}
-                    className="rounded-full border border-[#d9e0d9] bg-white px-3 py-1.5 text-xs font-semibold text-[#344139] transition hover:bg-[#f2f5f1]"
+                    className="rounded-full border border-border bg-card px-3 py-1.5 text-xs font-semibold text-foreground transition hover:bg-hover"
                   >
                     {suggestion.label}
                   </button>
@@ -305,7 +305,7 @@ export default function AssistantPage() {
                 className={`flex gap-2 ${entry.role === "user" ? "justify-end" : "justify-start"}`}
               >
                 {entry.role === "assistant" && (
-                  <span className="mt-0.5 hidden h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[#e7f4ec] text-[#16794c] sm:flex">
+                  <span className="mt-0.5 hidden h-7 w-7 shrink-0 items-center justify-center rounded-full bg-primary-soft text-primary sm:flex">
                     <Bot size={14} />
                   </span>
                 )}
@@ -313,8 +313,8 @@ export default function AssistantPage() {
                 <div
                   className={`max-w-[85%] rounded-2xl px-3.5 py-2.5 text-sm sm:max-w-[75%] ${
                     entry.role === "user"
-                      ? "rounded-br-sm bg-[#16794c] text-white"
-                      : "rounded-bl-sm border border-[#e5e9e4] bg-[#f7f9f6] text-[#17211b]"
+                      ? "rounded-br-sm bg-primary-solid text-white"
+                      : "rounded-bl-sm border border-border bg-background text-foreground"
                   }`}
                 >
                   <p className="whitespace-pre-wrap break-words">{entry.text}</p>
@@ -342,7 +342,7 @@ export default function AssistantPage() {
                 </div>
 
                 {entry.role === "user" && (
-                  <span className="mt-0.5 hidden h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[#eef1ed] text-[#52616a] sm:flex">
+                  <span className="mt-0.5 hidden h-7 w-7 shrink-0 items-center justify-center rounded-full bg-border-subtle text-muted sm:flex">
                     <User size={14} />
                   </span>
                 )}
@@ -355,13 +355,13 @@ export default function AssistantPage() {
               role="status"
               aria-label="Assistant is thinking"
             >
-              <span className="hidden h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[#e7f4ec] text-[#16794c] sm:flex">
+              <span className="hidden h-7 w-7 shrink-0 items-center justify-center rounded-full bg-primary-soft text-primary sm:flex">
                 <Bot size={14} />
               </span>
-              <div className="flex items-center gap-1.5 rounded-2xl rounded-bl-sm border border-[#e5e9e4] bg-[#f7f9f6] px-3.5 py-3 text-sm text-[#718078]">
-                <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-[#16794c] [animation-delay:-0.2s]" />
-                <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-[#16794c] [animation-delay:-0.1s]" />
-                <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-[#16794c]" />
+              <div className="flex items-center gap-1.5 rounded-2xl rounded-bl-sm border border-border bg-background px-3.5 py-3 text-sm text-muted">
+                <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-primary-solid [animation-delay:-0.2s]" />
+                <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-primary-solid [animation-delay:-0.1s]" />
+                <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-primary-solid" />
                 <span className="ml-1">Thinking</span>
               </div>
             </div>
@@ -370,7 +370,7 @@ export default function AssistantPage() {
 
         <form
           onSubmit={handleSend}
-          className="shrink-0 border-t border-[#eef1ed] bg-white p-3 sm:p-4"
+          className="shrink-0 border-t border-border-subtle bg-card p-3 sm:p-4"
         >
           <div className="flex items-center gap-2">
             <input
@@ -394,7 +394,7 @@ export default function AssistantPage() {
               <span className="hidden sm:inline">{loading ? "Sending" : "Send"}</span>
             </button>
           </div>
-          <p className="mt-1.5 hidden text-[11px] text-[#8a958d] sm:block">
+          <p className="mt-1.5 hidden text-[11px] text-subtle sm:block">
             Nothing is saved until you confirm a sale.
           </p>
         </form>

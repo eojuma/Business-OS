@@ -528,11 +528,11 @@ export default function SuppliersPage() {
       )}
 
       <div className="panel overflow-hidden">
-        <div className="flex flex-col gap-3 border-b border-[#eef1ed] p-4 sm:flex-row sm:items-center">
+        <div className="flex flex-col gap-3 border-b border-border-subtle p-4 sm:flex-row sm:items-center">
           <div className="relative min-w-0 flex-1">
             <Search
               size={16}
-              className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[#9aa59d]"
+              className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-subtle"
             />
             <input
               className="field pl-9"
@@ -542,7 +542,7 @@ export default function SuppliersPage() {
               aria-label="Search suppliers"
             />
           </div>
-          <span className="shrink-0 text-sm text-[#718078]">
+          <span className="shrink-0 text-sm text-muted">
             {loading
               ? "Loading…"
               : loadError
@@ -554,14 +554,14 @@ export default function SuppliersPage() {
         {loading ? (
           <div className="space-y-2 p-4">
             {Array.from({ length: 4 }).map((_, index) => (
-              <div key={index} className="h-12 animate-pulse rounded-lg bg-[#f2f5f1]" />
+              <div key={index} className="h-12 animate-pulse rounded-lg bg-hover" />
             ))}
           </div>
         ) : loadError ? (
           <div className="p-10 text-center">
-            <AlertCircle className="mx-auto text-red-500" />
+            <AlertCircle className="mx-auto text-danger" />
             <p className="mt-3 font-semibold">Could not load suppliers</p>
-            <p className="mt-1 text-sm text-[#718078]">{loadError}</p>
+            <p className="mt-1 text-sm text-muted">{loadError}</p>
             <button
               className="btn-secondary mt-4"
               onClick={() => setReloadKey((value) => value + 1)}
@@ -571,11 +571,11 @@ export default function SuppliersPage() {
           </div>
         ) : items.length === 0 ? (
           <div className="p-10 text-center">
-            <Truck className="mx-auto text-[#9aa59d]" />
+            <Truck className="mx-auto text-subtle" />
             <p className="mt-3 font-semibold">
               {search ? "No matches found" : "No suppliers yet"}
             </p>
-            <p className="mt-1 text-sm text-[#718078]">
+            <p className="mt-1 text-sm text-muted">
               {search
                 ? `No suppliers match "${search}". Try a different name, phone or email.`
                 : "Add your first supplier to start receiving purchases."}
@@ -589,7 +589,7 @@ export default function SuppliersPage() {
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full min-w-[760px] text-left text-sm">
-              <thead className="bg-[#f8faf7] text-xs uppercase text-[#718078]">
+              <thead className="bg-surface-muted text-xs uppercase text-muted">
                 <tr>
                   <th className="px-5 py-3">Supplier</th>
                   <th className="px-5 py-3">Contact</th>
@@ -605,19 +605,19 @@ export default function SuppliersPage() {
                     supplier.outstanding_balance,
                   );
                   return (
-                    <tr key={supplier.id} className="border-t border-[#eef1ed]">
+                    <tr key={supplier.id} className="border-t border-border-subtle">
                       <td className="px-5 py-4">
                         <p className="font-semibold">{supplier.name}</p>
-                        <p className="text-xs text-[#8a958d]">
+                        <p className="text-xs text-subtle">
                           {formatTerms(supplier.payment_terms)}
                         </p>
                       </td>
-                      <td className="px-5 py-4 text-[#718078]">
+                      <td className="px-5 py-4 text-muted">
                         {supplier.phone || supplier.email ? (
                           <>
                             <p>{supplier.phone || "—"}</p>
                             {supplier.email && (
-                              <p className="text-xs text-[#8a958d]">{supplier.email}</p>
+                              <p className="text-xs text-subtle">{supplier.email}</p>
                             )}
                           </>
                         ) : (
@@ -631,8 +631,8 @@ export default function SuppliersPage() {
                         <span
                           className={
                             overdue
-                              ? "text-xs font-semibold text-red-600"
-                              : "text-xs text-[#718078]"
+                              ? "text-xs font-semibold text-danger"
+                              : "text-xs text-muted"
                           }
                         >
                           {formatDate(supplier.due_date)}
@@ -668,14 +668,14 @@ export default function SuppliersPage() {
         )}
 
         {!loadError && !loading && (
-          <div className="flex flex-col gap-3 border-t border-[#eef1ed] p-4 sm:flex-row sm:items-center sm:justify-between">
-            <p className="text-sm text-[#718078]">
+          <div className="flex flex-col gap-3 border-t border-border-subtle p-4 sm:flex-row sm:items-center sm:justify-between">
+            <p className="text-sm text-muted">
               {meta.total === 0
                 ? "No results"
                 : `Showing ${start}–${end} of ${meta.total} results`}
             </p>
             <div className="flex flex-wrap items-center gap-2">
-              <label className="flex items-center gap-2 text-xs text-[#718078]">
+              <label className="flex items-center gap-2 text-xs text-muted">
                 Rows
                 <select
                   className="field w-auto py-1.5"
@@ -702,7 +702,7 @@ export default function SuppliersPage() {
               >
                 Prev
               </button>
-              <label className="flex items-center gap-1 text-xs text-[#718078]">
+              <label className="flex items-center gap-1 text-xs text-muted">
                 Page
                 <input
                   className="field w-16 py-1.5 text-center"
@@ -760,7 +760,7 @@ export default function SuppliersPage() {
                 <h2 id="payment-title" className="mt-1 text-xl font-bold">
                   {paymentSupplier.name}
                 </h2>
-                <p className="mt-1 text-sm text-[#718078]">
+                <p className="mt-1 text-sm text-muted">
                   {paymentSupplier.phone || paymentSupplier.email || "No contact details"}
                 </p>
               </div>
@@ -768,7 +768,7 @@ export default function SuppliersPage() {
                 ref={closeButtonRef}
                 type="button"
                 onClick={closePayments}
-                className="rounded-lg p-2 text-[#718078] transition hover:bg-[#f2f5f1]"
+                className="rounded-lg p-2 text-muted transition hover:bg-hover"
                 aria-label="Close payment dialog"
               >
                 <X size={18} />
@@ -776,24 +776,24 @@ export default function SuppliersPage() {
             </div>
 
             <div className="mt-4 grid gap-3 sm:grid-cols-3">
-              <div className="rounded-lg bg-[#f8faf7] p-3">
+              <div className="rounded-lg bg-surface-muted p-3">
                 <p className="eyebrow">Outstanding</p>
                 <p className="mt-1 text-lg font-bold">
                   {formatMoney(paymentSupplier.outstanding_balance)}
                 </p>
               </div>
-              <div className="rounded-lg bg-[#f8faf7] p-3">
+              <div className="rounded-lg bg-surface-muted p-3">
                 <p className="eyebrow">Due date</p>
                 <p
                   className={`mt-1 text-sm font-semibold ${
-                    selectedOverdue ? "text-red-600" : "text-[#17211b]"
+                    selectedOverdue ? "text-danger" : "text-foreground"
                   }`}
                 >
                   {formatDate(paymentSupplier.due_date)}
                   {selectedOverdue ? " · Overdue" : ""}
                 </p>
               </div>
-              <div className="rounded-lg bg-[#f8faf7] p-3">
+              <div className="rounded-lg bg-surface-muted p-3">
                 <p className="eyebrow">Terms</p>
                 <p className="mt-1 text-sm font-semibold">
                   {formatTerms(paymentSupplier.payment_terms)}
@@ -834,7 +834,7 @@ export default function SuppliersPage() {
                 </button>
               </div>
               <label className="block text-sm font-semibold">
-                Note <span className="font-normal text-[#8a958d]">(optional)</span>
+                Note <span className="font-normal text-subtle">(optional)</span>
                 <input
                   className="field mt-1.5"
                   value={note}
@@ -847,7 +847,7 @@ export default function SuppliersPage() {
                 />
               </label>
               {paymentError && (
-                <p className="rounded-lg bg-red-50 p-3 text-sm text-red-700">
+                <p className="rounded-lg bg-danger-soft p-3 text-sm text-danger">
                   {paymentError}
                 </p>
               )}
@@ -859,23 +859,23 @@ export default function SuppliersPage() {
                 {savingPayment ? "Recording payment…" : "Record payment"}
               </button>
               {paymentSupplier.outstanding_balance <= 0 && (
-                <p className="text-center text-xs text-[#8a958d]">
+                <p className="text-center text-xs text-subtle">
                   This supplier has no outstanding balance.
                 </p>
               )}
             </form>
 
-            <div className="mt-6 border-t border-[#eef1ed] pt-4">
+            <div className="mt-6 border-t border-border-subtle pt-4">
               <div className="flex items-center justify-between">
                 <h3 className="text-sm font-bold">Payment history</h3>
-                <span className="text-xs text-[#8a958d]">
+                <span className="text-xs text-subtle">
                   {payments.length} payment{payments.length === 1 ? "" : "s"}
                 </span>
               </div>
               {historyLoading ? (
-                <p className="mt-3 text-sm text-[#718078]">Loading payments…</p>
+                <p className="mt-3 text-sm text-muted">Loading payments…</p>
               ) : historyError ? (
-                <div className="mt-3 rounded-lg bg-red-50 p-3 text-sm text-red-700">
+                <div className="mt-3 rounded-lg bg-danger-soft p-3 text-sm text-danger">
                   <p>{historyError}</p>
                   <button
                     type="button"
@@ -886,9 +886,9 @@ export default function SuppliersPage() {
                   </button>
                 </div>
               ) : payments.length === 0 ? (
-                <p className="mt-3 text-sm text-[#718078]">No payments recorded yet.</p>
+                <p className="mt-3 text-sm text-muted">No payments recorded yet.</p>
               ) : (
-                <ul className="mt-3 divide-y divide-[#eef1ed]">
+                <ul className="mt-3 divide-y divide-border-subtle">
                   {payments.map((payment) => (
                     <li
                       key={payment.id}
@@ -898,12 +898,12 @@ export default function SuppliersPage() {
                         <p className="text-sm font-semibold">
                           {formatMoney(payment.amount)}
                         </p>
-                        <p className="break-words text-xs text-[#718078]">
+                        <p className="break-words text-xs text-muted">
                           {formatDate(payment.created_at)}
                           {payment.note ? ` · ${payment.note}` : ""}
                         </p>
                       </div>
-                      <span className="shrink-0 text-xs text-[#8a958d]">
+                      <span className="shrink-0 text-xs text-subtle">
                         {new Date(payment.created_at).toLocaleTimeString("en-KE", {
                           hour: "2-digit",
                           minute: "2-digit",
@@ -925,8 +925,8 @@ export default function SuppliersPage() {
             role={toast.tone === "error" ? "alert" : "status"}
             className={`pointer-events-auto flex w-full items-start gap-3 rounded-xl border p-3 shadow-lg ${
               toast.tone === "success"
-                ? "border-[#b7e4c7] bg-[#f0faf4] text-[#12633e]"
-                : "border-[#f1c7c7] bg-[#fff5f5] text-[#9b1c1c]"
+                ? "border-primary/40 bg-primary-soft text-primary-hover"
+                : "border-danger bg-danger-soft text-danger"
             }`}
           >
             {toast.tone === "success" ? (

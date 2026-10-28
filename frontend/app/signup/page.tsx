@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import { ArrowRight, Check, Store } from "lucide-react";
 import { api } from "@/lib/api";
 import { GoogleSignIn } from "@/components/google-signin";
+import { ThemeToggle } from "@/components/theme-toggle";
 
 type GoogleClaims = { email?: string; name?: string };
 
@@ -89,33 +90,36 @@ export default function SignupPage() {
   }
 
   return (
-    <main className="min-h-screen bg-[#f7f9f6]">
+    <main className="relative min-h-screen bg-background">
+      <div className="absolute right-4 top-4 z-10">
+        <ThemeToggle />
+      </div>
       <nav className="mx-auto flex max-w-7xl items-center justify-between px-5 py-5 lg:px-8">
         <Link href="/" className="text-xl font-bold">
-          Business <span className="text-[#16794c]">OS</span>
+          Business <span className="text-primary">OS</span>
         </Link>
       </nav>
 
       <div className="mx-auto grid max-w-5xl gap-12 px-5 pb-16 pt-8 lg:grid-cols-[.8fr_1.2fr] lg:items-center lg:px-8">
         <div>
-          <span className="mb-6 inline-flex rounded-xl bg-[#e7f4ec] p-3 text-[#16794c]">
+          <span className="mb-6 inline-flex rounded-xl bg-primary-soft p-3 text-primary">
             <Store size={23} />
           </span>
           <h1 className="text-4xl font-bold tracking-tight">
             A better operating rhythm starts here.
           </h1>
-          <p className="mt-4 leading-7 text-[#718078]">
+          <p className="mt-4 leading-7 text-muted">
             Set up your store workspace and bring the everyday work into one place.
           </p>
-          <div className="mt-8 space-y-3 text-sm text-[#526057]">
+          <div className="mt-8 space-y-3 text-sm text-muted">
             <p className="flex gap-2">
-              <Check size={17} className="text-[#16794c]" /> Products and stock in one view
+              <Check size={17} className="text-primary" /> Products and stock in one view
             </p>
             <p className="flex gap-2">
-              <Check size={17} className="text-[#16794c]" /> Sales, credit and supplier balances
+              <Check size={17} className="text-primary" /> Sales, credit and supplier balances
             </p>
             <p className="flex gap-2">
-              <Check size={17} className="text-[#16794c]" /> Business insights when you need them
+              <Check size={17} className="text-primary" /> Business insights when you need them
             </p>
           </div>
         </div>
@@ -126,9 +130,9 @@ export default function SignupPage() {
             <h2 className="text-2xl font-bold">Create your workspace</h2>
           </div>
 
-          {error && <p className="rounded-lg bg-red-50 p-3 text-sm text-red-700">{error}</p>}
+          {error && <p className="rounded-lg bg-danger-soft p-3 text-sm text-danger">{error}</p>}
           {notice && (
-            <p className="rounded-lg bg-amber-50 p-3 text-sm text-amber-800">{notice}</p>
+            <p className="rounded-lg bg-warning-soft p-3 text-sm text-warning-strong">{notice}</p>
           )}
 
           {!googleMode && (
@@ -140,16 +144,16 @@ export default function SignupPage() {
                 text="signup_with"
                 disabled={loading}
               />
-              <div className="flex items-center gap-3 text-xs text-[#8a958d]">
-                <span className="h-px flex-1 bg-[#e5e9e4]" />
+              <div className="flex items-center gap-3 text-xs text-subtle">
+                <span className="h-px flex-1 bg-border" />
                 or
-                <span className="h-px flex-1 bg-[#e5e9e4]" />
+                <span className="h-px flex-1 bg-border" />
               </div>
             </>
           )}
 
           {googleMode && (
-            <div className="rounded-lg bg-[#e7f4ec] p-3 text-sm text-[#12633e]">
+            <div className="rounded-lg bg-primary-soft p-3 text-sm text-primary-hover">
               Signing up with Google as <strong>{email}</strong>.
               <button
                 type="button"
@@ -220,7 +224,7 @@ export default function SignupPage() {
                     onChange={(e) => setPassword(e.target.value)}
                     required
                   />
-                  <span className="mt-1 block text-xs font-normal text-[#8a958d]">
+                  <span className="mt-1 block text-xs font-normal text-subtle">
                     Use at least 8 characters.
                   </span>
                 </label>
@@ -240,9 +244,9 @@ export default function SignupPage() {
       </div>
 
       <div className="lg:col-span-2 flex justify-center">
-        <p className="mt-2 text-center text-sm text-[#718078]">
+        <p className="mt-2 text-center text-sm text-muted">
           Already have an account?{" "}
-          <Link href="/login" className="font-semibold text-[#16794c]">
+          <Link href="/login" className="font-semibold text-primary">
             Sign in
           </Link>
         </p>

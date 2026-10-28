@@ -108,15 +108,15 @@ export default function InventoryPage() {
 
       <form
         onSubmit={handleSubmit}
-        className="mb-8 grid max-w-2xl gap-3 rounded-lg border border-gray-200 p-4 sm:grid-cols-2"
+        className="mb-8 grid max-w-2xl gap-3 rounded-lg border border-border-subtle p-4 sm:grid-cols-2"
       >
         {formError && (
-          <p className="text-sm text-red-600 sm:col-span-2">{formError}</p>
+          <p className="text-sm text-danger sm:col-span-2">{formError}</p>
         )}
         <select
           value={productId}
           onChange={(e) => setProductId(e.target.value)}
-          className="rounded border border-gray-300 px-3 py-2"
+          className="rounded border border-border px-3 py-2"
           required
         >
           <option value="">Select product</option>
@@ -129,7 +129,7 @@ export default function InventoryPage() {
         <select
           value={type}
           onChange={(e) => setType(e.target.value)}
-          className="rounded border border-gray-300 px-3 py-2"
+          className="rounded border border-border px-3 py-2"
         >
           <option value="restock">Restock (+)</option>
           <option value="adjustment">Adjustment (+/−)</option>
@@ -139,7 +139,7 @@ export default function InventoryPage() {
           <select
             value={direction}
             onChange={(e) => setDirection(e.target.value)}
-            className="rounded border border-gray-300 px-3 py-2"
+            className="rounded border border-border px-3 py-2"
           >
             <option value="in">Add stock (+)</option>
             <option value="out">Remove stock (−)</option>
@@ -150,7 +150,7 @@ export default function InventoryPage() {
           placeholder="Quantity"
           value={quantity}
           onChange={(e) => setQuantity(e.target.value)}
-          className="rounded border border-gray-300 px-3 py-2"
+          className="rounded border border-border px-3 py-2"
           required
         />
         <input
@@ -158,7 +158,7 @@ export default function InventoryPage() {
           placeholder="Note (optional)"
           value={note}
           onChange={(e) => setNote(e.target.value)}
-          className="rounded border border-gray-300 px-3 py-2"
+          className="rounded border border-border px-3 py-2"
         />
         <button
           type="submit"
@@ -172,13 +172,13 @@ export default function InventoryPage() {
       {loading ? (
         <p>Loading inventory...</p>
       ) : error ? (
-        <p className="text-red-600">{error}</p>
+        <p className="text-danger">{error}</p>
       ) : products.length === 0 ? (
-        <p className="text-gray-500">No products yet — add some on the Products page first.</p>
+        <p className="text-muted">No products yet — add some on the Products page first.</p>
       ) : (
         <table className="w-full max-w-2xl border-collapse text-left">
           <thead>
-            <tr className="border-b border-gray-200 text-sm text-gray-500">
+            <tr className="border-b border-border-subtle text-sm text-muted">
               <th className="py-2">Product</th>
               <th className="py-2 text-right">Quantity</th>
               <th className="py-2 text-right">Status</th>
@@ -191,16 +191,16 @@ export default function InventoryPage() {
               const threshold = level?.low_stock_threshold ?? 0;
               const isLow = qty <= threshold;
               return (
-                <tr key={p.id} className="border-b border-gray-100">
+                <tr key={p.id} className="border-b border-border-subtle">
                   <td className="py-2">
-                    {p.name} <span className="text-gray-400">({p.unit})</span>
+                    {p.name} <span className="text-subtle">({p.unit})</span>
                   </td>
                   <td className="py-2 text-right">{qty}</td>
                   <td className="py-2 text-right">
                     {isLow ? (
-                      <span className="text-red-600">Low stock (≤ {threshold})</span>
+                      <span className="text-danger">Low stock (≤ {threshold})</span>
                     ) : (
-                      <span className="text-gray-400">OK</span>
+                      <span className="text-subtle">OK</span>
                     )}
                   </td>
                 </tr>

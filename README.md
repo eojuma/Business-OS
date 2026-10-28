@@ -16,6 +16,7 @@ The backend is a Go modular monolith (Gin + GORM + PostgreSQL + Redis). The fron
 - [Backend module pattern](#backend-module-pattern)
 - [Local development](#local-development)
 - [Configuration reference](#configuration-reference)
+- [Theming](#theming)
 - [Testing and quality gates](#testing-and-quality-gates)
 - [API conventions](#api-conventions)
 - [Database migrations](#database-migrations)
@@ -271,6 +272,32 @@ mise run db:test:up   # start the test PostgreSQL instance
 |---|---|
 | `NEXT_PUBLIC_API_URL` | API base URL including `/api/v1` (for example `http://localhost:8080/api/v1`) |
 | `NEXT_PUBLIC_GOOGLE_CLIENT_ID` | Same client ID as `GOOGLE_CLIENT_ID`; inlined at build time |
+
+---
+
+## Theming
+
+The web app ships light and dark palettes with a system default.
+
+- The toggle is available in the desktop sidebar footer, the mobile header, and the login and signup pages.
+- The preference is stored in `localStorage` under the `theme` key (`light`, `dark`, or `system`); `system` follows the OS `prefers-color-scheme`.
+- An inline script in `frontend/app/layout.tsx` applies the `dark` class to `<html>` before first paint, and `<html>` sets `suppressHydrationWarning` so the script-applied class does not cause a hydration mismatch.
+- `frontend/lib/theme-provider.tsx` owns the state and persistence; `frontend/components/theme-toggle.tsx` renders a segmented control with `aria-pressed` and keyboard focus styles.
+
+New components must use the semantic tokens defined in `frontend/app/globals.css` and mapped in `frontend/tailwind.config.ts`; hardcoded hex colours are not accepted in review.
+
+| Token | Purpose |
+|---|---|
+| `bg-background` / `text-foreground` | Page background and primary text |
+| `bg-card` | Panels, cards, inputs, sidebar |
+| `bg-surface-muted` | Inset and secondary surfaces (table headers, skeletons) |
+| `text-muted` / `text-subtle` | Secondary and tertiary text |
+| `border-border` / `border-border-subtle` | Dividers and outlines |
+| `bg-hover` | Hover surface |
+| `text-primary`, `bg-primary-solid`, `bg-primary-soft`, `text-primary-hover` | Brand actions and accents |
+| `text-warning`, `bg-warning-soft`, `text-danger`, `bg-danger-soft` | Status colours |
+
+Each token has a light value on `:root` and a dark value under `.dark`, so token classes need no `dark:` variants. Values are space-separated RGB channels, so opacity modifiers such as `bg-primary/10` work.
 
 ---
 

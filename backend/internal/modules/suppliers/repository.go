@@ -65,7 +65,7 @@ func (r *repository) ListPaginated(businessID uuid.UUID, page, limit int, search
 		return nil, 0, err
 	}
 
-	query = query.Offset((page - 1) * limit).Limit(limit).Order("name asc")
+	query = query.Offset((page - 1) * limit).Limit(limit).Order("name asc, id asc")
 	if err := query.Find(&suppliers).Error; err != nil {
 		return nil, 0, err
 	}

@@ -57,6 +57,14 @@ export function isCurrentSession(
 const REDIRECT_COOLDOWN_MS = 3000;
 let lastRedirectAt = 0;
 
+if (typeof window !== "undefined") {
+  // Restoring this page from the back/forward cache revives the module with
+  // its cooldown state; allow the next 401 to redirect again immediately.
+  window.addEventListener("pageshow", (event) => {
+    if (event.persisted) lastRedirectAt = 0;
+  });
+}
+
 /** Collapses a burst of parallel 401s into one navigation without sticking. */
 export function shouldThrottleRedirect(
   lastRedirectAt: number,

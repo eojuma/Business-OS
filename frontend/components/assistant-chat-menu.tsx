@@ -81,12 +81,16 @@ export function AssistantChatMenu({
         const first = focusable[0];
         const last = focusable[focusable.length - 1];
         const active = document.activeElement;
+        // The panel itself is the initial focus target (tabIndex -1), so it
+        // counts as the boundary: Tab starts at the first control, Shift+Tab
+        // wraps to the last one instead of leaving the dialog.
+        const inside = active instanceof HTMLElement && active !== panel && panel.contains(active);
         if (event.shiftKey) {
-          if (active === first || !panel.contains(active)) {
+          if (active === first || !inside) {
             event.preventDefault();
             last.focus();
           }
-        } else if (active === last || !panel.contains(active)) {
+        } else if (active === last || !inside) {
           event.preventDefault();
           first.focus();
         }
@@ -128,6 +132,8 @@ export function AssistantChatMenu({
       {open && (
         <button
           type="button"
+          tabIndex={-1}
+          aria-hidden="true"
           aria-label="Close chats"
           onClick={onClose}
           className="absolute inset-0 z-20 cursor-default bg-black/20"

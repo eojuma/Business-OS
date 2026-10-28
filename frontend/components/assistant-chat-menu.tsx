@@ -38,6 +38,8 @@ export function AssistantChatMenu({
   onSuggestion,
 }: AssistantChatMenuProps) {
   const panelRef = useRef<HTMLElement>(null);
+  const renameButtonsRef = useRef(new Map<string, HTMLButtonElement>());
+  const restoreFocusRef = useRef<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
   const finishedRef = useRef(false);
@@ -46,10 +48,21 @@ export function AssistantChatMenu({
     if (!open) {
       setEditingId(null);
       setDraft("");
+      restoreFocusRef.current = null;
       return;
     }
     panelRef.current?.focus();
   }, [open]);
+
+  // Finishing a rename unmounts the focused input; put focus back on the
+  // row's rename button so the focus trap does not bounce to the top.
+  useEffect(() => {
+    if (!open || editingId !== null) return;
+    const id = restoreFocusRef.current;
+    if (!id) return;
+    restoreFocusRef.current = null;
+    renameButtonsRef.current.get(id)?.focus();
+  }, [open, editingId]);
 
   useEffect(() => {
     if (!open) return;
@@ -84,6 +97,7 @@ export function AssistantChatMenu({
       event.stopPropagation();
       if (editingId) {
         finishedRef.current = true;
+        restoreFocusRef.current = editingId;
         setEditingId(null);
         setDraft("");
         return;
@@ -100,10 +114,11 @@ export function AssistantChatMenu({
     setDraft(conversation.title);
   }
 
-  function finishRename(commit: boolean) {
+  function finishRename(commit: boolean, restoreFocus = false) {
     if (!editingId || finishedRef.current) return;
     finishedRef.current = true;
     if (commit) onRename(editingId, draft);
+    if (restoreFocus) restoreFocusRef.current = editingId;
     setEditingId(null);
     setDraft("");
   }
@@ -195,11 +210,11 @@ export function AssistantChatMenu({
                         onKeyDown={(event) => {
                           if (event.key === "Enter") {
                             event.preventDefault();
-                            finishRename(true);
+                            finishRename(true, true);
                           }
                           if (event.key === "Escape") {
                             event.preventDefault();
-                            finishRename(false);
+                            finishRename(false, true);
                           }
                         }}
                         onBlur={() => finishRename(true)}
@@ -226,6 +241,13 @@ export function AssistantChatMenu({
                       >
                         <button
                           type="button"
+                          ref={(element) => {
+                            if (element) {
+                              renameButtonsRef.current.set(conversation.id, element);
+                            } else {
+                              renameButtonsRef.current.delete(conversation.id);
+                            }
+                          }}
                           onClick={() => beginRename(conversation)}
                           aria-label={`Rename ${conversation.title}`}
                           title="Rename chat"

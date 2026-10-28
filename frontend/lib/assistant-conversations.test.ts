@@ -130,6 +130,45 @@ describe("assistant conversation model", () => {
     expect(after.conversations[0].title).toBe("Quarterly review");
   });
 
+  it("trims a space left at the truncation boundary", () => {
+    const base = emptyState(1);
+    const renamed = renameConversation(base, base.activeId, `${"a".repeat(41)} tail`, 2);
+
+    expect(renamed.conversations[0].title).toBe("a".repeat(41));
+    expect(renamed.conversations[0].title.endsWith(" ")).toBe(false);
+  });
+
+  it("keeps a manually typed \"New chat\" name", () => {
+    const base = emptyState(1);
+    const named = renameConversation(base, base.activeId, "New chat", 2);
+    const after = appendEntry(named, named.activeId, { role: "user", text: "hello" }, 3);
+
+    expect(after.conversations[0].title).toBe("New chat");
+    expect(after.conversations[0].titleCustomized).toBe(true);
+  });
+
+  it("resumes auto-titling after an empty rename", () => {
+    const base = emptyState(1);
+    const named = renameConversation(base, base.activeId, "Manual", 2);
+    const cleared = renameConversation(named, named.activeId, "   ", 3);
+    const after = appendEntry(cleared, cleared.activeId, { role: "user", text: "hello" }, 4);
+
+    expect(after.conversations[0].title).toBe("hello");
+  });
+
+  it("keeps a manual name when another tab appends a newer message", () => {
+    const base = emptyState(1);
+    const id = base.activeId;
+    // Tab A renames at t=5; tab B appends at t=6 without knowing about it.
+    const renamed = renameConversation(base, id, "Cement run", 5);
+    const appended = appendEntry(base, id, { role: "user", text: "hello" }, 6);
+
+    const merged = mergeConversationStates(renamed, appended);
+    const conversation = merged.conversations.find((item) => item.id === id);
+    expect(conversation?.title).toBe("Cement run");
+    expect(conversation?.entries.map((entry) => entry.text)).toEqual(["hello"]);
+  });
+
   it("ignores renames for an unknown conversation", () => {
     const base = emptyState(1);
     expect(renameConversation(base, "missing", "Name", 2)).toBe(base);

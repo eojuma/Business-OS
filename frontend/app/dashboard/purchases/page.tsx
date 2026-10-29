@@ -158,6 +158,7 @@ export default function PurchasesPage() {
 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [dialogError, setDialogError] = useState("");
 
   // Create / edit form state
   const [formOpen, setFormOpen] = useState(false);
@@ -177,6 +178,9 @@ export default function PurchasesPage() {
   const formDialogRef = useDialogFocus(formOpen, () => setFormOpen(false));
   const receiveDialogRef = useDialogFocus(receiving !== null, () => setReceiving(null));
 
+  // dialogSession invalidates completions from a dialog that has since been
+  // closed or replaced, so a stale response cannot close the new dialog.
+  const dialogSession = useRef(0);
   const latestRequest = useRef(0);
   const loadPurchases = useCallback(async () => {
     const requestId = ++latestRequest.current;
@@ -245,6 +249,9 @@ export default function PurchasesPage() {
   }
 
   function openCreate() {
+    dialogSession.current += 1;
+    setSaving(false);
+    setDialogError("");
     setEditing(null);
     setFormSupplier("");
     setFormPaid("");
@@ -255,6 +262,9 @@ export default function PurchasesPage() {
   }
 
   function openEdit(purchase: Purchase) {
+    dialogSession.current += 1;
+    setSaving(false);
+    setDialogError("");
     setEditing(purchase);
     setFormSupplier(purchase.supplier_id);
     setFormPaid(fromCents(purchase.amount_paid));
@@ -281,8 +291,10 @@ export default function PurchasesPage() {
 
   async function submitForm(event: React.FormEvent) {
     event.preventDefault();
+    const session = dialogSession.current;
     setSaving(true);
     setError("");
+    setDialogError("");
     const body = {
       supplier_id: formSupplier,
       amount_paid: toCents(formPaid),
@@ -301,16 +313,21 @@ export default function PurchasesPage() {
       } else {
         await api.post("/purchases", body);
       }
+      if (dialogSession.current !== session) return;
       setFormOpen(false);
       await loadPurchases();
     } catch (e) {
-      setError(errMessage(e, editing ? "Failed to update purchase" : "Failed to create purchase"));
+      if (dialogSession.current !== session) return;
+      setDialogError(errMessage(e, editing ? "Failed to update purchase" : "Failed to create purchase"));
     } finally {
-      setSaving(false);
+      if (dialogSession.current === session) setSaving(false);
     }
   }
 
   function openReceive(purchase: Purchase) {
+    dialogSession.current += 1;
+    setReceivingBusy(false);
+    setDialogError("");
     const values: Record<number, string> = {};
     purchase.items.forEach((item, index) => {
       values[index] = String(remaining(item));
@@ -322,6 +339,7 @@ export default function PurchasesPage() {
   async function submitReceive(event: React.FormEvent) {
     event.preventDefault();
     if (!receiving) return;
+    const session = dialogSession.current;
     const items = Object.entries(receiveValues)
       .map(([key, value]) => ({
         item: receiving.items[Number(key)],
@@ -337,19 +355,22 @@ export default function PurchasesPage() {
         received_qty: quantity,
       }));
     if (items.length === 0) {
-      setError("Enter at least one quantity to receive");
+      setDialogError("Enter at least one quantity to receive");
       return;
     }
     setReceivingBusy(true);
     setError("");
+    setDialogError("");
     try {
       await api.post(`/purchases/${receiving.id}/receive`, { items });
+      if (dialogSession.current !== session) return;
       setReceiving(null);
       await loadPurchases();
     } catch (e) {
-      setError(errMessage(e, "Failed to receive purchase"));
+      if (dialogSession.current !== session) return;
+      setDialogError(errMessage(e, "Failed to receive purchase"));
     } finally {
-      setReceivingBusy(false);
+      if (dialogSession.current === session) setReceivingBusy(false);
     }
   }
 
@@ -408,7 +429,7 @@ export default function PurchasesPage() {
         }
       />
 
-      {error && (
+      {error && !formOpen && !receiving && (
         <p className="mb-4 flex items-start justify-between gap-3 rounded-lg bg-danger-soft p-3 text-sm text-danger">
           <span>{error}</span>
           <button type="button" aria-label="Dismiss error" onClick={() => setError("")}>
@@ -644,6 +665,12 @@ export default function PurchasesPage() {
               </button>
             </div>
 
+            {dialogError && (
+              <p role="alert" className="rounded-lg bg-danger-soft p-3 text-sm text-danger">
+                {dialogError}
+              </p>
+            )}
+
             <div className="grid gap-3 sm:grid-cols-2">
               <label className="text-sm font-semibold">
                 Supplier
@@ -736,6 +763,12 @@ export default function PurchasesPage() {
                 <X size={18} />
               </button>
             </div>
+
+            {dialogError && (
+              <p role="alert" className="rounded-lg bg-danger-soft p-3 text-sm text-danger">
+                {dialogError}
+              </p>
+            )}
 
             <div className="space-y-2">
               {receiving.items.map((item, index) => {

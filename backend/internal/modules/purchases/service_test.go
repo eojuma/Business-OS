@@ -234,6 +234,31 @@ func TestReceivePlanReceivesByLineItemID(t *testing.T) {
 	}
 }
 
+func TestReceivePlanCapsMixedItemAndProductRequests(t *testing.T) {
+	product, itemID := uuid.New(), uuid.New()
+	items := []PurchaseLineItem{{ID: itemID, ProductID: product, Quantity: 5, UnitCost: 100}}
+
+	// The two shapes draw from the same line budget.
+	_, err := receivePlan(items, []ReceiveItemInput{
+		{ItemID: &itemID, ReceivedQty: 4},
+		{ProductID: product, ReceivedQty: 5},
+	})
+	if err != ErrInvalidReceiveQuantity {
+		t.Fatalf("error = %v, want %v", err, ErrInvalidReceiveQuantity)
+	}
+
+	plan, err := receivePlan(items, []ReceiveItemInput{
+		{ItemID: &itemID, ReceivedQty: 2},
+		{ProductID: product, ReceivedQty: 3},
+	})
+	if err != nil {
+		t.Fatalf("receivePlan failed: %v", err)
+	}
+	if plan[0] != 5 {
+		t.Fatalf("plan = %v, want {0:5}", plan)
+	}
+}
+
 func TestReceivePlanRejectsOverReceipt(t *testing.T) {
 	productA := uuid.New()
 	items := []PurchaseLineItem{{ProductID: productA, Quantity: 5, ReceivedQty: 2}}

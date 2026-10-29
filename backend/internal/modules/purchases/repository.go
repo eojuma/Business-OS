@@ -200,6 +200,17 @@ func receivePlan(items []PurchaseLineItem, requested []ReceiveItemInput) (map[in
 		}
 	}
 
+	// available is the quantity still unplanned on a line. Both request shapes
+	// (item_id and product_id) draw from the same plan, so mixing them cannot
+	// over-allocate a line.
+	available := func(idx int) int64 {
+		remaining := items[idx].RemainingQty() - plan[idx]
+		if remaining < 0 {
+			return 0
+		}
+		return remaining
+	}
+
 	seenItems := make(map[uuid.UUID]bool, len(requested))
 	seenProducts := make(map[uuid.UUID]bool, len(requested))
 	for _, request := range requested {
@@ -219,7 +230,7 @@ func receivePlan(items []PurchaseLineItem, requested []ReceiveItemInput) (map[in
 			if !ok {
 				return nil, ErrUnknownReceiveItem
 			}
-			if request.ReceivedQty > items[idx].RemainingQty() {
+			if request.ReceivedQty > available(idx) {
 				return nil, ErrInvalidReceiveQuantity
 			}
 			plan[idx] += request.ReceivedQty
@@ -245,11 +256,11 @@ func receivePlan(items []PurchaseLineItem, requested []ReceiveItemInput) (map[in
 			if remaining == 0 {
 				break
 			}
-			available := items[idx].RemainingQty()
-			if available <= 0 {
+			lineAvailable := available(idx)
+			if lineAvailable <= 0 {
 				continue
 			}
-			take := min(remaining, available)
+			take := min(remaining, lineAvailable)
 			plan[idx] += take
 			remaining -= take
 		}

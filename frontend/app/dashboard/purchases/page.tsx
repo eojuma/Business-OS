@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ClipboardList,
   Loader2,
@@ -56,10 +56,25 @@ function fromCents(value: number): string {
   return Number.isInteger(amount) ? String(amount) : amount.toFixed(2);
 }
 function toDateInput(value?: string | null): string {
-  return value ? value.slice(0, 10) : "";
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
 }
 function toISO(value: string): string | null {
   return value ? new Date(`${value}T00:00:00`).toISOString() : null;
+}
+// The date inputs represent the user's local calendar day. Convert them to the
+// matching UTC instants so the API range covers the whole local day.
+function dayEndISO(value: string): string | null {
+  if (!value) return null;
+  const end = new Date(`${value}T00:00:00`);
+  end.setDate(end.getDate() + 1);
+  end.setMilliseconds(-1);
+  // Keep the final microsecond: the API filters with created_at <= date_to and
+  // the database stores microsecond-precision timestamps.
+  return end.toISOString().replace(/\.\d{3}Z$/, ".999999Z");
 }
 function remaining(item: LineItem): number {
   return Math.max(0, item.quantity - (item.received_qty || 0));
@@ -67,6 +82,64 @@ function remaining(item: LineItem): number {
 function errMessage(error: unknown, fallback: string): string {
   const e = error as { response?: { data?: { error?: string } } };
   return e.response?.data?.error || fallback;
+}
+
+// useDialogFocus moves focus into an open modal, keeps Tab inside it, closes on
+// Escape, and restores focus to the opener when the modal unmounts.
+function useDialogFocus(open: boolean, onClose: () => void) {
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+
+  useEffect(() => {
+    if (!open) return;
+    const dialog = dialogRef.current;
+    if (!dialog) return;
+    const previous = document.activeElement as HTMLElement | null;
+
+    const focusable = () =>
+      Array.from(
+        dialog.querySelectorAll<HTMLElement>(
+          'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+        ),
+      ).filter((element) => element.offsetParent !== null);
+
+    const fields = Array.from(
+      dialog.querySelectorAll<HTMLElement>("input, select, textarea"),
+    ).filter((element) => !element.hasAttribute("disabled"));
+    (fields[0] || focusable()[0])?.focus();
+
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        onCloseRef.current();
+        return;
+      }
+      if (event.key !== "Tab") return;
+      const elements = focusable();
+      if (elements.length === 0) {
+        event.preventDefault();
+        return;
+      }
+      const first = elements[0];
+      const last = elements[elements.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    }
+
+    dialog.addEventListener("keydown", handleKeyDown);
+    return () => {
+      dialog.removeEventListener("keydown", handleKeyDown);
+      previous?.focus();
+    };
+  }, [open]);
+
+  return dialogRef;
 }
 
 export default function PurchasesPage() {
@@ -101,24 +174,39 @@ export default function PurchasesPage() {
   const [receiveValues, setReceiveValues] = useState<Record<number, string>>({});
   const [receivingBusy, setReceivingBusy] = useState(false);
 
+  const formDialogRef = useDialogFocus(formOpen, () => setFormOpen(false));
+  const receiveDialogRef = useDialogFocus(receiving !== null, () => setReceiving(null));
+
+  const latestRequest = useRef(0);
   const loadPurchases = useCallback(async () => {
+    const requestId = ++latestRequest.current;
     setLoading(true);
     setError("");
     try {
       const params: Record<string, string | number> = { page, limit };
       if (statusFilter) params.status = statusFilter;
       if (supplierFilter) params.supplier_id = supplierFilter;
-      if (dateFrom) params.date_from = `${dateFrom}T00:00:00Z`;
-      if (dateTo) params.date_to = `${dateTo}T23:59:59Z`;
+      if (dateFrom) {
+        const from = toISO(dateFrom);
+        if (from) params.date_from = from;
+      }
+      if (dateTo) {
+        const to = dayEndISO(dateTo);
+        if (to) params.date_to = to;
+      }
       const res = await api.get("/purchases", { params });
+      if (requestId !== latestRequest.current) return;
       const payload = res.data?.data;
       const rows: Purchase[] = Array.isArray(payload) ? payload : payload?.data || [];
       setPurchases(rows);
       setMeta(Array.isArray(payload) ? null : payload?.meta || null);
     } catch (e) {
+      if (requestId !== latestRequest.current) return;
+      setPurchases([]);
+      setMeta(null);
       setError(errMessage(e, "Failed to load purchases"));
     } finally {
-      setLoading(false);
+      if (requestId === latestRequest.current) setLoading(false);
     }
   }, [page, limit, statusFilter, supplierFilter, dateFrom, dateTo]);
 
@@ -234,18 +322,20 @@ export default function PurchasesPage() {
   async function submitReceive(event: React.FormEvent) {
     event.preventDefault();
     if (!receiving) return;
-    const aggregated = new Map<string, number>();
-    Object.entries(receiveValues).forEach(([key, value]) => {
-      const quantity = Number(value || 0);
-      if (quantity <= 0) return;
-      const item = receiving.items[Number(key)];
-      if (!item) return;
-      aggregated.set(item.product_id, (aggregated.get(item.product_id) || 0) + quantity);
-    });
-    const items = Array.from(aggregated, ([product_id, received_qty]) => ({
-      product_id,
-      received_qty,
-    }));
+    const items = Object.entries(receiveValues)
+      .map(([key, value]) => ({
+        item: receiving.items[Number(key)],
+        quantity: Number(value || 0),
+      }))
+      .filter(
+        (entry): entry is { item: LineItem; quantity: number } =>
+          Boolean(entry.item) && entry.quantity > 0,
+      )
+      .map(({ item, quantity }) => ({
+        item_id: item.id,
+        product_id: item.product_id,
+        received_qty: quantity,
+      }));
     if (items.length === 0) {
       setError("Enter at least one quantity to receive");
       return;
@@ -268,7 +358,13 @@ export default function PurchasesPage() {
     setError("");
     try {
       await api.delete(`/purchases/${purchase.id}`);
-      await loadPurchases();
+      if (purchases.length === 1 && page > 1) {
+        // The page is now empty; stepping back triggers the page-change effect
+        // to reload the previous page.
+        setPage(page - 1);
+      } else {
+        await loadPurchases();
+      }
     } catch (e) {
       setError(errMessage(e, "Failed to delete purchase"));
     }
@@ -280,13 +376,13 @@ export default function PurchasesPage() {
 
   function statusBadge(purchase: Purchase) {
     if (purchase.status === "received") {
-      return <span className="rounded-full bg-[#e7f4ec] px-2 py-0.5 text-xs font-bold uppercase text-[#16794c]">Received</span>;
+      return <span className="rounded-full bg-primary-soft px-2 py-0.5 text-xs font-bold uppercase text-primary">Received</span>;
     }
     const partiallyReceived = purchase.items.some((item) => (item.received_qty || 0) > 0);
     if (partiallyReceived) {
-      return <span className="rounded-full bg-[#fff3df] px-2 py-0.5 text-xs font-bold uppercase text-[#b36f16]">Partial</span>;
+      return <span className="rounded-full bg-warning-soft px-2 py-0.5 text-xs font-bold uppercase text-warning-strong">Partial</span>;
     }
-    return <span className="rounded-full bg-[#f2f5f1] px-2 py-0.5 text-xs font-bold uppercase text-[#647168]">Draft</span>;
+    return <span className="rounded-full bg-surface-muted px-2 py-0.5 text-xs font-bold uppercase text-muted">Draft</span>;
   }
 
   function receivedProgress(purchase: Purchase): string {
@@ -313,7 +409,7 @@ export default function PurchasesPage() {
       />
 
       {error && (
-        <p className="mb-4 flex items-start justify-between gap-3 rounded-lg bg-red-50 p-3 text-sm text-red-700">
+        <p className="mb-4 flex items-start justify-between gap-3 rounded-lg bg-danger-soft p-3 text-sm text-danger">
           <span>{error}</span>
           <button type="button" aria-label="Dismiss error" onClick={() => setError("")}>
             <X size={15} />
@@ -323,7 +419,7 @@ export default function PurchasesPage() {
 
       {/* Filters */}
       <div className="panel mb-5 grid gap-3 p-4 sm:grid-cols-2 lg:grid-cols-6">
-        <label className="text-xs font-semibold uppercase tracking-wide text-[#718078]">
+        <label className="text-xs font-semibold uppercase tracking-wide text-muted">
           Status
           <select
             className="field mt-1.5"
@@ -338,7 +434,7 @@ export default function PurchasesPage() {
             <option value="received">Received</option>
           </select>
         </label>
-        <label className="text-xs font-semibold uppercase tracking-wide text-[#718078]">
+        <label className="text-xs font-semibold uppercase tracking-wide text-muted">
           Supplier
           <select
             className="field mt-1.5"
@@ -356,7 +452,7 @@ export default function PurchasesPage() {
             ))}
           </select>
         </label>
-        <label className="text-xs font-semibold uppercase tracking-wide text-[#718078]">
+        <label className="text-xs font-semibold uppercase tracking-wide text-muted">
           From
           <input
             type="date"
@@ -368,7 +464,7 @@ export default function PurchasesPage() {
             }}
           />
         </label>
-        <label className="text-xs font-semibold uppercase tracking-wide text-[#718078]">
+        <label className="text-xs font-semibold uppercase tracking-wide text-muted">
           To
           <input
             type="date"
@@ -380,7 +476,7 @@ export default function PurchasesPage() {
             }}
           />
         </label>
-        <label className="text-xs font-semibold uppercase tracking-wide text-[#718078]">
+        <label className="text-xs font-semibold uppercase tracking-wide text-muted">
           Page size
           <select
             className="field mt-1.5"
@@ -406,19 +502,19 @@ export default function PurchasesPage() {
       {/* Table */}
       <div className="panel overflow-hidden">
         {loading ? (
-          <div className="flex items-center justify-center gap-2 p-10 text-sm text-[#718078]">
+          <div className="flex items-center justify-center gap-2 p-10 text-sm text-muted">
             <Loader2 size={18} className="animate-spin" /> Loading purchases…
           </div>
         ) : purchases.length === 0 ? (
           <div className="p-10 text-center">
-            <ClipboardList className="mx-auto text-[#9aa59d]" />
+            <ClipboardList className="mx-auto text-subtle" />
             <p className="mt-3 font-semibold">No purchases match these filters</p>
-            <p className="mt-1 text-sm text-[#718078]">Try widening the date range or clearing the filters.</p>
+            <p className="mt-1 text-sm text-muted">Try widening the date range or clearing the filters.</p>
           </div>
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-left text-sm">
-              <thead className="bg-[#f8faf7] text-xs uppercase text-[#718078]">
+              <thead className="bg-surface-muted text-xs uppercase text-muted">
                 <tr>
                   <th className="px-5 py-3">PO number</th>
                   <th className="px-5 py-3">Created</th>
@@ -432,20 +528,20 @@ export default function PurchasesPage() {
               </thead>
               <tbody>
                 {purchases.map((purchase) => (
-                  <tr key={purchase.id} className="border-t border-[#eef1ed] align-top">
+                  <tr key={purchase.id} className="border-t border-border-subtle align-top">
                     <td className="px-5 py-4 font-mono text-xs font-semibold">{purchase.po_number}</td>
-                    <td className="px-5 py-4 text-[#718078]">
+                    <td className="px-5 py-4 text-muted">
                       {new Date(purchase.created_at).toLocaleDateString("en-KE")}
                     </td>
                     <td className="px-5 py-4 font-semibold">
                       {suppliers.find((s) => s.id === purchase.supplier_id)?.name || "Supplier"}
                     </td>
-                    <td className="px-5 py-4 text-[#718078]">
+                    <td className="px-5 py-4 text-muted">
                       {purchase.expected_at
                         ? new Date(purchase.expected_at).toLocaleDateString("en-KE")
                         : "—"}
                     </td>
-                    <td className="px-5 py-4 text-[#718078]">
+                    <td className="px-5 py-4 text-muted">
                       {purchase.items?.length || 0} line{purchase.items?.length === 1 ? "" : "s"}
                     </td>
                     <td className="px-5 py-4 text-right font-semibold">{formatMoney(purchase.total_amount)}</td>
@@ -453,7 +549,7 @@ export default function PurchasesPage() {
                       <div className="flex flex-col items-end gap-1">
                         {statusBadge(purchase)}
                         {purchase.status !== "received" && (
-                          <span className="text-[11px] text-[#8a958d]">{receivedProgress(purchase)}</span>
+                          <span className="text-[11px] text-subtle">{receivedProgress(purchase)}</span>
                         )}
                       </div>
                     </td>
@@ -482,7 +578,7 @@ export default function PurchasesPage() {
                           <button
                             type="button"
                             aria-label={`Delete ${purchase.po_number}`}
-                            className="rounded-lg p-2 text-[#a3543f] transition hover:bg-[#fdeeea]"
+                            className="rounded-lg p-2 text-danger transition hover:bg-danger-soft"
                             onClick={() => removePurchase(purchase)}
                           >
                             <Trash2 size={15} />
@@ -500,7 +596,7 @@ export default function PurchasesPage() {
 
       {/* Pagination */}
       {showPagination && meta && (
-        <div className="mt-4 flex flex-col gap-3 text-sm text-[#718078] sm:flex-row sm:items-center sm:justify-between">
+        <div className="mt-4 flex flex-col gap-3 text-sm text-muted sm:flex-row sm:items-center sm:justify-between">
           <p>
             Showing {rangeStart}–{rangeEnd} of {meta.total} purchase{meta.total === 1 ? "" : "s"}
           </p>
@@ -531,6 +627,7 @@ export default function PurchasesPage() {
       {/* Create / edit modal */}
       {formOpen && (
         <div
+          ref={formDialogRef}
           className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/40 p-4 sm:items-center"
           role="dialog"
           aria-modal="true"
@@ -542,7 +639,7 @@ export default function PurchasesPage() {
                 <p className="eyebrow mb-1">{editing ? "Edit draft" : "New purchase"}</p>
                 <h2 className="text-xl font-bold">{editing ? editing.po_number : "Create a purchase order"}</h2>
               </div>
-              <button type="button" aria-label="Close" onClick={() => setFormOpen(false)} className="rounded-lg p-2 text-[#718078] hover:bg-[#f2f5f1]">
+              <button type="button" aria-label="Close" onClick={() => setFormOpen(false)} className="rounded-lg p-2 text-muted hover:bg-hover">
                 <X size={18} />
               </button>
             </div>
@@ -588,7 +685,7 @@ export default function PurchasesPage() {
                   <input className="field" type="number" min="1" placeholder="Qty" value={row.quantity} onChange={(e) => updateRow(index, "quantity", e.target.value)} required />
                   <input className="field" type="number" min="0" step="0.01" placeholder="Cost / unit" value={row.unit_cost} onChange={(e) => updateRow(index, "unit_cost", e.target.value)} required />
                   <input className="field" placeholder="Line note" value={row.note} onChange={(e) => updateRow(index, "note", e.target.value)} />
-                  <button type="button" aria-label="Remove line" className="rounded-lg p-2 text-[#a3543f] hover:bg-[#fdeeea]" onClick={() => removeRow(index)}>
+                  <button type="button" aria-label="Remove line" className="rounded-lg p-2 text-danger hover:bg-danger-soft" onClick={() => removeRow(index)}>
                     <Trash2 size={15} />
                   </button>
                 </div>
@@ -598,9 +695,9 @@ export default function PurchasesPage() {
               </button>
             </div>
 
-            <div className="flex flex-col gap-3 border-t border-[#eef1ed] pt-4 sm:flex-row sm:items-center sm:justify-between">
-              <p className="text-sm text-[#718078]">
-                Purchase total <strong className="ml-2 text-[#17211b]">{formatMoney(formTotalCents)}</strong>
+            <div className="flex flex-col gap-3 border-t border-border-subtle pt-4 sm:flex-row sm:items-center sm:justify-between">
+              <p className="text-sm text-muted">
+                Purchase total <strong className="ml-2 text-foreground">{formatMoney(formTotalCents)}</strong>
               </p>
               <div className="flex gap-2">
                 <button type="button" className="btn-secondary" onClick={() => setFormOpen(false)}>
@@ -619,6 +716,7 @@ export default function PurchasesPage() {
       {/* Partial receive modal */}
       {receiving && (
         <div
+          ref={receiveDialogRef}
           className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/40 p-4 sm:items-center"
           role="dialog"
           aria-modal="true"
@@ -629,12 +727,12 @@ export default function PurchasesPage() {
               <div>
                 <p className="eyebrow mb-1">Receive goods</p>
                 <h2 className="text-xl font-bold">{receiving.po_number}</h2>
-                <p className="mt-1 text-sm text-[#718078]">
+                <p className="mt-1 text-sm text-muted">
                   Enter the quantity that arrived in this shipment. Everything is pre-filled with the remaining
                   quantity; reduce any line that is short.
                 </p>
               </div>
-              <button type="button" aria-label="Close" onClick={() => setReceiving(null)} className="rounded-lg p-2 text-[#718078] hover:bg-[#f2f5f1]">
+              <button type="button" aria-label="Close" onClick={() => setReceiving(null)} className="rounded-lg p-2 text-muted hover:bg-hover">
                 <X size={18} />
               </button>
             </div>
@@ -644,15 +742,15 @@ export default function PurchasesPage() {
                 const product = products.find((p) => p.id === item.product_id);
                 const outstanding = remaining(item);
                 return (
-                  <div key={item.id || index} className="grid gap-2 rounded-lg border border-[#eef1ed] p-3 sm:grid-cols-[1fr_auto_auto]">
+                  <div key={item.id || index} className="grid gap-2 rounded-lg border border-border-subtle p-3 sm:grid-cols-[1fr_auto_auto]">
                     <div>
                       <p className="font-semibold">{product?.name || "Product"}</p>
-                      <p className="text-xs text-[#718078]">
+                      <p className="text-xs text-muted">
                         Ordered {item.quantity} · already received {item.received_qty || 0} · remaining {outstanding}
                       </p>
                     </div>
                     <div className="flex items-center gap-2">
-                      <label className="text-xs font-semibold text-[#718078]" htmlFor={`receive-${index}`}>
+                      <label className="text-xs font-semibold text-muted" htmlFor={`receive-${index}`}>
                         Receive now
                       </label>
                       <input
@@ -669,9 +767,9 @@ export default function PurchasesPage() {
                     </div>
                     <div className="flex items-center justify-end">
                       {outstanding === 0 ? (
-                        <span className="text-xs font-bold uppercase text-[#16794c]">Complete</span>
+                        <span className="text-xs font-bold uppercase text-primary">Complete</span>
                       ) : (
-                        <span className="text-xs font-bold uppercase text-[#b36f16]">Pending</span>
+                        <span className="text-xs font-bold uppercase text-warning-strong">Pending</span>
                       )}
                     </div>
                   </div>
@@ -679,8 +777,8 @@ export default function PurchasesPage() {
               })}
             </div>
 
-            <div className="flex flex-col gap-3 border-t border-[#eef1ed] pt-4 sm:flex-row sm:items-center sm:justify-between">
-              <p className="text-xs text-[#718078]">
+            <div className="flex flex-col gap-3 border-t border-border-subtle pt-4 sm:flex-row sm:items-center sm:justify-between">
+              <p className="text-xs text-muted">
                 The purchase is marked received only when every line is complete.
               </p>
               <div className="flex gap-2">

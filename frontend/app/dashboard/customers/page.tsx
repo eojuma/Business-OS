@@ -87,17 +87,17 @@ export default function CustomersPage() {
 
       <form
         onSubmit={handleSubmit}
-        className="mb-8 grid max-w-2xl gap-3 rounded-lg border border-gray-200 p-4 sm:grid-cols-2"
+        className="mb-8 grid max-w-2xl gap-3 rounded-lg border border-border-subtle p-4 sm:grid-cols-2"
       >
         {formError && (
-          <p className="text-sm text-red-600 sm:col-span-2">{formError}</p>
+          <p className="text-sm text-danger sm:col-span-2">{formError}</p>
         )}
         <input
           type="text"
           placeholder="Name"
           value={name}
           onChange={(e) => setName(e.target.value)}
-          className="rounded border border-gray-300 px-3 py-2"
+          className="rounded border border-border px-3 py-2"
           required
         />
         <input
@@ -105,14 +105,14 @@ export default function CustomersPage() {
           placeholder="Phone"
           value={phone}
           onChange={(e) => setPhone(e.target.value)}
-          className="rounded border border-gray-300 px-3 py-2"
+          className="rounded border border-border px-3 py-2"
         />
         <input
           type="text"
           placeholder="Credit limit (KSh, e.g. 20000 — leave blank for no credit)"
           value={creditLimitInput}
           onChange={(e) => setCreditLimitInput(e.target.value)}
-          className="rounded border border-gray-300 px-3 py-2 sm:col-span-2"
+          className="rounded border border-border px-3 py-2 sm:col-span-2"
         />
         <button
           type="submit"
@@ -126,13 +126,13 @@ export default function CustomersPage() {
       {loading ? (
         <p>Loading customers...</p>
       ) : error ? (
-        <p className="text-red-600">{error}</p>
+        <p className="text-danger">{error}</p>
       ) : customers.length === 0 ? (
-        <p className="text-gray-500">No customers yet — add your first one above.</p>
+        <p className="text-muted">No customers yet — add your first one above.</p>
       ) : (
         <table className="w-full max-w-2xl border-collapse text-left">
           <thead>
-            <tr className="border-b border-gray-200 text-sm text-gray-500">
+            <tr className="border-b border-border-subtle text-sm text-muted">
               <th className="py-2">Name</th>
               <th className="py-2">Phone</th>
               <th className="py-2 text-right">Balance owed</th>
@@ -142,15 +142,15 @@ export default function CustomersPage() {
           </thead>
           <tbody>
             {customers.map((c) => (
-              <tr key={c.id} className="border-b border-gray-100">
+              <tr key={c.id} className="border-b border-border-subtle">
                 <td className="py-2">{c.name}</td>
                 <td className="py-2">{c.phone || "—"}</td>
                 <td className="py-2 text-right">
-                  <span className={c.balance > 0 ? "text-orange-600" : "text-gray-400"}>
+                  <span className={c.balance > 0 ? "text-warning-strong" : "text-subtle"}>
                     KSh {formatMoney(c.balance)}
                   </span>
                 </td>
-                <td className="py-2 text-right text-gray-400">
+                <td className="py-2 text-right text-subtle">
                   KSh {formatMoney(c.credit_limit)}
                 </td>
                 <td className="py-2 text-right">

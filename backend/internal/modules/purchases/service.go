@@ -2,6 +2,7 @@ package purchases
 
 import (
 	"errors"
+	"math"
 	"time"
 
 	"github.com/google/uuid"
@@ -43,6 +44,9 @@ type UpdateInput struct {
 }
 
 type ReceiveItemInput struct {
+	// ItemID identifies a specific purchase line. It takes precedence over
+	// ProductID so duplicate-product lines keep their own quantity and cost.
+	ItemID      *uuid.UUID
 	ProductID   uuid.UUID
 	ReceivedQty int64
 }
@@ -71,21 +75,37 @@ func NewService(repo Repository, inventory InventoryReceiver, suppliers Supplier
 	return &service{repo: repo, inventory: inventory, suppliers: suppliers, products: products}
 }
 
+// buildLineItems validates the requested quantities and computes the line
+// subtotals and purchase total, rejecting values that would overflow int64.
+func buildLineItems(inputs []ItemInput) ([]PurchaseLineItem, int64, error) {
+	items := make([]PurchaseLineItem, 0, len(inputs))
+	var total int64
+	for _, item := range inputs {
+		if item.Quantity <= 0 || item.UnitCost < 0 {
+			return nil, 0, ErrInvalidPurchaseItem
+		}
+		if item.UnitCost > 0 && item.Quantity > math.MaxInt64/item.UnitCost {
+			return nil, 0, ErrInvalidPurchaseItem
+		}
+		subtotal := item.Quantity * item.UnitCost
+		if subtotal > math.MaxInt64-total {
+			return nil, 0, ErrInvalidPurchaseItem
+		}
+		total += subtotal
+		items = append(items, PurchaseLineItem{ProductID: item.ProductID, Quantity: item.Quantity, UnitCost: item.UnitCost, Subtotal: subtotal, Note: item.Note})
+	}
+	return items, total, nil
+}
+
 func (s *service) Create(input CreateInput) (*Purchase, error) {
 	if len(input.Items) == 0 {
 		return nil, ErrEmptyPurchase
 	}
 	// Copy the optional expected date and per-line notes onto the persisted
 	// purchase model; the repository stores them as-is.
-	items := make([]PurchaseLineItem, 0, len(input.Items))
-	var total int64
-	for _, item := range input.Items {
-		if item.Quantity <= 0 || item.UnitCost < 0 {
-			return nil, ErrInvalidPurchaseItem
-		}
-		subtotal := item.Quantity * item.UnitCost
-		total += subtotal
-		items = append(items, PurchaseLineItem{ProductID: item.ProductID, Quantity: item.Quantity, UnitCost: item.UnitCost, Subtotal: subtotal, Note: item.Note})
+	items, total, err := buildLineItems(input.Items)
+	if err != nil {
+		return nil, err
 	}
 	if input.AmountPaid < 0 || input.AmountPaid > total {
 		return nil, ErrInvalidAmountPaid
@@ -123,15 +143,9 @@ func (s *service) Update(id, businessID uuid.UUID, input UpdateInput) (*Purchase
 	if len(input.Items) == 0 {
 		return nil, ErrEmptyPurchase
 	}
-	items := make([]PurchaseLineItem, 0, len(input.Items))
-	var total int64
-	for _, item := range input.Items {
-		if item.Quantity <= 0 || item.UnitCost < 0 {
-			return nil, ErrInvalidPurchaseItem
-		}
-		subtotal := item.Quantity * item.UnitCost
-		total += subtotal
-		items = append(items, PurchaseLineItem{ProductID: item.ProductID, Quantity: item.Quantity, UnitCost: item.UnitCost, Subtotal: subtotal, Note: item.Note})
+	items, total, err := buildLineItems(input.Items)
+	if err != nil {
+		return nil, err
 	}
 	if input.AmountPaid < 0 || input.AmountPaid > total {
 		return nil, ErrInvalidAmountPaid

@@ -8,8 +8,10 @@ import (
 type Repository interface {
 	Create(user *User) error
 	FindByEmail(email string) (*User, error)
+	FindByGoogleID(googleID string) (*User, error)
 	FindByID(id uuid.UUID) (*User, error)
 	ListByBusiness(businessID uuid.UUID) ([]User, error)
+	SetGoogleID(id uuid.UUID, googleID string) error
 }
 
 func (r *repository) ListByBusiness(businessID uuid.UUID) ([]User, error) {
@@ -32,7 +34,15 @@ func (r *repository) Create(user *User) error {
 
 func (r *repository) FindByEmail(email string) (*User, error) {
 	var user User
-	if err := r.db.Where("email = ?", email).First(&user).Error; err != nil {
+	if err := r.db.Where("LOWER(email) = LOWER(?)", email).First(&user).Error; err != nil {
+		return nil, err
+	}
+	return &user, nil
+}
+
+func (r *repository) FindByGoogleID(googleID string) (*User, error) {
+	var user User
+	if err := r.db.Where("google_id = ?", googleID).First(&user).Error; err != nil {
 		return nil, err
 	}
 	return &user, nil
@@ -44,4 +54,15 @@ func (r *repository) FindByID(id uuid.UUID) (*User, error) {
 		return nil, err
 	}
 	return &user, nil
+}
+
+func (r *repository) SetGoogleID(id uuid.UUID, googleID string) error {
+	result := r.db.Model(&User{}).Where("id = ?", id).Update("google_id", googleID)
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
+		return gorm.ErrRecordNotFound
+	}
+	return nil
 }

@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/businessos/backend/internal/modules/products"
 	"github.com/businessos/backend/internal/modules/suppliers"
 	"github.com/businessos/backend/internal/shared/middleware"
 	"github.com/businessos/backend/internal/shared/response"
@@ -32,7 +33,8 @@ type createRequest struct {
 	Items      []itemRequest `json:"items" binding:"required,min=1,dive"`
 }
 type receiveItemRequest struct {
-	ProductID   string `json:"product_id" binding:"required,uuid"`
+	ItemID      string `json:"item_id"`
+	ProductID   string `json:"product_id"`
 	ReceivedQty int64  `json:"received_qty" binding:"required"`
 }
 type receiveRequest struct {
@@ -57,7 +59,7 @@ func (h *Handler) Create(c *gin.Context) {
 		items = append(items, ItemInput{ProductID: productID, Quantity: item.Quantity, UnitCost: item.UnitCost, Note: item.Note})
 	}
 	purchase, err := h.service.Create(CreateInput{BusinessID: businessID, SupplierID: supplierID, AmountPaid: req.AmountPaid, Note: req.Note, ExpectedAt: req.ExpectedAt, Items: items})
-	if errors.Is(err, suppliers.ErrSupplierNotFound) {
+	if errors.Is(err, suppliers.ErrSupplierNotFound) || errors.Is(err, products.ErrProductNotFound) {
 		response.Error(c, http.StatusNotFound, err.Error())
 		return
 	}
@@ -166,8 +168,28 @@ func (h *Handler) Receive(c *gin.Context) {
 	}
 	items := make([]ReceiveItemInput, 0, len(req.Items))
 	for _, item := range req.Items {
-		productID, _ := uuid.Parse(item.ProductID)
-		items = append(items, ReceiveItemInput{ProductID: productID, ReceivedQty: item.ReceivedQty})
+		input := ReceiveItemInput{ReceivedQty: item.ReceivedQty}
+		if item.ItemID != "" {
+			itemID, err := uuid.Parse(item.ItemID)
+			if err != nil {
+				response.Error(c, http.StatusBadRequest, "invalid item_id")
+				return
+			}
+			input.ItemID = &itemID
+		}
+		if item.ProductID != "" {
+			productID, err := uuid.Parse(item.ProductID)
+			if err != nil {
+				response.Error(c, http.StatusBadRequest, "invalid product_id")
+				return
+			}
+			input.ProductID = productID
+		}
+		if input.ItemID == nil && input.ProductID == uuid.Nil {
+			response.Error(c, http.StatusBadRequest, "each received item needs item_id or product_id")
+			return
+		}
+		items = append(items, input)
 	}
 	item, err := h.service.Receive(id, businessID, ReceiveInput{Items: items})
 	if errors.Is(err, ErrPurchaseNotFound) {
@@ -228,7 +250,7 @@ func (h *Handler) Update(c *gin.Context) {
 		response.Error(c, http.StatusNotFound, err.Error())
 	case errors.Is(err, ErrAlreadyReceived), errors.Is(err, ErrPurchasePartiallyReceived):
 		response.Error(c, http.StatusConflict, err.Error())
-	case errors.Is(err, suppliers.ErrSupplierNotFound):
+	case errors.Is(err, suppliers.ErrSupplierNotFound), errors.Is(err, products.ErrProductNotFound):
 		response.Error(c, http.StatusNotFound, err.Error())
 	case errors.Is(err, ErrEmptyPurchase), errors.Is(err, ErrInvalidPurchaseItem), errors.Is(err, ErrInvalidAmountPaid):
 		response.Error(c, http.StatusBadRequest, err.Error())

@@ -184,7 +184,7 @@ export default function SalesPage() {
   }
 
   if (loading) return <main className="p-8">Loading...</main>;
-  if (error) return <main className="p-8 text-red-600">{error}</main>;
+  if (error) return <main className="p-8 text-danger">{error}</main>;
 
   if (receipt) {
     return <ReceiptView receipt={receipt} business={business} customer={receiptCustomer} products={productById} onNew={() => setReceipt(null)} />;
@@ -200,12 +200,12 @@ export default function SalesPage() {
 
       <form onSubmit={handleSubmit} className="grid gap-6 xl:grid-cols-[1.4fr_.6fr]">
         <section className="panel space-y-5 p-5">
-          {formError && <p className="rounded-lg bg-red-50 p-3 text-sm text-red-700">{formError}</p>}
+          {formError && <p className="rounded-lg bg-danger-soft p-3 text-sm text-danger">{formError}</p>}
 
           <div>
             <label className="mb-1.5 block text-sm font-semibold">Find a product</label>
             <div className="relative">
-              <Search size={16} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[#9aa59d]" />
+              <Search size={16} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-subtle" />
               <input
                 className="field pl-9"
                 placeholder="Search by product name"
@@ -214,19 +214,19 @@ export default function SalesPage() {
               />
             </div>
             {query && (
-              <div className="mt-2 max-h-64 overflow-y-auto rounded-lg border border-[#e5e9e4] bg-white">
+              <div className="mt-2 max-h-64 overflow-y-auto rounded-lg border border-border bg-card">
                 {filteredProducts.length === 0 ? (
-                  <p className="p-3 text-sm text-[#718078]">No products match “{query}”.</p>
+                  <p className="p-3 text-sm text-muted">No products match “{query}”.</p>
                 ) : (
                   filteredProducts.map((p) => (
                     <button
                       key={p.id}
                       type="button"
                       onClick={() => addProduct(p.id)}
-                      className="flex w-full items-center justify-between border-b border-[#f1f4f0] px-3 py-2.5 text-left text-sm last:border-0 hover:bg-[#f7f9f6]"
+                      className="flex w-full items-center justify-between border-b border-border-subtle px-3 py-2.5 text-left text-sm last:border-0 hover:bg-hover"
                     >
                       <span className="font-medium">{p.name}</span>
-                      <span className="text-[#718078]">
+                      <span className="text-muted">
                         {formatMoney(p.price)}/{p.unit}
                       </span>
                     </button>
@@ -239,7 +239,7 @@ export default function SalesPage() {
           <div>
             <p className="eyebrow mb-2">Line items</p>
             {items.length === 0 ? (
-              <p className="rounded-lg border border-dashed border-[#cfd8d0] p-6 text-center text-sm text-[#718078]">
+              <p className="rounded-lg border border-dashed border-border p-6 text-center text-sm text-muted">
                 No products added yet. Search above to add one.
               </p>
             ) : (
@@ -248,15 +248,15 @@ export default function SalesPage() {
                   const product = productById[item.productId];
                   if (!product) return null;
                   return (
-                    <div key={item.productId} className="flex items-center gap-3 rounded-lg border border-[#eef1ed] p-3">
+                    <div key={item.productId} className="flex items-center gap-3 rounded-lg border border-border-subtle p-3">
                       <div className="min-w-0 flex-1">
                         <p className="truncate text-sm font-semibold">{product.name}</p>
-                        <p className="text-xs text-[#718078]">
+                        <p className="text-xs text-muted">
                           {formatMoney(product.price)}/{product.unit}
                         </p>
                       </div>
                       <div className="flex items-center gap-1">
-                        <button type="button" className="rounded-md border border-[#dce7de] p-1.5 text-[#526057] hover:bg-[#f2f5f1]" onClick={() => setQuantity(item.productId, item.quantity - 1)} aria-label="Decrease">
+                        <button type="button" className="rounded-md border border-border p-1.5 text-muted hover:bg-hover" onClick={() => setQuantity(item.productId, item.quantity - 1)} aria-label="Decrease">
                           <Minus size={14} />
                         </button>
                         <input
@@ -264,14 +264,14 @@ export default function SalesPage() {
                           min={1}
                           value={item.quantity}
                           onChange={(e) => setQuantity(item.productId, parseInt(e.target.value, 10) || 0)}
-                          className="w-16 rounded-md border border-[#dce7de] px-2 py-1.5 text-center text-sm"
+                          className="w-16 rounded-md border border-border px-2 py-1.5 text-center text-sm"
                         />
-                        <button type="button" className="rounded-md border border-[#dce7de] p-1.5 text-[#526057] hover:bg-[#f2f5f1]" onClick={() => setQuantity(item.productId, item.quantity + 1)} aria-label="Increase">
+                        <button type="button" className="rounded-md border border-border p-1.5 text-muted hover:bg-hover" onClick={() => setQuantity(item.productId, item.quantity + 1)} aria-label="Increase">
                           <Plus size={14} />
                         </button>
                       </div>
                       <p className="w-24 text-right text-sm font-semibold">{formatMoney(product.price * item.quantity)}</p>
-                      <button type="button" onClick={() => removeItem(item.productId)} className="rounded-md p-1.5 text-[#a3543f] hover:bg-[#fdeeea]" aria-label="Remove">
+                      <button type="button" onClick={() => removeItem(item.productId)} className="rounded-md p-1.5 text-danger hover:bg-danger-soft" aria-label="Remove">
                         <Trash2 size={15} />
                       </button>
                     </div>
@@ -297,14 +297,14 @@ export default function SalesPage() {
                   type="button"
                   onClick={() => setSaleType(t)}
                   className={`rounded-lg border px-2 py-2.5 text-xs font-semibold capitalize transition ${
-                    saleType === t ? "border-[#16794c] bg-[#e7f4ec] text-[#12633e]" : "border-[#dce7de] text-[#647168] hover:bg-[#f7f9f6]"
+                    saleType === t ? "border-primary bg-primary-soft text-primary-hover" : "border-border text-muted hover:bg-hover"
                   }`}
                 >
                   {t}
                 </button>
               ))}
             </div>
-            <p className="mt-2 text-xs text-[#8a958d]">
+            <p className="mt-2 text-xs text-subtle">
               {saleType === "cash" && "Cash sale — stock is reduced, nothing goes on account."}
               {saleType === "credit" && "Credit sale — stock is reduced and the balance is added to the customer's account."}
               {saleType === "quotation" && "Quotation — a priced document only. Stock and accounts are not affected."}
@@ -313,7 +313,7 @@ export default function SalesPage() {
 
           <div>
             <label className="mb-1.5 block text-sm font-semibold">
-              Customer {saleType === "credit" ? <span className="text-[#a3543f]">(required)</span> : <span className="font-normal text-[#8a958d]">(optional)</span>}
+              Customer {saleType === "credit" ? <span className="text-danger">(required)</span> : <span className="font-normal text-subtle">(optional)</span>}
             </label>
             <select className="field" value={customerId} onChange={(e) => setCustomerId(e.target.value)}>
               <option value="">Walk-in customer</option>
@@ -324,17 +324,17 @@ export default function SalesPage() {
               ))}
             </select>
             {selectedCustomer && (
-              <div className="mt-2 rounded-lg bg-[#f7f9f6] p-3 text-xs text-[#718078]">
-                <p className="font-semibold text-[#17211b]">{selectedCustomer.name}</p>
+              <div className="mt-2 rounded-lg bg-background p-3 text-xs text-muted">
+                <p className="font-semibold text-foreground">{selectedCustomer.name}</p>
                 {selectedCustomer.phone && <p className="mt-0.5">{selectedCustomer.phone}</p>}
                 {selectedCustomer.email && <p className="mt-0.5">{selectedCustomer.email}</p>}
               </div>
             )}
 
             {!customerId && saleType !== "credit" && (
-              <div className="mt-3 space-y-2 rounded-lg border border-dashed border-[#cfd8d0] p-3">
-                <p className="text-xs font-semibold text-[#526057]">Walk-in customer details</p>
-                <p className="text-[11px] text-[#8a958d]">Optional — saved to your customer list so you can reach them later.</p>
+              <div className="mt-3 space-y-2 rounded-lg border border-dashed border-border p-3">
+                <p className="text-xs font-semibold text-muted">Walk-in customer details</p>
+                <p className="text-[11px] text-subtle">Optional — saved to your customer list so you can reach them later.</p>
                 <input className="field" placeholder="Full name" value={walkInName} onChange={(e) => setWalkInName(e.target.value)} />
                 <input className="field" placeholder="Phone number" value={walkInPhone} onChange={(e) => setWalkInPhone(e.target.value)} />
                 <input className="field" type="email" placeholder="Email (optional)" value={walkInEmail} onChange={(e) => setWalkInEmail(e.target.value)} />
@@ -342,12 +342,12 @@ export default function SalesPage() {
             )}
           </div>
 
-          <div className="border-t border-[#eef1ed] pt-4">
+          <div className="border-t border-border-subtle pt-4">
             <div className="flex items-center justify-between text-sm">
-              <span className="text-[#718078]">Estimated total</span>
+              <span className="text-muted">Estimated total</span>
               <span className="text-xl font-bold">{formatMoney(estimatedTotal)}</span>
             </div>
-            <p className="mt-1 text-xs text-[#8a958d]">Final total is confirmed when you save.</p>
+            <p className="mt-1 text-xs text-subtle">Final total is confirmed when you save.</p>
           </div>
 
           <button type="submit" disabled={submitting} className="btn-primary w-full py-3">
@@ -392,14 +392,21 @@ function ReceiptView({
       <style>{`
         @media print {
           body * { visibility: hidden; }
-          #receipt-print, #receipt-print * { visibility: visible; }
+          #receipt-print, #receipt-print * {
+            visibility: visible;
+            /* Browsers print on white paper and omit backgrounds, so force a
+               print-safe palette instead of inheriting the dark theme. */
+            color: #111827 !important;
+            background: #ffffff !important;
+            border-color: #9ca3af !important;
+          }
           #receipt-print { position: absolute; left: 0; top: 0; width: 100%; box-shadow: none; border: none; }
           .no-print { display: none !important; }
         }
       `}</style>
 
       <div className="no-print mb-6 flex flex-wrap items-center justify-between gap-3">
-        <div className="flex items-center gap-2 text-[#16794c]">
+        <div className="flex items-center gap-2 text-primary">
           <Check size={18} />
           <p className="font-semibold">{SALE_TYPE_LABEL[type]} recorded</p>
         </div>
@@ -414,36 +421,36 @@ function ReceiptView({
       </div>
 
       <div id="receipt-print" className="panel mx-auto max-w-xl p-8">
-        <div className="flex items-start justify-between border-b border-[#eef1ed] pb-4">
+        <div className="flex items-start justify-between border-b border-border-subtle pb-4">
           <div>
             <p className="text-xl font-bold tracking-tight">{business?.name || "Business OS"}</p>
-            {business?.address && <p className="mt-1 text-xs text-[#718078]">{business.address}</p>}
-            {business?.phone && <p className="text-xs text-[#718078]">{business.phone}</p>}
-            {business?.email && <p className="text-xs text-[#718078]">{business.email}</p>}
+            {business?.address && <p className="mt-1 text-xs text-muted">{business.address}</p>}
+            {business?.phone && <p className="text-xs text-muted">{business.phone}</p>}
+            {business?.email && <p className="text-xs text-muted">{business.email}</p>}
           </div>
           <div className="text-right">
-            <p className="text-sm font-bold uppercase tracking-wide text-[#16794c]">{SALE_TYPE_LABEL[type]}</p>
-            <p className="mt-1 text-xs text-[#718078]">Ref {shortId}</p>
-            <p className="text-xs text-[#718078]">{created.toLocaleString()}</p>
+            <p className="text-sm font-bold uppercase tracking-wide text-primary">{SALE_TYPE_LABEL[type]}</p>
+            <p className="mt-1 text-xs text-muted">Ref {shortId}</p>
+            <p className="text-xs text-muted">{created.toLocaleString()}</p>
           </div>
         </div>
 
-        <div className="border-b border-[#eef1ed] py-4">
+        <div className="border-b border-border-subtle py-4">
           <p className="eyebrow mb-1">Billed to</p>
           {customer ? (
             <>
               <p className="text-sm font-semibold">{customer.name}</p>
-              {customer.phone && <p className="text-xs text-[#718078]">{customer.phone}</p>}
-              {customer.email && <p className="text-xs text-[#718078]">{customer.email}</p>}
+              {customer.phone && <p className="text-xs text-muted">{customer.phone}</p>}
+              {customer.email && <p className="text-xs text-muted">{customer.email}</p>}
             </>
           ) : (
-            <p className="text-sm text-[#718078]">Walk-in customer</p>
+            <p className="text-sm text-muted">Walk-in customer</p>
           )}
         </div>
 
         <table className="w-full py-4 text-sm">
           <thead>
-            <tr className="text-left text-xs uppercase text-[#718078]">
+            <tr className="text-left text-xs uppercase text-muted">
               <th className="py-2">Item</th>
               <th className="py-2 text-right">Qty</th>
               <th className="py-2 text-right">Unit</th>
@@ -454,7 +461,7 @@ function ReceiptView({
             {(receipt.line_items || []).map((li, idx) => {
               const product = products[li.product_id];
               return (
-                <tr key={idx} className="border-t border-[#f1f4f0]">
+                <tr key={idx} className="border-t border-border-subtle">
                   <td className="py-2">{product?.name || "Item"}</td>
                   <td className="py-2 text-right">{li.quantity}</td>
                   <td className="py-2 text-right">{formatMoney(li.unit_price)}</td>
@@ -465,22 +472,22 @@ function ReceiptView({
           </tbody>
         </table>
 
-        <div className="mt-4 flex items-center justify-between border-t border-[#eef1ed] pt-4">
+        <div className="mt-4 flex items-center justify-between border-t border-border-subtle pt-4">
           <div>
-            <div className="flex h-24 w-24 items-center justify-center rounded-lg border border-[#eef1ed] p-1">
+            <div className="flex h-24 w-24 items-center justify-center rounded-lg border border-border-subtle p-1">
               <QRCodeSVG value={qrValue} size={88} />
             </div>
-            <p className="mt-1 text-[10px] text-[#8a958d]">Scan to verify</p>
+            <p className="mt-1 text-[10px] text-subtle">Scan to verify</p>
           </div>
           <div className="text-right">
-            <p className="text-xs uppercase text-[#718078]">Total</p>
+            <p className="text-xs uppercase text-muted">Total</p>
             <p className="text-2xl font-bold">{formatMoney(receipt.total_amount)}</p>
-            {type === "quotation" && <p className="mt-1 text-xs text-[#8a958d]">Quotation valid for 14 days</p>}
-            {type === "credit" && <p className="mt-1 text-xs text-[#8a958d]">Charged to customer account</p>}
+            {type === "quotation" && <p className="mt-1 text-xs text-subtle">Quotation valid for 14 days</p>}
+            {type === "credit" && <p className="mt-1 text-xs text-subtle">Charged to customer account</p>}
           </div>
         </div>
 
-        <p className="mt-6 border-t border-[#eef1ed] pt-4 text-center text-xs text-[#8a958d]">
+        <p className="mt-6 border-t border-border-subtle pt-4 text-center text-xs text-subtle">
           Thank you for your business.
         </p>
       </div>

@@ -1,6 +1,7 @@
 package purchases
 
 import (
+	"math"
 	"testing"
 	"time"
 
@@ -56,6 +57,33 @@ func TestCreateRejectsOverpayment(t *testing.T) {
 	_, err := service.Create(CreateInput{BusinessID: uuid.New(), SupplierID: uuid.New(), AmountPaid: 201, Items: []ItemInput{{ProductID: uuid.New(), Quantity: 1, UnitCost: 200}}})
 	if err != ErrInvalidAmountPaid {
 		t.Fatalf("error = %v, want %v", err, ErrInvalidAmountPaid)
+	}
+}
+
+func TestCreateRejectsOverflowingLineTotal(t *testing.T) {
+	service := NewService(&testRepository{}, nil, nil, nil)
+	_, err := service.Create(CreateInput{
+		BusinessID: uuid.New(),
+		SupplierID: uuid.New(),
+		Items:      []ItemInput{{ProductID: uuid.New(), Quantity: 2, UnitCost: math.MaxInt64/2 + 1}},
+	})
+	if err != ErrInvalidPurchaseItem {
+		t.Fatalf("error = %v, want %v", err, ErrInvalidPurchaseItem)
+	}
+}
+
+func TestCreateRejectsOverflowingTotal(t *testing.T) {
+	service := NewService(&testRepository{}, nil, nil, nil)
+	_, err := service.Create(CreateInput{
+		BusinessID: uuid.New(),
+		SupplierID: uuid.New(),
+		Items: []ItemInput{
+			{ProductID: uuid.New(), Quantity: 1, UnitCost: math.MaxInt64 - 10},
+			{ProductID: uuid.New(), Quantity: 1, UnitCost: 20},
+		},
+	})
+	if err != ErrInvalidPurchaseItem {
+		t.Fatalf("error = %v, want %v", err, ErrInvalidPurchaseItem)
 	}
 }
 
@@ -169,6 +197,39 @@ func TestReceivePlanDistributesAcrossDuplicateProductLines(t *testing.T) {
 
 	// More than both lines can supply is rejected.
 	if _, err := receivePlan(items, []ReceiveItemInput{{ProductID: product, ReceivedQty: 4}}); err != ErrInvalidReceiveQuantity {
+		t.Fatalf("error = %v, want %v", err, ErrInvalidReceiveQuantity)
+	}
+}
+
+func TestReceivePlanReceivesByLineItemID(t *testing.T) {
+	product := uuid.New()
+	firstID, secondID := uuid.New(), uuid.New()
+	items := []PurchaseLineItem{
+		{ID: firstID, ProductID: product, Quantity: 2, UnitCost: 100},
+		{ID: secondID, ProductID: product, Quantity: 3, UnitCost: 200},
+	}
+
+	// Target the second line only: the first line's quantity must not move.
+	plan, err := receivePlan(items, []ReceiveItemInput{{ItemID: &secondID, ProductID: product, ReceivedQty: 3}})
+	if err != nil {
+		t.Fatalf("receivePlan failed: %v", err)
+	}
+	if len(plan) != 1 || plan[1] != 3 {
+		t.Fatalf("plan = %v, want {1:3}", plan)
+	}
+
+	// An unknown line, a duplicate line and an over-receipt are all rejected.
+	unknown := uuid.New()
+	if _, err := receivePlan(items, []ReceiveItemInput{{ItemID: &unknown, ReceivedQty: 1}}); err != ErrUnknownReceiveItem {
+		t.Fatalf("error = %v, want %v", err, ErrUnknownReceiveItem)
+	}
+	if _, err := receivePlan(items, []ReceiveItemInput{
+		{ItemID: &firstID, ReceivedQty: 1},
+		{ItemID: &firstID, ReceivedQty: 1},
+	}); err != ErrDuplicateReceiveItem {
+		t.Fatalf("error = %v, want %v", err, ErrDuplicateReceiveItem)
+	}
+	if _, err := receivePlan(items, []ReceiveItemInput{{ItemID: &firstID, ReceivedQty: 3}}); err != ErrInvalidReceiveQuantity {
 		t.Fatalf("error = %v, want %v", err, ErrInvalidReceiveQuantity)
 	}
 }

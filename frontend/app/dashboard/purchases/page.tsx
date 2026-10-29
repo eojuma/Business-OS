@@ -14,7 +14,7 @@ import { api } from "@/lib/api";
 import { PageHeader, formatMoney } from "@/components/app-shell";
 
 type Product = { id: string; name: string; unit: string };
-type Supplier = { id: string; name: string };
+type Supplier = { id: string; name: string; deleted_at?: string | null };
 type LineItem = {
   id?: string;
   product_id: string;
@@ -58,12 +58,25 @@ function fromCents(value: number): string {
 function toDateInput(value?: string | null): string {
   if (!value) return "";
   const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "";
+  if (Number.isNaN(date.getTime())) return value.slice(0, 10);
+  // Date-only values are stored at UTC midnight, so keep the calendar date.
+  // Legacy local-midnight instants fall back to the viewer's calendar date.
+  if (
+    date.getUTCHours() === 0 &&
+    date.getUTCMinutes() === 0 &&
+    date.getUTCSeconds() === 0 &&
+    date.getUTCMilliseconds() === 0
+  ) {
+    return value.slice(0, 10);
+  }
   const pad = (n: number) => String(n).padStart(2, "0");
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
 }
 function toISO(value: string): string | null {
   return value ? new Date(`${value}T00:00:00`).toISOString() : null;
+}
+function toCalendarDate(value: string): string | null {
+  return value || null;
 }
 // The date inputs represent the user's local calendar day. Convert them to the
 // matching UTC instants so the API range covers the whole local day.
@@ -203,7 +216,7 @@ export default function PurchasesPage() {
       const payload = res.data?.data;
       const rows: Purchase[] = Array.isArray(payload) ? payload : payload?.data || [];
       setPurchases(rows);
-      setMeta(Array.isArray(payload) ? null : payload?.meta || null);
+      setMeta(Array.isArray(payload) ? res.data?.meta || null : payload?.meta || null);
     } catch (e) {
       if (requestId !== latestRequest.current) return;
       setPurchases([]);
@@ -222,7 +235,12 @@ export default function PurchasesPage() {
     let active = true;
     (async () => {
       try {
-        const [p, s] = await Promise.all([api.get("/products"), api.get("/suppliers")]);
+        const [p, s] = await Promise.all([
+          api.get("/products"),
+          // Include archived suppliers so their purchases can still be filtered
+          // and labelled; the form picker below restricts to active suppliers.
+          api.get("/suppliers", { params: { include_archived: true } }),
+        ]);
         if (!active) return;
         setProducts(p.data.data || []);
         setSuppliers(s.data.data || []);
@@ -299,7 +317,7 @@ export default function PurchasesPage() {
       supplier_id: formSupplier,
       amount_paid: toCents(formPaid),
       note: formNote,
-      expected_at: toISO(formExpected),
+      expected_at: toCalendarDate(formExpected),
       items: formRows.map((row) => ({
         product_id: row.product_id,
         quantity: Number(row.quantity || 0),
@@ -315,7 +333,12 @@ export default function PurchasesPage() {
       }
       if (dialogSession.current !== session) return;
       setFormOpen(false);
-      await loadPurchases();
+      if (!editing && page !== 1) {
+        // New purchases are newest-first, so show page one where the row lands.
+        setPage(1);
+      } else {
+        await loadPurchases();
+      }
     } catch (e) {
       if (dialogSession.current !== session) return;
       setDialogError(errMessage(e, editing ? "Failed to update purchase" : "Failed to create purchase"));
@@ -469,6 +492,7 @@ export default function PurchasesPage() {
             {suppliers.map((supplier) => (
               <option key={supplier.id} value={supplier.id}>
                 {supplier.name}
+                {supplier.deleted_at ? " (archived)" : ""}
               </option>
             ))}
           </select>
@@ -559,7 +583,7 @@ export default function PurchasesPage() {
                     </td>
                     <td className="px-5 py-4 text-muted">
                       {purchase.expected_at
-                        ? new Date(purchase.expected_at).toLocaleDateString("en-KE")
+                        ? purchase.expected_at.slice(0, 10)
                         : "—"}
                     </td>
                     <td className="px-5 py-4 text-muted">
@@ -676,11 +700,13 @@ export default function PurchasesPage() {
                 Supplier
                 <select className="field mt-1.5" value={formSupplier} onChange={(e) => setFormSupplier(e.target.value)} required>
                   <option value="">Select supplier</option>
-                  {suppliers.map((supplier) => (
-                    <option key={supplier.id} value={supplier.id}>
-                      {supplier.name}
-                    </option>
-                  ))}
+                  {suppliers
+                    .filter((supplier) => !supplier.deleted_at)
+                    .map((supplier) => (
+                      <option key={supplier.id} value={supplier.id}>
+                        {supplier.name}
+                      </option>
+                    ))}
                 </select>
               </label>
               <label className="text-sm font-semibold">

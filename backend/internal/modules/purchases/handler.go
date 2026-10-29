@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/businessos/backend/internal/modules/products"
@@ -26,10 +27,12 @@ type itemRequest struct {
 	Note      string `json:"note"`
 }
 type createRequest struct {
-	SupplierID string        `json:"supplier_id" binding:"required,uuid"`
-	AmountPaid int64         `json:"amount_paid"`
-	Note       string        `json:"note"`
-	ExpectedAt *time.Time    `json:"expected_at"`
+	SupplierID string `json:"supplier_id" binding:"required,uuid"`
+	AmountPaid int64  `json:"amount_paid"`
+	Note       string `json:"note"`
+	// ExpectedAt is a calendar date (YYYY-MM-DD); legacy RFC3339 timestamps are
+	// still accepted so existing clients keep working.
+	ExpectedAt *string       `json:"expected_at"`
 	Items      []itemRequest `json:"items" binding:"required,min=1,dive"`
 }
 type receiveItemRequest struct {
@@ -39,6 +42,23 @@ type receiveItemRequest struct {
 }
 type receiveRequest struct {
 	Items []receiveItemRequest `json:"items" binding:"omitempty,dive"`
+}
+
+// parseExpectedAt accepts a date-only value (the current wire format) or an
+// RFC3339 timestamp (older clients) and returns the date anchored at UTC
+// midnight, so the calendar date never shifts between time zones.
+func parseExpectedAt(raw *string) (*time.Time, error) {
+	if raw == nil || strings.TrimSpace(*raw) == "" {
+		return nil, nil
+	}
+	value := strings.TrimSpace(*raw)
+	if parsed, err := time.Parse("2006-01-02", value); err == nil {
+		return &parsed, nil
+	}
+	if parsed, err := time.Parse(time.RFC3339, value); err == nil {
+		return &parsed, nil
+	}
+	return nil, errors.New("invalid expected_at")
 }
 
 func (h *Handler) Create(c *gin.Context) {
@@ -53,12 +73,17 @@ func (h *Handler) Create(c *gin.Context) {
 		return
 	}
 	supplierID, _ := uuid.Parse(req.SupplierID)
+	expectedAt, err := parseExpectedAt(req.ExpectedAt)
+	if err != nil {
+		response.Error(c, http.StatusBadRequest, err.Error())
+		return
+	}
 	items := make([]ItemInput, 0, len(req.Items))
 	for _, item := range req.Items {
 		productID, _ := uuid.Parse(item.ProductID)
 		items = append(items, ItemInput{ProductID: productID, Quantity: item.Quantity, UnitCost: item.UnitCost, Note: item.Note})
 	}
-	purchase, err := h.service.Create(CreateInput{BusinessID: businessID, SupplierID: supplierID, AmountPaid: req.AmountPaid, Note: req.Note, ExpectedAt: req.ExpectedAt, Items: items})
+	purchase, err := h.service.Create(CreateInput{BusinessID: businessID, SupplierID: supplierID, AmountPaid: req.AmountPaid, Note: req.Note, ExpectedAt: expectedAt, Items: items})
 	if errors.Is(err, suppliers.ErrSupplierNotFound) || errors.Is(err, products.ErrProductNotFound) {
 		response.Error(c, http.StatusNotFound, err.Error())
 		return
@@ -229,6 +254,11 @@ func (h *Handler) Update(c *gin.Context) {
 		response.Error(c, http.StatusBadRequest, "invalid supplier_id")
 		return
 	}
+	expectedAt, err := parseExpectedAt(req.ExpectedAt)
+	if err != nil {
+		response.Error(c, http.StatusBadRequest, err.Error())
+		return
+	}
 	items := make([]ItemInput, 0, len(req.Items))
 	for _, item := range req.Items {
 		productID, err := uuid.Parse(item.ProductID)
@@ -242,7 +272,7 @@ func (h *Handler) Update(c *gin.Context) {
 		SupplierID: supplierID,
 		AmountPaid: req.AmountPaid,
 		Note:       req.Note,
-		ExpectedAt: req.ExpectedAt,
+		ExpectedAt: expectedAt,
 		Items:      items,
 	})
 	switch {

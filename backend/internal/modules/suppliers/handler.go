@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/businessos/backend/internal/shared/middleware"
 	"github.com/businessos/backend/internal/shared/response"
@@ -146,6 +147,29 @@ func (h *Handler) List(c *gin.Context) {
 			"totalPages": totalPages,
 		},
 	})
+}
+
+func (h *Handler) GetAging(c *gin.Context) {
+	businessID, err := middleware.CurrentBusinessID(c)
+	if err != nil {
+		response.Error(c, http.StatusUnauthorized, err.Error())
+		return
+	}
+	asOf := time.Now().UTC()
+	if raw, provided := c.GetQuery("as_of"); provided {
+		asOf, err = time.Parse(time.RFC3339, raw)
+		asOf = asOf.UTC()
+		if err != nil || asOf.Year() < 1 || asOf.Year() > 9999 {
+			response.Error(c, http.StatusBadRequest, "as_of must be an RFC3339 timestamp")
+			return
+		}
+	}
+	report, err := h.service.GetAging(businessID, asOf)
+	if err != nil {
+		response.Error(c, http.StatusInternalServerError, "failed to load supplier aging report")
+		return
+	}
+	response.Success(c, http.StatusOK, report)
 }
 
 func (h *Handler) Get(c *gin.Context) {

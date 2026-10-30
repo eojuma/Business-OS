@@ -16,6 +16,7 @@ type Repository interface {
 	FindByID(id, businessID uuid.UUID) (*Supplier, error)
 	List(businessID uuid.UUID, includeArchived bool) ([]Supplier, error)
 	ListPaginated(businessID uuid.UUID, page, limit int, search string, includeArchived bool) ([]Supplier, int64, error)
+	GetAging(businessID uuid.UUID, asOf time.Time) ([]AgingSupplier, error)
 	Update(*Supplier) error
 	Delete(id, businessID uuid.UUID) error
 	Restore(id, businessID uuid.UUID) error
@@ -45,6 +46,32 @@ func (r *repository) List(businessID uuid.UUID, includeArchived bool) ([]Supplie
 	}
 	err := query.Where("business_id = ?", businessID).Order("name asc").Find(&suppliers).Error
 	return suppliers, err
+}
+
+// GetAging reads all buckets in one snapshot. Explicit UTC date arithmetic
+// keeps calendar-day boundaries independent of the connection's time zone.
+func (r *repository) GetAging(businessID uuid.UUID, asOf time.Time) ([]AgingSupplier, error) {
+	var rows []AgingSupplier
+	err := r.db.Raw(`
+		SELECT id, name, outstanding_balance, due_date, days_overdue,
+			CASE
+				WHEN days_overdue = 0 THEN 'current'
+				WHEN days_overdue <= 30 THEN 'days_1_30'
+				WHEN days_overdue <= 60 THEN 'days_31_60'
+				WHEN days_overdue <= 90 THEN 'days_61_90'
+				ELSE 'days_90_plus'
+			END AS bucket
+		FROM (
+			SELECT id, name, outstanding_balance, due_date,
+				CASE WHEN due_date IS NULL THEN 0 ELSE
+					GREATEST(0, (?::timestamptz AT TIME ZONE 'UTC')::date
+						- (due_date AT TIME ZONE 'UTC')::date)
+				END AS days_overdue
+			FROM suppliers
+			WHERE business_id = ? AND deleted_at IS NULL AND outstanding_balance > 0
+		) AS aged
+		ORDER BY name, id`, asOf.UTC(), businessID).Scan(&rows).Error
+	return rows, err
 }
 
 // paginatedOffset converts a page and page size into a SQL offset. It reports

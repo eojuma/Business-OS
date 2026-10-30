@@ -38,10 +38,17 @@ services:
     container_name: businessos-backend
     restart: unless-stopped
     env_file:
-      - .env
+      - backend/.env
     environment:
+      # Point the container at the Compose services, overriding any
+      # production values (e.g. Neon) in backend/.env.
       DB_HOST: postgres
-      REDIS_HOST: redis
+      DB_PORT: 5432
+      DB_USER: ${DB_USER:-businessos}
+      DB_PASSWORD: ${DB_PASSWORD:-businessos}
+      DB_NAME: ${DB_NAME:-businessos}
+      DB_SSLMODE: disable
+      REDIS_URL: redis://redis:6379
     ports:
       - "8080:8080"
     depends_on:
@@ -57,7 +64,7 @@ services:
     container_name: businessos-frontend
     restart: unless-stopped
     env_file:
-      - .env
+      - frontend/.env
     ports:
       - "3000:3000"
     depends_on:

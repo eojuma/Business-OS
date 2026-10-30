@@ -1,6 +1,8 @@
 package suppliers
 
 import (
+	"sort"
+	"strings"
 	"testing"
 	"time"
 
@@ -48,6 +50,35 @@ func (r *testRepository) List(businessID uuid.UUID, includeArchived bool) ([]Sup
 		result = append(result, *s)
 	}
 	return result, nil
+}
+
+func (r *testRepository) ListPaginated(businessID uuid.UUID, page, limit int, search string, includeArchived bool) ([]Supplier, int64, error) {
+	term := strings.ToLower(strings.TrimSpace(search))
+	var result []Supplier
+	for _, s := range r.suppliers {
+		if s.BusinessID != businessID {
+			continue
+		}
+		if s.DeletedAt.Valid && !includeArchived {
+			continue
+		}
+		if term != "" && !strings.Contains(strings.ToLower(s.Name+" "+s.Phone+" "+s.Email), term) {
+			continue
+		}
+		result = append(result, *s)
+	}
+	sort.Slice(result, func(i, j int) bool { return result[i].Name < result[j].Name })
+
+	total := int64(len(result))
+	start := (page - 1) * limit
+	if start > len(result) {
+		start = len(result)
+	}
+	end := start + limit
+	if end > len(result) {
+		end = len(result)
+	}
+	return result[start:end], total, nil
 }
 
 func (r *testRepository) Update(s *Supplier) error {
@@ -212,6 +243,50 @@ func TestListSuppliers(t *testing.T) {
 	}
 	if len(all) != 3 {
 		t.Fatalf("len = %d, want 3 including archived", len(all))
+	}
+}
+
+func TestListSuppliersPaginated(t *testing.T) {
+	repo := newTestRepository()
+	svc := NewService(repo)
+
+	businessID := uuid.New()
+	repo.suppliers[uuid.New()] = &Supplier{BusinessID: businessID, Name: "Alpha", Phone: "0700", Email: "alpha@example.com"}
+	repo.suppliers[uuid.New()] = &Supplier{BusinessID: businessID, Name: "Bravo", Phone: "0711", Email: "bravo@example.com"}
+	repo.suppliers[uuid.New()] = &Supplier{BusinessID: businessID, Name: "Charlie", Phone: "0722", Email: "charlie@example.com"}
+	repo.suppliers[uuid.New()] = &Supplier{BusinessID: businessID, Name: "Archived", DeletedAt: gorm.DeletedAt{Time: time.Now(), Valid: true}}
+	repo.suppliers[uuid.New()] = &Supplier{BusinessID: uuid.New(), Name: "Other"}
+
+	items, total, err := svc.ListPaginated(businessID, 1, 2, "", false)
+	if err != nil {
+		t.Fatalf("ListPaginated failed: %v", err)
+	}
+	if total != 3 || len(items) != 2 || items[0].Name != "Alpha" || items[1].Name != "Bravo" {
+		t.Fatalf("page 1 total = %d, len = %d", total, len(items))
+	}
+
+	items, total, err = svc.ListPaginated(businessID, 2, 2, "", false)
+	if err != nil {
+		t.Fatalf("ListPaginated page 2 failed: %v", err)
+	}
+	if total != 3 || len(items) != 1 || items[0].Name != "Charlie" {
+		t.Fatalf("page 2 total = %d, len = %d", total, len(items))
+	}
+
+	items, total, err = svc.ListPaginated(businessID, 1, 10, "  bravo  ", false)
+	if err != nil {
+		t.Fatalf("ListPaginated search failed: %v", err)
+	}
+	if total != 1 || len(items) != 1 || items[0].Name != "Bravo" {
+		t.Fatalf("search total = %d, len = %d", total, len(items))
+	}
+
+	_, total, err = svc.ListPaginated(businessID, 1, 10, "", true)
+	if err != nil {
+		t.Fatalf("ListPaginated including archived failed: %v", err)
+	}
+	if total != 4 {
+		t.Fatalf("total including archived = %d, want 4", total)
 	}
 }
 

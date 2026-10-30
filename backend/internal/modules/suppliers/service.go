@@ -2,6 +2,7 @@ package suppliers
 
 import (
 	"errors"
+	"strings"
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"
@@ -30,6 +31,7 @@ type Service interface {
 	Create(CreateInput) (*Supplier, error)
 	Get(id, businessID uuid.UUID) (*Supplier, error)
 	List(businessID uuid.UUID, includeArchived bool) ([]Supplier, error)
+	ListPaginated(businessID uuid.UUID, page, limit int, search string, includeArchived bool) ([]Supplier, int64, error)
 	Update(id, businessID uuid.UUID, input UpdateInput) (*Supplier, error)
 	Delete(id, businessID uuid.UUID) error
 	Restore(id, businessID uuid.UUID) (*Supplier, error)
@@ -63,6 +65,10 @@ func (s *service) Get(id, businessID uuid.UUID) (*Supplier, error) {
 
 func (s *service) List(businessID uuid.UUID, includeArchived bool) ([]Supplier, error) {
 	return s.repo.List(businessID, includeArchived)
+}
+
+func (s *service) ListPaginated(businessID uuid.UUID, page, limit int, search string, includeArchived bool) ([]Supplier, int64, error) {
+	return s.repo.ListPaginated(businessID, page, limit, strings.TrimSpace(search), includeArchived)
 }
 
 func (s *service) Update(id, businessID uuid.UUID, input UpdateInput) (*Supplier, error) {

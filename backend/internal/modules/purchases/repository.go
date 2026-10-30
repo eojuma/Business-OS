@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/businessos/backend/internal/modules/products"
 	"github.com/businessos/backend/internal/modules/suppliers"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
@@ -39,6 +40,31 @@ type repository struct{ db *gorm.DB }
 
 func NewRepository(db *gorm.DB) Repository { return &repository{db: db} }
 
+// validateProductsTx ensures every referenced product belongs to the purchase's
+// business. Product IDs come straight from the request, so without this check a
+// caller could attach another business's product to a purchase.
+func validateProductsTx(tx *gorm.DB, businessID uuid.UUID, items []PurchaseLineItem) error {
+	ids := make([]uuid.UUID, 0, len(items))
+	seen := make(map[uuid.UUID]bool, len(items))
+	for _, item := range items {
+		if seen[item.ProductID] {
+			continue
+		}
+		seen[item.ProductID] = true
+		ids = append(ids, item.ProductID)
+	}
+	var count int64
+	if err := tx.Model(&products.Product{}).
+		Where("business_id = ? AND id IN ?", businessID, ids).
+		Count(&count).Error; err != nil {
+		return err
+	}
+	if int(count) != len(ids) {
+		return products.ErrProductNotFound
+	}
+	return nil
+}
+
 func (r *repository) Create(purchase *Purchase, items []PurchaseLineItem) error {
 	// Reserve the PO number in the same transaction as the insert so a failed
 	// create does not consume a sequence.
@@ -55,6 +81,9 @@ func (r *repository) Create(purchase *Purchase, items []PurchaseLineItem) error 
 			return suppliers.ErrSupplierNotFound
 		}
 		if err != nil {
+			return err
+		}
+		if err := validateProductsTx(tx, purchase.BusinessID, items); err != nil {
 			return err
 		}
 
@@ -162,20 +191,59 @@ func receivePlan(items []PurchaseLineItem, requested []ReceiveItemInput) (map[in
 	}
 
 	indexesByProduct := make(map[uuid.UUID][]int, len(items))
+	indexesByItem := make(map[uuid.UUID]int, len(items))
 	for idx := range items {
 		productID := items[idx].ProductID
 		indexesByProduct[productID] = append(indexesByProduct[productID], idx)
+		if items[idx].ID != uuid.Nil {
+			indexesByItem[items[idx].ID] = idx
+		}
 	}
 
-	seen := make(map[uuid.UUID]bool, len(requested))
+	// available is the quantity still unplanned on a line. Both request shapes
+	// (item_id and product_id) draw from the same plan, so mixing them cannot
+	// over-allocate a line.
+	available := func(idx int) int64 {
+		remaining := items[idx].RemainingQty() - plan[idx]
+		if remaining < 0 {
+			return 0
+		}
+		return remaining
+	}
+
+	seenItems := make(map[uuid.UUID]bool, len(requested))
+	seenProducts := make(map[uuid.UUID]bool, len(requested))
 	for _, request := range requested {
 		if request.ReceivedQty <= 0 {
 			return nil, ErrInvalidReceiveQuantity
 		}
-		if seen[request.ProductID] {
+
+		// Prefer the line identity: it keeps duplicate-product lines with
+		// different costs from consuming each other's quantities.
+		if request.ItemID != nil {
+			if seenItems[*request.ItemID] {
+				return nil, ErrDuplicateReceiveItem
+			}
+			seenItems[*request.ItemID] = true
+
+			idx, ok := indexesByItem[*request.ItemID]
+			if !ok {
+				return nil, ErrUnknownReceiveItem
+			}
+			if request.ReceivedQty > available(idx) {
+				return nil, ErrInvalidReceiveQuantity
+			}
+			plan[idx] += request.ReceivedQty
+			continue
+		}
+
+		if request.ProductID == uuid.Nil {
+			return nil, ErrUnknownReceiveItem
+		}
+		if seenProducts[request.ProductID] {
 			return nil, ErrDuplicateReceiveItem
 		}
-		seen[request.ProductID] = true
+		seenProducts[request.ProductID] = true
 
 		indexes, ok := indexesByProduct[request.ProductID]
 		if !ok {
@@ -188,11 +256,11 @@ func receivePlan(items []PurchaseLineItem, requested []ReceiveItemInput) (map[in
 			if remaining == 0 {
 				break
 			}
-			available := items[idx].RemainingQty()
-			if available <= 0 {
+			lineAvailable := available(idx)
+			if lineAvailable <= 0 {
 				continue
 			}
-			take := min(remaining, available)
+			take := min(remaining, lineAvailable)
 			plan[idx] += take
 			remaining -= take
 		}
@@ -300,6 +368,9 @@ func (r *repository) Update(id, businessID uuid.UUID, supplierID uuid.UUID, amou
 			return suppliers.ErrSupplierNotFound
 		}
 		if err != nil {
+			return err
+		}
+		if err := validateProductsTx(tx, businessID, items); err != nil {
 			return err
 		}
 

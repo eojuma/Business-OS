@@ -23,6 +23,16 @@ func NewPostgres(cfg *config.Config) *gorm.DB {
 		logLevel = logger.Info
 	}
 
+	return openPostgres(dsn, logLevel)
+}
+
+// NewPostgresFromURL creates a new PostgreSQL database connection using a
+// PostgreSQL URL connection string.
+func NewPostgresFromURL(databaseURL string) *gorm.DB {
+	return openPostgres(databaseURL, logger.Warn)
+}
+
+func openPostgres(dsn string, logLevel logger.LogLevel) *gorm.DB {
 	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{
 		Logger: logger.Default.LogMode(logLevel),
 	})

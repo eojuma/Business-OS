@@ -13,7 +13,6 @@ import (
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 
-	"github.com/businessos/backend/internal/config"
 	"github.com/businessos/backend/internal/modules/business"
 	"github.com/businessos/backend/internal/modules/inventory"
 	"github.com/businessos/backend/internal/modules/products"
@@ -33,33 +32,32 @@ func setupTestDB(t *testing.T) (*gorm.DB, uuid.UUID) {
 	}
 
 	parsedURL, err := url.Parse(testDBURL)
-	if err != nil || parsedURL.Hostname() == "" || parsedURL.User == nil {
+	if err != nil {
 		t.Fatalf("invalid TEST_DATABASE_URL: %v", err)
 	}
-
-	cfg := config.Load()
-	cfg.DBHost = parsedURL.Hostname()
-	if port := parsedURL.Port(); port != "" {
-		cfg.DBPort = port
+	if parsedURL.Hostname() == "" {
+		t.Fatalf("invalid TEST_DATABASE_URL: host is required")
 	}
-	cfg.DBUser = parsedURL.User.Username()
-	cfg.DBPassword = ""
-	if password, ok := parsedURL.User.Password(); ok {
-		cfg.DBPassword = password
+	if parsedURL.User == nil {
+		t.Fatalf("invalid TEST_DATABASE_URL: user is required")
 	}
-	if dbName := strings.TrimPrefix(parsedURL.Path, "/"); dbName != "" {
-		cfg.DBName = dbName
-	}
-	if sslMode := parsedURL.Query().Get("sslmode"); sslMode != "" {
-		cfg.DBSSLMode = sslMode
+	if dbName := strings.TrimPrefix(parsedURL.Path, "/"); dbName == "" {
+		t.Fatalf("invalid TEST_DATABASE_URL: database name is required")
 	}
 
-	db := database.NewPostgres(cfg)
+	db := database.NewPostgresFromURL(testDBURL)
+
+	// Pin the pool to a single connection so the session-level
+	// SET search_path below applies to every query, including the
+	// migration connection pinned by migrations.Up.
+	if sqlDB, err := db.DB(); err == nil {
+		sqlDB.SetMaxOpenConns(1)
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if err := db.WithContext(ctx).Exec("SELECT 1").Error; err != nil {
-		t.Skipf("Database not reachable, skipping integration test: %v", err)
+		t.Fatalf("Database not reachable: %v", err)
 	}
 
 	// Use a unique schema per test so packages can run in parallel safely.
@@ -555,6 +553,20 @@ func TestRepositoryUpdateDraftReplacesItemsAndTotals(t *testing.T) {
 	}
 	if len(updated.Items) != 2 {
 		t.Fatalf("items = %d, want 2", len(updated.Items))
+	}
+	for _, item := range updated.Items {
+		switch item.ProductID {
+		case fixture.productA:
+			if item.Quantity != 5 || item.UnitCost != 150 || item.Note != "rush" {
+				t.Fatalf("product A line = qty %d cost %d note %q, want qty 5 cost 150 note rush", item.Quantity, item.UnitCost, item.Note)
+			}
+		case fixture.productB:
+			if item.Quantity != 1 || item.UnitCost != 400 {
+				t.Fatalf("product B line = qty %d cost %d, want qty 1 cost 400", item.Quantity, item.UnitCost)
+			}
+		default:
+			t.Fatalf("unexpected product %s in updated items", item.ProductID)
+		}
 	}
 
 	var count int64

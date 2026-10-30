@@ -1,6 +1,7 @@
 package migrations
 
 import (
+	"context"
 	"embed"
 	"fmt"
 	"io/fs"
@@ -8,6 +9,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"gorm.io/gorm"
 )
@@ -21,6 +23,12 @@ var migrationFiles embed.FS
 // so the migration is not atomic; keep such migrations idempotent.
 const noTransactionMarker = "-- +migrate NoTransaction"
 
+// lockKey serializes migration application across connections and processes
+// (parallel test packages, multiple server instances booting at once) with
+// pg_advisory_lock. Without it concurrent Up calls can deadlock on
+// conflicting table-lock order or race the version-table insert.
+const lockKey int64 = 640291337
+
 type migration struct {
 	version       int64
 	name          string
@@ -29,7 +37,62 @@ type migration struct {
 	noTransaction bool
 }
 
+// withMigrationLock pins a single session, takes the advisory lock on it,
+// runs fn, then releases the lock. Session locks are released by PostgreSQL
+// if the connection dies, so they cannot leak.
+func withMigrationLock(db *gorm.DB, fn func(locked *gorm.DB) error) error {
+	ctx := context.Background()
+	if db.Statement != nil && db.Statement.Context != nil {
+		ctx = db.Statement.Context
+	}
+	sqlDB, err := db.DB()
+	if err != nil {
+		return err
+	}
+	conn, err := sqlDB.Conn(ctx)
+	if err != nil {
+		return err
+	}
+	// Registered first: runs after the unlock below (defer is LIFO).
+	defer func() { _ = conn.Close() }()
+
+	// WithContext clones the statement so swapping the connection pool below
+	// cannot mutate the caller's session. The advisory lock and every
+	// migration then run on this one pinned connection, so the session-scoped
+	// lock stays held for the whole migration run.
+	locked := db.WithContext(ctx)
+	locked.Statement.ConnPool = conn
+
+	// Try-lock in a loop instead of blocking on pg_advisory_lock: a backend
+	// blocked inside pg_advisory_lock keeps its snapshot open, and
+	// CREATE INDEX CONCURRENTLY waits for such older snapshots, producing an
+	// advisory-wait/virtualxid deadlock cycle. Failed try attempts return
+	// immediately and the sleep between them holds no snapshot, so the cycle
+	// cannot form.
+	for {
+		var got bool
+		if err := locked.Raw("SELECT pg_try_advisory_lock(?)", lockKey).Scan(&got).Error; err != nil {
+			return fmt.Errorf("acquire migration lock: %w", err)
+		}
+		if got {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
+	defer func() { _ = locked.Exec("SELECT pg_advisory_unlock(?)", lockKey).Error }()
+
+	return fn(locked)
+}
+
 func Up(db *gorm.DB) error {
+	return withMigrationLock(db, up)
+}
+
+func up(db *gorm.DB) error {
 	migrations, err := load()
 	if err != nil {
 		return err
@@ -75,6 +138,10 @@ func Up(db *gorm.DB) error {
 }
 
 func Down(db *gorm.DB) error {
+	return withMigrationLock(db, down)
+}
+
+func down(db *gorm.DB) error {
 	migrations, err := load()
 	if err != nil {
 		return err

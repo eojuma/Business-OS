@@ -105,6 +105,87 @@ func setupTestDB(t *testing.T) (*gorm.DB, uuid.UUID) {
 	return db, testBusinessSchema.ID
 }
 
+func TestRepositoryGetAging(t *testing.T) {
+	db, businessID := setupTestDB(t)
+	asOf := time.Date(2026, time.November, 1, 0, 30, 0, 0, time.UTC)
+	dayEnd := time.Date(2026, time.November, 1, 23, 59, 59, 0, time.UTC)
+	type expected struct {
+		bucket AgingBucket
+		days   int
+	}
+	want := make(map[uuid.UUID]expected)
+	for _, tc := range []struct {
+		days   int
+		bucket AgingBucket
+	}{
+		{-1, AgingCurrent}, {0, AgingCurrent}, {1, AgingDays1To30}, {30, AgingDays1To30},
+		{31, AgingDays31To60}, {60, AgingDays31To60}, {61, AgingDays61To90}, {90, AgingDays61To90},
+		{91, AgingDays90Plus}, {365, AgingDays90Plus},
+	} {
+		dueDate := dayEnd.AddDate(0, 0, -tc.days)
+		supplier := Supplier{BusinessID: businessID, Name: fmt.Sprintf("Due %d days ago", tc.days), OutstandingBalance: 100, DueDate: &dueDate}
+		if err := db.Create(&supplier).Error; err != nil {
+			t.Fatal(err)
+		}
+		want[supplier.ID] = expected{bucket: tc.bucket, days: max(0, tc.days)}
+	}
+	undated := Supplier{BusinessID: businessID, Name: "No due date", OutstandingBalance: 100}
+	if err := db.Create(&undated).Error; err != nil {
+		t.Fatal(err)
+	}
+	want[undated.ID] = expected{bucket: AgingCurrent}
+
+	otherBusiness := business.Business{ID: uuid.New(), Name: "Other aging business"}
+	if err := db.Create(&otherBusiness).Error; err != nil {
+		t.Fatal(err)
+	}
+	for _, supplier := range []Supplier{
+		{BusinessID: otherBusiness.ID, Name: "Other business", OutstandingBalance: 500, DueDate: &dayEnd},
+		{BusinessID: businessID, Name: "Paid off", OutstandingBalance: 0, DueDate: &dayEnd},
+		{BusinessID: businessID, Name: "Archived aging supplier", OutstandingBalance: 500, DeletedAt: gorm.DeletedAt{Time: asOf, Valid: true}},
+	} {
+		if err := db.Create(&supplier).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	for _, zone := range []string{"Pacific/Honolulu", "Asia/Tokyo"} {
+		t.Run(zone, func(t *testing.T) {
+			if err := db.Exec("SELECT set_config('TimeZone', ?, false)", zone).Error; err != nil {
+				t.Fatal(err)
+			}
+			rows, err := NewRepository(db).GetAging(businessID, asOf.In(time.FixedZone("EAT", 3*60*60)))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(rows) != len(want) {
+				t.Fatalf("rows = %d, want %d", len(rows), len(want))
+			}
+			seen := make(map[uuid.UUID]bool)
+			for i, row := range rows {
+				expectedRow, ok := want[row.ID]
+				if !ok || seen[row.ID] {
+					t.Fatalf("unexpected or repeated supplier %s", row.ID)
+				}
+				seen[row.ID] = true
+				if row.Bucket != expectedRow.bucket || row.DaysOverdue != expectedRow.days || row.OutstandingBalance != 100 {
+					t.Fatalf("row = %+v, want bucket %s, days %d, balance 100", row, expectedRow.bucket, expectedRow.days)
+				}
+				if (row.DueDate == nil) != (row.ID == undated.ID) {
+					t.Fatalf("unexpected due date for %s: %v", row.ID, row.DueDate)
+				}
+				if i > 0 && rows[i-1].Name > row.Name {
+					t.Fatal("suppliers are not sorted by name")
+				}
+			}
+		})
+	}
+	rows, err := NewRepository(db).GetAging(uuid.New(), asOf)
+	if err != nil || len(rows) != 0 {
+		t.Fatalf("empty business report = %+v, %v", rows, err)
+	}
+}
+
 func TestRepositoryCreate(t *testing.T) {
 	db, businessID := setupTestDB(t)
 	repo := NewRepository(db)

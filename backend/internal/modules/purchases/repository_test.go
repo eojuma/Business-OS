@@ -95,10 +95,13 @@ type purchaseFixture struct {
 	supplierID uuid.UUID
 }
 
+var seedCounter int
+
 func seedPurchase(t *testing.T, db *gorm.DB, businessID uuid.UUID, quantityA, quantityB int64) purchaseFixture {
 	t.Helper()
 
-	supplier := &suppliers.Supplier{BusinessID: businessID, Name: "Test Supplier", PaymentTerms: suppliers.PaymentTermsNet30}
+	seedCounter++
+	supplier := &suppliers.Supplier{BusinessID: businessID, Name: fmt.Sprintf("Test Supplier %d", seedCounter), PaymentTerms: suppliers.PaymentTermsNet30}
 	if err := db.Create(supplier).Error; err != nil {
 		t.Fatalf("create supplier: %v", err)
 	}
@@ -550,6 +553,27 @@ func TestRepositoryUpdateDraftReplacesItemsAndTotals(t *testing.T) {
 	}
 	if len(updated.Items) != 2 {
 		t.Fatalf("items = %d, want 2", len(updated.Items))
+	}
+	productCounts := make(map[uuid.UUID]int, 2)
+	for _, item := range updated.Items {
+		productCounts[item.ProductID]++
+		switch item.ProductID {
+		case fixture.productA:
+			if item.Quantity != 5 || item.UnitCost != 150 || item.Note != "rush" {
+				t.Fatalf("product A line = qty %d cost %d note %q, want qty 5 cost 150 note rush", item.Quantity, item.UnitCost, item.Note)
+			}
+		case fixture.productB:
+			if item.Quantity != 1 || item.UnitCost != 400 {
+				t.Fatalf("product B line = qty %d cost %d, want qty 1 cost 400", item.Quantity, item.UnitCost)
+			}
+		default:
+			t.Fatalf("unexpected product %s in updated items", item.ProductID)
+		}
+	}
+	for _, productID := range []uuid.UUID{fixture.productA, fixture.productB} {
+		if count := productCounts[productID]; count != 1 {
+			t.Fatalf("product %s appears %d times, want exactly once", productID, count)
+		}
 	}
 
 	var count int64

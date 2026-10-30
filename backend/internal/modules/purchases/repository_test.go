@@ -554,7 +554,9 @@ func TestRepositoryUpdateDraftReplacesItemsAndTotals(t *testing.T) {
 	if len(updated.Items) != 2 {
 		t.Fatalf("items = %d, want 2", len(updated.Items))
 	}
+	productCounts := make(map[uuid.UUID]int, 2)
 	for _, item := range updated.Items {
+		productCounts[item.ProductID]++
 		switch item.ProductID {
 		case fixture.productA:
 			if item.Quantity != 5 || item.UnitCost != 150 || item.Note != "rush" {
@@ -566,6 +568,11 @@ func TestRepositoryUpdateDraftReplacesItemsAndTotals(t *testing.T) {
 			}
 		default:
 			t.Fatalf("unexpected product %s in updated items", item.ProductID)
+		}
+	}
+	for _, productID := range []uuid.UUID{fixture.productA, fixture.productB} {
+		if count := productCounts[productID]; count != 1 {
+			t.Fatalf("product %s appears %d times, want exactly once", productID, count)
 		}
 	}
 

@@ -1,6 +1,8 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { Suspense, useCallback, useEffect, useRef, useState } from "react";
+import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import {
   AlertCircle,
   CheckCircle2,
@@ -13,6 +15,7 @@ import {
 } from "lucide-react";
 import { api } from "@/lib/api";
 import { PageHeader, formatMoney } from "@/components/app-shell";
+import { SupplierAgingReport } from "@/components/supplier-aging-report";
 
 type Supplier = {
   id: string;
@@ -95,6 +98,12 @@ function isOverdue(dueDate: string | null | undefined, balance: number): boolean
 }
 
 export default function SuppliersPage() {
+  return <Suspense fallback={<p role="status" className="text-muted">Loading suppliers…</p>}><SuppliersContent /></Suspense>;
+}
+
+function SuppliersContent() {
+  const searchParams = useSearchParams();
+  const agingActive = searchParams.get("tab") === "aging";
   const [items, setItems] = useState<Supplier[]>([]);
   const [meta, setMeta] = useState<Meta>({ page: 1, limit: 20, total: 0, totalPages: 0 });
   const [loading, setLoading] = useState(true);
@@ -161,6 +170,7 @@ export default function SuppliersPage() {
   }, [query]);
 
   useEffect(() => {
+    if (agingActive) return;
     const controller = new AbortController();
     setLoading(true);
     setLoadError("");
@@ -203,7 +213,7 @@ export default function SuppliersPage() {
       });
 
     return () => controller.abort();
-  }, [page, limit, search, reloadKey, pushToast]);
+  }, [page, limit, search, reloadKey, pushToast, agingActive]);
 
   useEffect(() => {
     setPageInput(String(page));
@@ -227,6 +237,13 @@ export default function SuppliersPage() {
     setPayments([]);
     setHistoryLoading(false);
   }, []);
+
+  useEffect(() => {
+    if (agingActive) {
+      setShowCreate(false);
+      closePayments();
+    }
+  }, [agingActive, closePayments]);
 
   useEffect(() => {
     if (!paymentSupplier) return;
@@ -446,6 +463,7 @@ export default function SuppliersPage() {
         title="Suppliers"
         description="Manage vendors, purchase history and outstanding payments."
         action={
+          !agingActive &&
           <button
             className="btn-primary"
             onClick={() => setShowCreate((value) => !value)}
@@ -458,6 +476,12 @@ export default function SuppliersPage() {
         }
       />
 
+      <nav aria-label="Supplier views" className="mb-6 flex gap-1 border-b border-border">
+        <Link href="/dashboard/suppliers" aria-current={!agingActive ? "page" : undefined} className={`border-b-2 px-4 py-3 text-sm font-semibold ${!agingActive ? "border-primary text-primary" : "border-transparent text-muted hover:text-foreground"}`}>Suppliers</Link>
+        <Link href="/dashboard/suppliers?tab=aging" aria-current={agingActive ? "page" : undefined} className={`border-b-2 px-4 py-3 text-sm font-semibold ${agingActive ? "border-primary text-primary" : "border-transparent text-muted hover:text-foreground"}`}>Aging</Link>
+      </nav>
+      {agingActive && <SupplierAgingReport />}
+      <div hidden={agingActive}>
       {showCreate && (
         <form
           id="add-supplier-form"
@@ -735,6 +759,8 @@ export default function SuppliersPage() {
             </div>
           </div>
         )}
+      </div>
+
       </div>
 
       {paymentSupplier && (

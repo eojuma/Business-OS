@@ -1,6 +1,10 @@
 package suppliers
 
 import (
+	"context"
+	"encoding/json"
+	"errors"
+	"math"
 	"sort"
 	"strings"
 	"testing"
@@ -13,6 +17,106 @@ import (
 type testRepository struct {
 	suppliers map[uuid.UUID]*Supplier
 	payments  map[uuid.UUID][]Payment
+	getAging  func(uuid.UUID, time.Time) ([]AgingSupplier, error)
+}
+
+func (r *testRepository) GetAging(_ context.Context, businessID uuid.UUID, asOf time.Time) ([]AgingSupplier, error) {
+	if r.getAging != nil {
+		return r.getAging(businessID, asOf)
+	}
+	return nil, nil
+}
+
+func TestGetAgingGroupsSuppliersAndTotals(t *testing.T) {
+	businessID := uuid.New()
+	asOf := time.Date(2026, time.October, 30, 3, 0, 0, 0, time.FixedZone("EAT", 3*60*60))
+	dueDate := asOf.AddDate(0, 0, -1)
+	buckets := []AgingBucket{AgingCurrent, AgingDays1To30, AgingDays31To60, AgingDays61To90, AgingDays90Plus}
+	rows := make([]AgingSupplier, 0, len(buckets)+1)
+	for _, bucket := range buckets {
+		rows = append(rows, AgingSupplier{ID: uuid.New(), Name: string(bucket), OutstandingBalance: 100, Bucket: bucket})
+	}
+	rows = append(rows, AgingSupplier{ID: uuid.New(), Name: "Second overdue supplier", OutstandingBalance: 250, DueDate: &dueDate, DaysOverdue: 1, Bucket: AgingDays1To30})
+	repo := newTestRepository()
+	repo.getAging = func(gotID uuid.UUID, gotAsOf time.Time) ([]AgingSupplier, error) {
+		if gotID != businessID || !gotAsOf.Equal(asOf) || gotAsOf.Location() != time.UTC {
+			t.Fatalf("aging query = %s, %v; want %s, %v in UTC", gotID, gotAsOf, businessID, asOf)
+		}
+		return rows, nil
+	}
+	report, err := NewService(repo).GetAging(context.Background(), businessID, asOf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !report.AsOf.Equal(asOf) {
+		t.Fatalf("as_of = %v, want %v", report.AsOf, asOf)
+	}
+	groups := map[AgingBucket][]AgingSupplier{
+		AgingCurrent: report.Current, AgingDays1To30: report.Days1To30,
+		AgingDays31To60: report.Days31To60, AgingDays61To90: report.Days61To90, AgingDays90Plus: report.Days90Plus,
+	}
+	for _, bucket := range buckets {
+		wantCount, wantTotal := 1, int64(100)
+		if bucket == AgingDays1To30 {
+			wantCount, wantTotal = 2, 350
+		}
+		if len(groups[bucket]) != wantCount || report.Totals[bucket] != wantTotal {
+			t.Fatalf("bucket %s = %d suppliers, %d total; want %d, %d", bucket, len(groups[bucket]), report.Totals[bucket], wantCount, wantTotal)
+		}
+	}
+	got := report.Days1To30[1]
+	if got.ID != rows[5].ID || got.Name != rows[5].Name || got.DaysOverdue != 1 || got.DueDate == nil || !got.DueDate.Equal(dueDate) {
+		t.Fatalf("supplier details were lost: %+v", got)
+	}
+}
+
+func TestGetAgingEmptyReportJSON(t *testing.T) {
+	report, err := NewService(newTestRepository()).GetAging(context.Background(), uuid.New(), time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := json.Marshal(report)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var data map[string]json.RawMessage
+	if err := json.Unmarshal(encoded, &data); err != nil {
+		t.Fatal(err)
+	}
+	for _, bucket := range []AgingBucket{AgingCurrent, AgingDays1To30, AgingDays31To60, AgingDays61To90, AgingDays90Plus} {
+		if string(data[string(bucket)]) != "[]" {
+			t.Fatalf("empty bucket %s = %s, want []", bucket, data[string(bucket)])
+		}
+		if total, ok := report.Totals[bucket]; !ok || total != 0 {
+			t.Fatalf("empty total %s = %d, present %v", bucket, total, ok)
+		}
+	}
+}
+
+func TestGetAgingErrors(t *testing.T) {
+	queryError := errors.New("query failed")
+	for _, tc := range []struct {
+		name string
+		rows []AgingSupplier
+		err  error
+		want error
+	}{
+		{name: "repository failure", err: queryError, want: queryError},
+		{name: "total overflow", rows: []AgingSupplier{
+			{Bucket: AgingCurrent, OutstandingBalance: math.MaxInt64},
+			{Bucket: AgingCurrent, OutstandingBalance: 1},
+		}, want: ErrAgingTotalOverflow},
+		{name: "unknown bucket", rows: []AgingSupplier{{Bucket: "invalid", OutstandingBalance: 100}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			repo := newTestRepository()
+			repo.getAging = func(uuid.UUID, time.Time) ([]AgingSupplier, error) { return tc.rows, tc.err }
+			report, err := NewService(repo).GetAging(context.Background(), uuid.New(), time.Now())
+			if report != nil || err == nil || (tc.want != nil && !errors.Is(err, tc.want)) {
+				t.Fatalf("GetAging = %+v, %v; want nil report and %v", report, err, tc.want)
+			}
+		})
+	}
 }
 
 func newTestRepository() *testRepository {

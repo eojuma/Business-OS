@@ -37,7 +37,7 @@ The backend is a Go modular monolith (Gin + GORM + PostgreSQL + Redis). The fron
 | Inventory | Yes | Yes | Stock levels and an append-only movement ledger, written transactionally |
 | Sales | Yes | Yes | Multi-line sales, stock decrement, customer credit charge in one transaction |
 | Customers | Yes | Yes | Profiles, credit limits, balance tracking |
-| Suppliers | Yes | Yes | Profiles, payment terms and due dates, outstanding balances, payments, archive/restore |
+| Suppliers | Yes | Yes | Profiles, payment terms and due dates, outstanding balances, payments, archive/restore, aging report |
 | Purchases | Yes | Yes | Draft purchase orders, sequential PO numbers, partial receiving, supplier debt updates |
 | Finance | Yes | Yes | Expenses, profit, cash flow, date-filtered summaries |
 | Reports | Yes | Yes | Daily sales and period aggregates computed in SQL |
@@ -45,6 +45,14 @@ The backend is a Go modular monolith (Gin + GORM + PostgreSQL + Redis). The fron
 | Notifications | Yes | — | Low-stock alerts with severity and product context; polling API |
 | Assistant | Yes | Yes | Natural-language sale preview with explicit confirmation |
 | Receipt OCR | Yes | Yes | Photo to extracted line items, reviewed before saving |
+
+### Supplier aging
+
+Open **Suppliers → Aging** to view current outstanding balances in the current, 1–30, 31–60, 61–90, and more-than-90-day buckets. Each bucket has a total in KSh and links to supplier details and payment history.
+
+`GET /api/v1/suppliers/aging` accepts an optional RFC3339 `as_of` timestamp (defaults to now). The normal `{ success, data }` response contains `as_of`, arrays named `current`, `days_1_30`, `days_31_60`, `days_61_90`, `days_90_plus`, and `totals` with the same bucket keys. Entries contain `id`, `name`, `outstanding_balance` in integer minor units, nullable `due_date`, and `days_overdue`. Empty buckets are arrays with zero totals; invalid timestamps return 400.
+
+The report includes active suppliers with positive balances for the authenticated business. It ages **current balances** using each supplier's saved due date and UTC calendar days, rather than reconstructing historical balances or allocating debt per invoice. Missing, future, and same-day due dates are current; day 90 belongs to `days_61_90` and day 91 starts `days_90_plus`.
 
 ---
 

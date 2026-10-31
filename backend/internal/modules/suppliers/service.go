@@ -1,8 +1,12 @@
 package suppliers
 
 import (
+	"context"
 	"errors"
+	"fmt"
+	"math"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"
@@ -14,6 +18,7 @@ var (
 	ErrPaymentExceedsBalance = errors.New("payment exceeds supplier outstanding balance")
 	ErrInvalidPaymentTerms   = errors.New("invalid payment terms")
 	ErrSupplierHasPurchases  = errors.New("supplier has purchases and cannot be archived")
+	ErrAgingTotalOverflow    = errors.New("supplier aging total exceeds the supported amount")
 )
 
 type CreateInput struct {
@@ -32,6 +37,7 @@ type Service interface {
 	Get(id, businessID uuid.UUID) (*Supplier, error)
 	List(businessID uuid.UUID, includeArchived bool) ([]Supplier, error)
 	ListPaginated(businessID uuid.UUID, page, limit int, search string, includeArchived bool) ([]Supplier, int64, error)
+	GetAging(ctx context.Context, businessID uuid.UUID, asOf time.Time) (*AgingReport, error)
 	Update(id, businessID uuid.UUID, input UpdateInput) (*Supplier, error)
 	Delete(id, businessID uuid.UUID) error
 	Restore(id, businessID uuid.UUID) (*Supplier, error)
@@ -69,6 +75,44 @@ func (s *service) List(businessID uuid.UUID, includeArchived bool) ([]Supplier, 
 
 func (s *service) ListPaginated(businessID uuid.UUID, page, limit int, search string, includeArchived bool) ([]Supplier, int64, error) {
 	return s.repo.ListPaginated(businessID, page, limit, strings.TrimSpace(search), includeArchived)
+}
+
+func (s *service) GetAging(ctx context.Context, businessID uuid.UUID, asOf time.Time) (*AgingReport, error) {
+	rows, err := s.repo.GetAging(ctx, businessID, asOf.UTC())
+	if err != nil {
+		return nil, err
+	}
+	report := &AgingReport{
+		AsOf:    asOf.UTC(),
+		Current: []AgingSupplier{}, Days1To30: []AgingSupplier{},
+		Days31To60: []AgingSupplier{}, Days61To90: []AgingSupplier{}, Days90Plus: []AgingSupplier{},
+		Totals: map[AgingBucket]int64{
+			AgingCurrent: 0, AgingDays1To30: 0, AgingDays31To60: 0, AgingDays61To90: 0, AgingDays90Plus: 0,
+		},
+	}
+	for _, row := range rows {
+		var bucket *[]AgingSupplier
+		switch row.Bucket {
+		case AgingCurrent:
+			bucket = &report.Current
+		case AgingDays1To30:
+			bucket = &report.Days1To30
+		case AgingDays31To60:
+			bucket = &report.Days31To60
+		case AgingDays61To90:
+			bucket = &report.Days61To90
+		case AgingDays90Plus:
+			bucket = &report.Days90Plus
+		default:
+			return nil, fmt.Errorf("unknown supplier aging bucket %q", row.Bucket)
+		}
+		if row.OutstandingBalance > math.MaxInt64-report.Totals[row.Bucket] {
+			return nil, ErrAgingTotalOverflow
+		}
+		*bucket = append(*bucket, row)
+		report.Totals[row.Bucket] += row.OutstandingBalance
+	}
+	return report, nil
 }
 
 func (s *service) Update(id, businessID uuid.UUID, input UpdateInput) (*Supplier, error) {

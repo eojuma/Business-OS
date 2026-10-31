@@ -17,6 +17,7 @@ export default function LoginPage() {
   const [sessionExpired, setSessionExpired] = useState(false);
   const [pendingEmail, setPendingEmail] = useState("");
   const [resendNotice, setResendNotice] = useState("");
+  const [resending, setResending] = useState(false);
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
@@ -50,13 +51,16 @@ export default function LoginPage() {
   }
 
   async function resendVerification() {
-    if (!pendingEmail) return;
+    if (!pendingEmail || resending) return;
     setResendNotice("");
+    setResending(true);
     try {
       await api.post("/auth/email/resend", { email: pendingEmail });
       setResendNotice("Verification email sent. Check your inbox.");
     } catch {
       setResendNotice("Could not send the email. Try again shortly.");
+    } finally {
+      setResending(false);
     }
   }
 
@@ -116,9 +120,10 @@ export default function LoginPage() {
                 <button
                   type="button"
                   onClick={resendVerification}
-                  className="font-semibold underline"
+                  disabled={resending}
+                  className="font-semibold underline disabled:opacity-50"
                 >
-                  Resend verification email
+                  {resending ? "Sending…" : "Resend verification email"}
                 </button>
                 {resendNotice && <p className="mt-1">{resendNotice}</p>}
               </div>

@@ -4,6 +4,8 @@ Business OS is a multi-tenant operations platform for hardware retailers. It rep
 
 **Live deployment:** <https://business-os-tqu3.onrender.com> — the frontend is served from Render and points at the API through `NEXT_PUBLIC_API_URL`.
 
+**Current release:** [v0.1.0 — Initial release](https://github.com/eojuma/Business-OS/releases/tag/v0.1.0) · [Changelog](CHANGELOG.md)
+
 The backend is a Go modular monolith (Gin + GORM + PostgreSQL + Redis). The frontend is a Next.js 14 App Router application. Data is scoped per business, money is stored in integer minor units, and every cross-module write runs in one database transaction.
 
 ---
@@ -22,6 +24,7 @@ The backend is a Go modular monolith (Gin + GORM + PostgreSQL + Redis). The fron
 - [Database migrations](#database-migrations)
 - [Deployment and operations](#deployment-and-operations)
 - [Roadmap and known limitations](#roadmap-and-known-limitations)
+- [Releases and versioning](#releases-and-versioning)
 - [Contributing](#contributing)
 - [License](#license)
 
@@ -43,7 +46,7 @@ The backend is a Go modular monolith (Gin + GORM + PostgreSQL + Redis). The fron
 | Reports | Yes | Yes | Daily sales and period aggregates computed in SQL |
 | Analytics | Yes | Yes | Overview, top-profit and slow-moving products |
 | Notifications | Yes | — | Low-stock alerts with severity and product context; polling API |
-| Assistant | Yes | Yes | Natural-language sale preview with explicit confirmation |
+| Assistant | Yes | Yes | Sale preview with confirmation; multi-conversation history in a drawer, auto-titled and renameable chats, quick actions |
 | Receipt OCR | Yes | Yes | Photo to extracted line items, reviewed before saving |
 
 ### Supplier aging
@@ -122,6 +125,7 @@ Business-OS/
 ├── docker-compose.yml               Postgres, Redis, API, web
 ├── Makefile                         Common local tasks
 ├── mise.toml                        CI-equivalent local task definitions
+├── CHANGELOG.md                     Release history (Keep a Changelog format)
 └── .github/workflows/               CI and scheduled database backups
 ```
 
@@ -403,6 +407,17 @@ Dumps are produced with `--clean --if-exists`, so a restore replaces the existin
 - The assistant and receipt OCR require an external OpenAI-compatible provider; both are optional.
 - CORS accepts a configurable list of origins but is intended for a single deployed environment.
 - Coverage varies by module; the CI gate is the race-enabled suite, not a coverage threshold.
+
+---
+
+## Releases and versioning
+
+Releases follow [Semantic Versioning](https://semver.org) and are tagged from `main` only after CI passes.
+
+- The `0.x` line is pre-1.0: minor versions add features, patch versions contain fixes.
+- `v0.1.0` is the initial release. Everything that shipped is recorded in [CHANGELOG.md](CHANGELOG.md).
+- Tags are annotated (`vMAJOR.MINOR.PATCH`) and every GitHub Release uses the matching changelog section as its notes.
+- Release checklist: green CI on `main` → update `CHANGELOG.md` → tag on `main` → publish the GitHub Release.
 
 ---
 

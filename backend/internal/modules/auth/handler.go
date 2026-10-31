@@ -86,11 +86,13 @@ func (h *Handler) Me(c *gin.Context) {
 }
 
 type registerRequest struct {
-	BusinessID string `json:"business_id" binding:"required,uuid"`
-	Name       string `json:"name" binding:"required"`
-	Email      string `json:"email" binding:"required,email"`
-	Password   string `json:"password" binding:"required,min=8"`
-	Role       string `json:"role"`
+	BusinessID    string `json:"business_id"`
+	BusinessName  string `json:"business_name"`
+	BusinessPhone string `json:"business_phone"`
+	Name          string `json:"name" binding:"required"`
+	Email         string `json:"email" binding:"required,email"`
+	Password      string `json:"password" binding:"required,min=8"`
+	Role          string `json:"role"`
 }
 
 func (h *Handler) Register(c *gin.Context) {
@@ -100,18 +102,28 @@ func (h *Handler) Register(c *gin.Context) {
 		return
 	}
 
-	businessID, err := uuid.Parse(req.BusinessID)
-	if err != nil {
-		response.Error(c, http.StatusBadRequest, "invalid business_id")
+	if req.BusinessID == "" && req.BusinessName == "" {
+		response.Error(c, http.StatusBadRequest, "a business name or business_id is required")
 		return
+	}
+	var businessID uuid.UUID
+	if req.BusinessID != "" {
+		parsed, err := uuid.Parse(req.BusinessID)
+		if err != nil {
+			response.Error(c, http.StatusBadRequest, "invalid business_id")
+			return
+		}
+		businessID = parsed
 	}
 
 	user, err := h.service.Register(RegisterInput{
-		BusinessID: businessID,
-		Name:       req.Name,
-		Email:      req.Email,
-		Password:   req.Password,
-		Role:       req.Role,
+		BusinessID:    businessID,
+		BusinessName:  req.BusinessName,
+		BusinessPhone: req.BusinessPhone,
+		Name:          req.Name,
+		Email:         req.Email,
+		Password:      req.Password,
+		Role:          req.Role,
 	})
 	if err != nil {
 		if errors.Is(err, ErrBusinessNotFound) {
@@ -120,6 +132,10 @@ func (h *Handler) Register(c *gin.Context) {
 		}
 		if errors.Is(err, ErrEmailTaken) {
 			response.Error(c, http.StatusConflict, err.Error())
+			return
+		}
+		if errors.Is(err, ErrBusinessRequired) {
+			response.Error(c, http.StatusBadRequest, err.Error())
 			return
 		}
 		response.Error(c, http.StatusInternalServerError, "failed to register user")

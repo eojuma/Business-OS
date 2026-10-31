@@ -6,6 +6,7 @@ import (
 
 	"github.com/businessos/backend/internal/config"
 	"github.com/businessos/backend/internal/modules/business"
+	"github.com/businessos/backend/internal/shared/email"
 	"github.com/businessos/backend/internal/shared/middleware"
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
@@ -40,7 +41,7 @@ func RegisterRoutes(rg *gin.RouterGroup, db *gorm.DB, cfg *config.Config) {
 		log.Printf("auth: google sign-in disabled: GOOGLE_CLIENT_ID is not set")
 	}
 
-	svc := NewService(repo, cfg, businessRepo, googleVerifier, &businessOwnerCreator{db: db})
+	svc := NewService(repo, cfg, businessRepo, googleVerifier, &businessOwnerCreator{db: db}, email.NewFromConfig(cfg))
 	handler := NewHandler(svc)
 
 	authGroup := rg.Group("/auth")
@@ -48,8 +49,14 @@ func RegisterRoutes(rg *gin.RouterGroup, db *gorm.DB, cfg *config.Config) {
 		authGroup.POST("/register", handler.Register)
 		authGroup.POST("/login", handler.Login)
 		authGroup.POST("/google", handler.Google)
+		authGroup.POST("/email/verify", handler.VerifyEmail)
+		authGroup.POST("/email/resend", handler.ResendVerification)
 	}
 	authGroup.GET("/me", middleware.RequireAuth(cfg), handler.Me)
+	linkGroup := rg.Group("/auth")
+	linkGroup.Use(middleware.RequireAuth(cfg))
+	linkGroup.POST("/google/link", handler.LinkGoogle)
+	linkGroup.POST("/google/unlink", handler.UnlinkGoogle)
 	team := rg.Group("/users")
 	team.Use(middleware.RequireAuth(cfg), middleware.RequireRole("owner"))
 	team.GET("", handler.ListTeam)

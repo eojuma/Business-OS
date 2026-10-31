@@ -15,6 +15,9 @@ export default function LoginPage() {
   const [error, setError] = useState("");
   const [needsWorkspace, setNeedsWorkspace] = useState(false);
   const [sessionExpired, setSessionExpired] = useState(false);
+  const [pendingEmail, setPendingEmail] = useState("");
+  const [resendNotice, setResendNotice] = useState("");
+  const [resending, setResending] = useState(false);
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
@@ -27,15 +30,37 @@ export default function LoginPage() {
     e.preventDefault();
     setError("");
     setNeedsWorkspace(false);
+    setPendingEmail("");
+    setResendNotice("");
     setLoading(true);
     try {
       const r = await api.post("/auth/login", { email, password });
       localStorage.setItem("token", r.data.data.token);
       router.push("/dashboard");
     } catch (e: any) {
-      setError(e.response?.data?.error || "Unable to sign in");
+      const code = e.response?.data?.code;
+      if (code === "email_not_verified") {
+        setPendingEmail(email);
+        setError(e.response?.data?.error || "Verify your email before signing in.");
+      } else {
+        setError(e.response?.data?.error || "Unable to sign in");
+      }
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function resendVerification() {
+    if (!pendingEmail || resending) return;
+    setResendNotice("");
+    setResending(true);
+    try {
+      await api.post("/auth/email/resend", { email: pendingEmail });
+      setResendNotice("Verification email sent. Check your inbox.");
+    } catch {
+      setResendNotice("Could not send the email. Try again shortly.");
+    } finally {
+      setResending(false);
     }
   }
 
@@ -89,6 +114,19 @@ export default function LoginPage() {
                 </Link>{" "}
                 to continue.
               </p>
+            )}
+            {pendingEmail && (
+              <div className="rounded-lg bg-warning-soft p-3 text-sm text-warning-strong">
+                <button
+                  type="button"
+                  onClick={resendVerification}
+                  disabled={resending}
+                  className="font-semibold underline disabled:opacity-50"
+                >
+                  {resending ? "Sending…" : "Resend verification email"}
+                </button>
+                {resendNotice && <p className="mt-1">{resendNotice}</p>}
+              </div>
             )}
 
             <GoogleSignIn

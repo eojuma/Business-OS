@@ -36,6 +36,18 @@ type Config struct {
 	// Identity Services ID tokens. When empty, /auth/google returns 503.
 	GoogleClientID string
 
+	// SMTP settings deliver email-verification messages. When SMTPHost is empty
+	// the sender falls back to logging links (development only).
+	SMTPHost     string
+	SMTPPort     string
+	SMTPUsername string
+	SMTPPassword string
+	SMTPFrom     string
+	SMTPTLS      bool
+
+	// EmailVerificationTTLHours bounds how long a verification link is valid.
+	EmailVerificationTTLHours int
+
 	AIProvider string
 	AIAPIKey   string
 	AIModel    string
@@ -73,6 +85,15 @@ func Load() *Config {
 		JWTExpiryHours: getEnvInt("JWT_EXPIRY_HOURS", 24),
 
 		GoogleClientID: getEnv("GOOGLE_CLIENT_ID", ""),
+
+		SMTPHost:     getEnv("SMTP_HOST", ""),
+		SMTPPort:     getEnv("SMTP_PORT", "587"),
+		SMTPUsername: getEnv("SMTP_USERNAME", ""),
+		SMTPPassword: getEnv("SMTP_PASSWORD", ""),
+		SMTPFrom:     getEnv("SMTP_FROM", "Business OS <no-reply@businessos.local>"),
+		SMTPTLS:      getEnvBool("SMTP_TLS", true),
+
+		EmailVerificationTTLHours: getEnvInt("EMAIL_VERIFICATION_TTL_HOURS", 24),
 
 		AIProvider: getEnv("AI_PROVIDER", "gemini"),
 		AIAPIKey:   getEnv("AI_API_KEY", ""),
@@ -123,6 +144,14 @@ func (c *Config) Validate() error {
 	if c.DBSSLMode == "disable" {
 		return fmt.Errorf("DB_SSLMODE must enable TLS in production")
 	}
+	// Email/password sign-ups verify their address; without SMTP the message
+	// cannot be delivered, so fail fast instead of silently breaking sign-up.
+	if c.SMTPHost == "" {
+		return fmt.Errorf("SMTP_HOST must be configured in production so verification emails can be delivered")
+	}
+	if c.SMTPFrom == "" {
+		return fmt.Errorf("SMTP_FROM must be configured in production")
+	}
 	return nil
 }
 
@@ -162,6 +191,15 @@ func getEnvInt(key string, fallback int) int {
 	if v, ok := os.LookupEnv(key); ok {
 		if i, err := strconv.Atoi(v); err == nil {
 			return i
+		}
+	}
+	return fallback
+}
+
+func getEnvBool(key string, fallback bool) bool {
+	if v, ok := os.LookupEnv(key); ok && v != "" {
+		if b, err := strconv.ParseBool(v); err == nil {
+			return b
 		}
 	}
 	return fallback

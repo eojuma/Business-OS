@@ -34,7 +34,8 @@ func NewPostgresFromURL(databaseURL string) *gorm.DB {
 
 func openPostgres(dsn string, logLevel logger.LogLevel) *gorm.DB {
 	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{
-		Logger: logger.Default.LogMode(logLevel),
+		Logger:         logger.Default.LogMode(logLevel),
+		TranslateError: true,
 	})
 	if err != nil {
 		log.Fatalf("failed to connect to postgres: %v", err)

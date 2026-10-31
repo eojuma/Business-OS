@@ -30,6 +30,10 @@ interface GoogleSignInProps {
   onError?: (message: string) => void;
   /** Called when the button is ready, e.g. so pages can clear stale errors. */
   onReady?: () => void;
+  /** Called after a Google identity is linked to the signed-in account. */
+  onLinked?: (user: unknown) => void;
+  /** "signin" authenticates; "link" attaches Google to the current session. */
+  mode?: "signin" | "link";
   text?: "signin_with" | "signup_with" | "continue_with";
   disabled?: boolean;
 }
@@ -66,6 +70,8 @@ export function GoogleSignIn({
   onWorkspaceRequired,
   onError,
   onReady,
+  onLinked,
+  mode = "signin",
   text = "continue_with",
   disabled = false,
 }: GoogleSignInProps) {
@@ -74,6 +80,7 @@ export function GoogleSignIn({
   const workspaceRequiredRef = useRef(onWorkspaceRequired);
   const errorRef = useRef(onError);
   const readyRef = useRef(onReady);
+  const linkedRef = useRef(onLinked);
   const [busy, setBusy] = useState(false);
   const [timedOut, setTimedOut] = useState(false);
   const [attempt, setAttempt] = useState(0);
@@ -90,11 +97,20 @@ export function GoogleSignIn({
     readyRef.current = onReady;
   }, [onReady]);
 
+  useEffect(() => {
+    linkedRef.current = onLinked;
+  }, [onLinked]);
+
   const handleCredential = useCallback(
     async (credential: string) => {
       setBusy(true);
       try {
         // api's baseURL already includes /api/v1 (NEXT_PUBLIC_API_URL).
+        if (mode === "link") {
+          const response = await api.post("/auth/google/link", { credential });
+          linkedRef.current?.(response.data.data);
+          return;
+        }
         const response = await api.post("/auth/google", { credential });
         localStorage.setItem("token", response.data.data.token);
         router.replace("/dashboard");
@@ -111,7 +127,7 @@ export function GoogleSignIn({
         setBusy(false);
       }
     },
-    [router],
+    [router, mode],
   );
 
   // Keep the single GIS callback pointed at the latest component instance.

@@ -186,3 +186,77 @@ func TestRepositoryFindByEmailCaseInsensitive(t *testing.T) {
 		t.Fatalf("found user %v, want %v", found.ID, user.ID)
 	}
 }
+
+func TestRepositoryCreatePersistsUnverifiedFalse(t *testing.T) {
+	db, businessID := setupAuthTestDB(t)
+	repo := NewRepository(db)
+
+	user := &User{BusinessID: businessID, Name: "Unverified", Email: "unverified-db@example.com", EmailVerified: false}
+	if err := repo.Create(user); err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+
+	var stored User
+	if err := db.First(&stored, "id = ?", user.ID).Error; err != nil {
+		t.Fatalf("find user: %v", err)
+	}
+	if stored.EmailVerified {
+		t.Fatal("expected email_verified to stay false for a new sign-up")
+	}
+
+	if err := repo.MarkEmailVerified(user.ID); err != nil {
+		t.Fatalf("MarkEmailVerified failed: %v", err)
+	}
+	if err := db.First(&stored, "id = ?", user.ID).Error; err != nil {
+		t.Fatalf("find user after verify: %v", err)
+	}
+	if !stored.EmailVerified {
+		t.Fatal("expected email_verified to become true")
+	}
+}
+
+func TestRepositoryEmailVerificationTokenLifecycle(t *testing.T) {
+	db, businessID := setupAuthTestDB(t)
+	repo := NewRepository(db)
+
+	user := &User{BusinessID: businessID, Name: "Token User", Email: "token-db@example.com"}
+	if err := repo.Create(user); err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+
+	raw := "integration-token"
+	token := &EmailVerificationToken{UserID: user.ID, TokenHash: hashToken(raw), ExpiresAt: time.Now().Add(time.Hour)}
+	if err := repo.CreateEmailVerificationToken(token); err != nil {
+		t.Fatalf("CreateEmailVerificationToken failed: %v", err)
+	}
+
+	found, err := repo.FindEmailVerificationTokenByHash(hashToken(raw))
+	if err != nil {
+		t.Fatalf("FindEmailVerificationTokenByHash failed: %v", err)
+	}
+	if found.UserID != user.ID {
+		t.Fatalf("token user = %v, want %v", found.UserID, user.ID)
+	}
+
+	consumed, err := repo.ConsumeEmailVerificationToken(found.ID)
+	if err != nil {
+		t.Fatalf("ConsumeEmailVerificationToken failed: %v", err)
+	}
+	if !consumed {
+		t.Fatal("expected the first consume to succeed")
+	}
+	again, err := repo.ConsumeEmailVerificationToken(found.ID)
+	if err != nil {
+		t.Fatalf("second ConsumeEmailVerificationToken failed: %v", err)
+	}
+	if again {
+		t.Fatal("a token must not be consumable twice")
+	}
+
+	if err := repo.DeleteEmailVerificationTokensForUser(user.ID); err != nil {
+		t.Fatalf("DeleteEmailVerificationTokensForUser failed: %v", err)
+	}
+	if _, err := repo.FindEmailVerificationTokenByHash(hashToken(raw)); !errors.Is(err, gorm.ErrRecordNotFound) {
+		t.Fatalf("token should be gone, got %v", err)
+	}
+}

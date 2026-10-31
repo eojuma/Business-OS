@@ -14,9 +14,9 @@ type User struct {
 	PasswordHash *string   `gorm:"type:text" json:"-"`
 	GoogleID     *string   `gorm:"type:text" json:"-"`
 	// GoogleLinked mirrors GoogleID for clients without exposing the subject.
-	GoogleLinked  bool      `gorm:"-" json:"google_linked"`
-	Role          string    `gorm:"not null;default:'owner'" json:"role"`
-	Active        bool      `gorm:"default:true" json:"active"`
+	GoogleLinked bool   `gorm:"-" json:"google_linked"`
+	Role         string `gorm:"not null;default:'owner'" json:"role"`
+	Active       bool   `gorm:"default:true" json:"active"`
 	// No GORM default here: a `default:true` tag would make GORM omit the zero
 	// value on insert, letting the DB default verify new sign-ups. The
 	// column-level default only grandfathers rows added by the migration.

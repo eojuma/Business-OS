@@ -53,7 +53,7 @@ func (r *repository) List(businessID uuid.UUID, includeArchived bool) ([]Supplie
 // keeps calendar-day boundaries independent of the connection's time zone.
 func (r *repository) GetAging(ctx context.Context, businessID uuid.UUID, asOf time.Time) ([]AgingSupplier, error) {
 	var rows []AgingSupplier
-	err := r.db.Raw(`
+	err := r.db.WithContext(ctx).Raw(`
 		SELECT id, name, outstanding_balance, due_date, days_overdue,
 			CASE
 				WHEN days_overdue = 0 THEN 'current'

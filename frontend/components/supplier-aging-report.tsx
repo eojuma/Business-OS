@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
-import { AlertCircle, RefreshCw } from "lucide-react";
+import { AlertCircle, Printer, RefreshCw } from "lucide-react";
 import { api } from "@/lib/api";
 import { formatMoney } from "@/components/app-shell";
 
@@ -84,7 +84,22 @@ export function SupplierAgingReport({ initialAsOf }: { initialAsOf?: string | nu
   }, [asOf, reload]);
 
   return (
-    <section aria-label="Supplier aging report" className="space-y-6">
+    <section id="aging-report" aria-label="Supplier aging report" className="space-y-6">
+      <style>{`
+        @media print {
+          body * { visibility: hidden; }
+          #aging-report, #aging-report * { visibility: visible; }
+          #aging-report { position: absolute; left: 0; top: 0; width: 100%; }
+          #aging-report, #aging-report * {
+            /* Browsers print on white paper and omit backgrounds. */
+            color: #111827 !important;
+            background: #ffffff !important;
+            box-shadow: none !important;
+          }
+          .no-print { display: none !important; }
+          #aging-report section { break-inside: avoid; }
+        }
+      `}</style>
       <div className="panel flex flex-col gap-4 p-5 sm:flex-row sm:items-end sm:justify-between">
         <div className="max-w-2xl">
           <h2 className="text-lg font-semibold">Payables aging</h2>
@@ -94,7 +109,7 @@ export function SupplierAgingReport({ initialAsOf }: { initialAsOf?: string | nu
           </p>
           <p className="mt-1 text-xs text-subtle">Suppliers without a due date appear in Current.</p>
         </div>
-        <div className="flex flex-wrap items-end gap-3">
+        <div className="no-print flex flex-wrap items-end gap-3">
           <label className="text-sm font-medium">
             As of date (UTC)
             <input
@@ -116,6 +131,9 @@ export function SupplierAgingReport({ initialAsOf }: { initialAsOf?: string | nu
           </label>
           <button type="button" className="btn-secondary" onClick={() => setReload((value) => value + 1)} disabled={loading}>
             <RefreshCw size={15} /> Refresh
+          </button>
+          <button type="button" className="btn-secondary" onClick={() => window.print()}>
+            <Printer size={15} /> Print / Save as PDF
           </button>
         </div>
       </div>

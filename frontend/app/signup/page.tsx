@@ -36,6 +36,7 @@ export default function SignupPage() {
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [loading, setLoading] = useState(false);
+  const [verificationEmail, setVerificationEmail] = useState("");
 
   const googleMode = credential !== "";
 
@@ -57,14 +58,14 @@ export default function SignupPage() {
       }
 
       const b = await api.post("/business", { name: businessName, phone });
-      const r = await api.post("/auth/register", {
+      await api.post("/auth/register", {
         business_id: b.data.data.id,
         name: ownerName,
         email,
         password,
       });
-      localStorage.setItem("token", r.data.data.token);
-      router.push("/dashboard");
+      // No session until the owner confirms their email address.
+      setVerificationEmail(email);
     } catch (e: any) {
       setError(e.response?.data?.error || "Unable to create workspace");
     } finally {
@@ -87,6 +88,36 @@ export default function SignupPage() {
     setOwnerName("");
     setError("");
     setNotice("");
+  }
+
+  if (verificationEmail) {
+    return (
+      <main className="min-h-screen bg-background">
+        <nav className="mx-auto flex max-w-7xl items-center justify-between px-5 py-5 lg:px-8">
+          <Link href="/" className="text-xl font-bold">
+            Business <span className="text-primary">OS</span>
+          </Link>
+          <ThemeToggle />
+        </nav>
+        <div className="mx-auto max-w-md px-5 py-16 text-center">
+          <div className="panel p-8">
+            <h1 className="text-2xl font-bold">Check your email</h1>
+            <p className="mt-3 text-sm text-muted">
+              We sent a verification link to{" "}
+              <strong className="text-foreground">{verificationEmail}</strong>. Open
+              it to finish setting up your workspace.
+            </p>
+            <p className="mt-2 text-xs text-subtle">
+              The link expires in 24 hours. You can request a new one from the sign-in
+              page.
+            </p>
+            <Link href="/login" className="btn-primary mt-6 inline-flex">
+              Go to sign in
+            </Link>
+          </div>
+        </div>
+      </main>
+    );
   }
 
   return (

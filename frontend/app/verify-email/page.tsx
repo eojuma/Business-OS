@@ -1,38 +1,47 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api } from "@/lib/api";
 import { ThemeToggle } from "@/components/theme-toggle";
 
-type State = "verifying" | "success" | "invalid" | "expired";
+type State = "verifying" | "success" | "invalid" | "expired" | "retry";
 
 export default function VerifyEmailPage() {
   const [state, setState] = useState<State>("verifying");
   const [email, setEmail] = useState("");
   const [notice, setNotice] = useState("");
   const [sending, setSending] = useState(false);
+  // Strict Mode replays effects on the same instance; this ref makes the
+  // single-use token verification fire exactly once per page instance.
+  const startedRef = useRef(false);
 
   useEffect(() => {
+    if (startedRef.current) return;
+    startedRef.current = true;
+
     const token = new URLSearchParams(window.location.search).get("token") || "";
     if (!token) {
       setState("invalid");
       return;
     }
-    let active = true;
     (async () => {
       try {
         await api.post("/auth/email/verify", { token });
-        if (active) setState("success");
+        setState("success");
       } catch (e: any) {
-        if (!active) return;
         const code = e.response?.data?.code;
-        setState(code === "verification_expired" ? "expired" : "invalid");
+        if (code === "verification_expired") {
+          setState("expired");
+        } else if (code === "verification_invalid") {
+          setState("invalid");
+        } else {
+          // Server/network failure: the token is still unused, so retrying the
+          // same link is the right guidance.
+          setState("retry");
+        }
       }
     })();
-    return () => {
-      active = false;
-    };
   }, []);
 
   async function resend(e: React.FormEvent) {
@@ -77,6 +86,23 @@ export default function VerifyEmailPage() {
               <Link href="/login" className="btn-primary mt-6 inline-flex">
                 Go to sign in
               </Link>
+            </>
+          )}
+
+          {state === "retry" && (
+            <>
+              <h1 className="text-2xl font-bold">Could not verify your email</h1>
+              <p className="mt-3 text-sm text-muted">
+                Something went wrong on our side. Your link is still valid — try the
+                same link again.
+              </p>
+              <button
+                type="button"
+                onClick={() => window.location.reload()}
+                className="btn-primary mt-6 inline-flex"
+              >
+                Try again
+              </button>
             </>
           )}
 

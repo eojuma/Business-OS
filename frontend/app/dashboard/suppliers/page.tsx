@@ -480,7 +480,7 @@ function SuppliersContent() {
         <Link href="/dashboard/suppliers" aria-current={!agingActive ? "page" : undefined} className={`border-b-2 px-4 py-3 text-sm font-semibold ${!agingActive ? "border-primary text-primary" : "border-transparent text-muted hover:text-foreground"}`}>Suppliers</Link>
         <Link href="/dashboard/suppliers?tab=aging" aria-current={agingActive ? "page" : undefined} className={`border-b-2 px-4 py-3 text-sm font-semibold ${agingActive ? "border-primary text-primary" : "border-transparent text-muted hover:text-foreground"}`}>Aging</Link>
       </nav>
-      {agingActive && <SupplierAgingReport />}
+      {agingActive && <SupplierAgingReport initialAsOf={searchParams.get("as_of")} />}
       <div hidden={agingActive}>
       {showCreate && (
         <form

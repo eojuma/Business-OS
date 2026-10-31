@@ -154,7 +154,7 @@ func TestRepositoryGetAging(t *testing.T) {
 			if err := db.Exec("SELECT set_config('TimeZone', ?, false)", zone).Error; err != nil {
 				t.Fatal(err)
 			}
-			rows, err := NewRepository(db).GetAging(businessID, asOf.In(time.FixedZone("EAT", 3*60*60)))
+			rows, err := NewRepository(db).GetAging(context.Background(), businessID, asOf.In(time.FixedZone("EAT", 3*60*60)))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -180,7 +180,7 @@ func TestRepositoryGetAging(t *testing.T) {
 			}
 		})
 	}
-	rows, err := NewRepository(db).GetAging(uuid.New(), asOf)
+	rows, err := NewRepository(db).GetAging(context.Background(), uuid.New(), asOf)
 	if err != nil || len(rows) != 0 {
 		t.Fatalf("empty business report = %+v, %v", rows, err)
 	}

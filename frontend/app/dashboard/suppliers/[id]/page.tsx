@@ -27,40 +27,67 @@ export default function SupplierDetailPage({ params }: { params: { id: string } 
   const [payments, setPayments] = useState<Payment[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [supplierReload, setSupplierReload] = useState(0);
+  const [historyLoading, setHistoryLoading] = useState(true);
   const [historyError, setHistoryError] = useState(false);
-  const [reload, setReload] = useState(0);
+  const [historyReload, setHistoryReload] = useState(0);
+  const [asOf, setAsOf] = useState<string | null>(null);
+
+  // Keep the aging report's selected date when navigating back.
+  useEffect(() => {
+    const value = new URLSearchParams(window.location.search).get("as_of");
+    setAsOf(value && /^\d{4}-\d{2}-\d{2}$/.test(value) ? value : null);
+  }, []);
 
   useEffect(() => {
     const controller = new AbortController();
     setLoading(true);
     setError("");
-    setHistoryError(false);
     setSupplier(null);
-    setPayments([]);
-    const path = `/suppliers/${encodeURIComponent(params.id)}`;
-    Promise.allSettled([
-      api.get(path, { signal: controller.signal }),
-      api.get(`${path}/payments`, { signal: controller.signal }),
-    ]).then(([details, history]) => {
-      if (controller.signal.aborted) return;
-      if (details.status === "fulfilled") {
-        setSupplier(details.value.data.data);
-      } else {
-        setError(details.reason?.response?.status === 404 ? "Supplier not found." : "Could not load this supplier. Please try again.");
-      }
-      if (history.status === "fulfilled") {
-        setPayments(history.value.data.data || []);
-      } else {
-        setHistoryError(true);
-      }
-      setLoading(false);
-    });
+    api
+      .get(`/suppliers/${encodeURIComponent(params.id)}`, { signal: controller.signal })
+      .then((response) => {
+        if (!controller.signal.aborted) setSupplier(response.data.data);
+      })
+      .catch((reason: unknown) => {
+        if (controller.signal.aborted) return;
+        const status = (reason as { response?: { status?: number } }).response?.status;
+        setError(status === 404 ? "Supplier not found." : "Could not load this supplier. Please try again.");
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setLoading(false);
+      });
     return () => controller.abort();
-  }, [params.id, reload]);
+  }, [params.id, supplierReload]);
+
+  // Payment history loads and retries independently so a slow or failing
+  // history request never hides the supplier details.
+  useEffect(() => {
+    const controller = new AbortController();
+    setHistoryLoading(true);
+    setHistoryError(false);
+    setPayments([]);
+    api
+      .get(`/suppliers/${encodeURIComponent(params.id)}/payments`, { signal: controller.signal })
+      .then((response) => {
+        if (!controller.signal.aborted) setPayments(response.data.data || []);
+      })
+      .catch(() => {
+        if (!controller.signal.aborted) setHistoryError(true);
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setHistoryLoading(false);
+      });
+    return () => controller.abort();
+  }, [params.id, historyReload]);
+
+  const backHref = asOf
+    ? `/dashboard/suppliers?tab=aging&as_of=${asOf}`
+    : "/dashboard/suppliers?tab=aging";
 
   return (
     <>
-      <Link href="/dashboard/suppliers?tab=aging" className="mb-5 inline-flex items-center gap-2 text-sm font-medium text-primary hover:underline">
+      <Link href={backHref} className="mb-5 inline-flex items-center gap-2 text-sm font-medium text-primary hover:underline">
         <ArrowLeft size={16} /> Back to aging report
       </Link>
       <PageHeader eyebrow="Suppliers" title={supplier?.name || "Supplier details"} description="Outstanding balance, payment terms and recorded payments." />
@@ -69,7 +96,7 @@ export default function SupplierDetailPage({ params }: { params: { id: string } 
       ) : error ? (
         <div className="panel p-8 text-center" role="alert">
           <p>{error}</p>
-          <button type="button" className="btn-secondary mt-4" onClick={() => setReload((value) => value + 1)}>Try again</button>
+          <button type="button" className="btn-secondary mt-4" onClick={() => setSupplierReload((value) => value + 1)}>Try again</button>
         </div>
       ) : supplier && (
         <div className="space-y-6">
@@ -88,8 +115,10 @@ export default function SupplierDetailPage({ params }: { params: { id: string } 
           </section>
           <section className="panel overflow-hidden" aria-labelledby="payments-heading">
             <h2 id="payments-heading" className="border-b border-border-subtle px-5 py-4 font-semibold">Payment history</h2>
-            {historyError ? (
-              <div className="p-5" role="alert"><p className="text-sm text-danger">Could not load payment history.</p><button type="button" className="btn-secondary mt-3" onClick={() => setReload((value) => value + 1)}>Try again</button></div>
+            {historyLoading ? (
+              <p className="p-5 text-sm text-muted" role="status">Loading payments…</p>
+            ) : historyError ? (
+              <div className="p-5" role="alert"><p className="text-sm text-danger">Could not load payment history.</p><button type="button" className="btn-secondary mt-3" onClick={() => setHistoryReload((value) => value + 1)}>Try again</button></div>
             ) : payments.length === 0 ? (
               <p className="p-5 text-sm text-muted">No payments recorded.</p>
             ) : (

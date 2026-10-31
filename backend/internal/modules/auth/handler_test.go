@@ -14,11 +14,17 @@ import (
 
 type stubService struct{ googleErr error }
 
-func (s *stubService) Register(RegisterInput) (*AuthResult, error) { return nil, nil }
-func (s *stubService) Login(LoginInput) (*AuthResult, error)       { return nil, nil }
+func (s *stubService) Register(RegisterInput) (*User, error) { return nil, nil }
+func (s *stubService) Login(LoginInput) (*AuthResult, error) { return nil, nil }
 func (s *stubService) GoogleLogin(context.Context, GoogleLoginInput) (*AuthResult, error) {
 	return nil, s.googleErr
 }
+func (s *stubService) VerifyEmail(string) error        { return nil }
+func (s *stubService) ResendVerification(string) error { return nil }
+func (s *stubService) LinkGoogle(context.Context, uuid.UUID, string) (*User, error) {
+	return nil, nil
+}
+func (s *stubService) UnlinkGoogle(uuid.UUID) (*User, error)       { return nil, nil }
 func (s *stubService) CreateTeamUser(RegisterInput) (*User, error) { return nil, nil }
 func (s *stubService) ListTeam(uuid.UUID) ([]User, error)          { return nil, nil }
 func (s *stubService) GetByID(uuid.UUID) (*User, error)            { return nil, nil }

@@ -104,6 +104,9 @@ export default function SuppliersPage() {
 function SuppliersContent() {
   const searchParams = useSearchParams();
   const agingActive = searchParams.get("tab") === "aging";
+  const asOfParam = searchParams.get("as_of");
+  const withAsOf = (href: string) =>
+    asOfParam ? `${href}${href.includes("?") ? "&" : "?"}as_of=${encodeURIComponent(asOfParam)}` : href;
   const [items, setItems] = useState<Supplier[]>([]);
   const [meta, setMeta] = useState<Meta>({ page: 1, limit: 20, total: 0, totalPages: 0 });
   const [loading, setLoading] = useState(true);
@@ -477,8 +480,8 @@ function SuppliersContent() {
       />
 
       <nav aria-label="Supplier views" className="mb-6 flex gap-1 border-b border-border">
-        <Link href="/dashboard/suppliers" aria-current={!agingActive ? "page" : undefined} className={`border-b-2 px-4 py-3 text-sm font-semibold ${!agingActive ? "border-primary text-primary" : "border-transparent text-muted hover:text-foreground"}`}>Suppliers</Link>
-        <Link href="/dashboard/suppliers?tab=aging" aria-current={agingActive ? "page" : undefined} className={`border-b-2 px-4 py-3 text-sm font-semibold ${agingActive ? "border-primary text-primary" : "border-transparent text-muted hover:text-foreground"}`}>Aging</Link>
+        <Link href={withAsOf("/dashboard/suppliers")} aria-current={!agingActive ? "page" : undefined} className={`border-b-2 px-4 py-3 text-sm font-semibold ${!agingActive ? "border-primary text-primary" : "border-transparent text-muted hover:text-foreground"}`}>Suppliers</Link>
+        <Link href={withAsOf("/dashboard/suppliers?tab=aging")} aria-current={agingActive ? "page" : undefined} className={`border-b-2 px-4 py-3 text-sm font-semibold ${agingActive ? "border-primary text-primary" : "border-transparent text-muted hover:text-foreground"}`}>Aging</Link>
       </nav>
       {agingActive && <SupplierAgingReport initialAsOf={searchParams.get("as_of")} />}
       <div hidden={agingActive}>

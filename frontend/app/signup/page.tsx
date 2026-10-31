@@ -57,14 +57,15 @@ export default function SignupPage() {
         return;
       }
 
-      const b = await api.post("/business", { name: businessName, phone });
+      // Create the workspace and owner in one transaction; no session until
+      // the owner confirms their email address.
       await api.post("/auth/register", {
-        business_id: b.data.data.id,
+        business_name: businessName,
+        business_phone: phone,
         name: ownerName,
         email,
         password,
       });
-      // No session until the owner confirms their email address.
       setVerificationEmail(email);
     } catch (e: any) {
       setError(e.response?.data?.error || "Unable to create workspace");

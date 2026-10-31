@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { AlertCircle, RefreshCw } from "lucide-react";
 import { api } from "@/lib/api";
@@ -33,7 +34,12 @@ function formatDate(value: string): string {
   });
 }
 
-export function SupplierAgingReport() {
+function isDateOnly(value: string | null | undefined): value is string {
+  return typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value);
+}
+
+export function SupplierAgingReport({ initialAsOf }: { initialAsOf?: string | null }) {
+  const router = useRouter();
   const [asOf, setAsOf] = useState<string | null>(null);
   const [report, setReport] = useState<AgingReport | null>(null);
   const [loading, setLoading] = useState(true);
@@ -41,8 +47,15 @@ export function SupplierAgingReport() {
   const [reload, setReload] = useState(0);
 
   useEffect(() => {
-    setAsOf(new Date().toISOString().slice(0, 10));
-  }, []);
+    // Prefer the date carried in the URL (via the page) so returning from a
+    // supplier detail re-renders the same aging date; fall back to today.
+    const fromUrl = new URLSearchParams(window.location.search).get("as_of");
+    setAsOf(
+      (isDateOnly(initialAsOf) && initialAsOf) ||
+        (isDateOnly(fromUrl) && fromUrl) ||
+        new Date().toISOString().slice(0, 10),
+    );
+  }, [initialAsOf]);
 
   useEffect(() => {
     if (asOf === null) return;
@@ -85,7 +98,15 @@ export function SupplierAgingReport() {
               max="9999-12-31"
               className="field mt-1 [color-scheme:light] dark:[color-scheme:dark]"
               value={asOf ?? ""}
-              onChange={(event) => setAsOf(event.target.value)}
+              onChange={(event) => {
+                const next = event.target.value;
+                setAsOf(next);
+                const params = new URLSearchParams(window.location.search);
+                params.set("tab", "aging");
+                if (next) params.set("as_of", next);
+                else params.delete("as_of");
+                router.replace(`/dashboard/suppliers?${params.toString()}`, { scroll: false });
+              }}
             />
           </label>
           <button type="button" className="btn-secondary" onClick={() => setReload((value) => value + 1)} disabled={loading}>
@@ -139,7 +160,7 @@ export function SupplierAgingReport() {
                       <tr><td colSpan={4} className="px-5 py-5 text-muted">No suppliers in this bucket.</td></tr>
                     ) : report[bucket.key].map((supplier) => (
                       <tr key={supplier.id} className="border-t border-border-subtle">
-                        <td className="px-5 py-4"><Link className="font-semibold text-primary underline-offset-4 hover:underline focus-visible:underline" href={`/dashboard/suppliers/${supplier.id}`}>{supplier.name}</Link></td>
+                        <td className="px-5 py-4"><Link className="font-semibold text-primary underline-offset-4 hover:underline focus-visible:underline" href={`/dashboard/suppliers/${supplier.id}${asOf ? `?as_of=${asOf}` : ""}`}>{supplier.name}</Link></td>
                         <td className="px-5 py-4 text-muted">{supplier.due_date ? formatDate(supplier.due_date) : "No due date"}</td>
                         <td className="px-5 py-4 text-right tabular-nums">{supplier.days_overdue}</td>
                         <td className="px-5 py-4 text-right font-medium tabular-nums">{formatMoney(supplier.outstanding_balance)}</td>

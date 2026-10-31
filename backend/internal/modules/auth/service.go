@@ -11,6 +11,7 @@ import (
 	"log"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/businessos/backend/internal/config"
@@ -24,6 +25,7 @@ import (
 var (
 	ErrInvalidCredentials         = errors.New("invalid email or password")
 	ErrEmailTaken                 = errors.New("email already registered")
+	ErrBusinessRequired           = errors.New("a business name is required")
 	ErrBusinessNotFound           = errors.New("business does not exist")
 	ErrInvalidRole                = errors.New("role must be owner, manager, or cashier")
 	ErrGoogleAuthUnavailable      = errors.New("google sign-in is not configured")
@@ -70,11 +72,13 @@ type GoogleTokenVerifier interface {
 }
 
 type RegisterInput struct {
-	BusinessID uuid.UUID
-	Name       string
-	Email      string
-	Password   string
-	Role       string
+	BusinessID    uuid.UUID
+	BusinessName  string
+	BusinessPhone string
+	Name          string
+	Email         string
+	Password      string
+	Role          string
 }
 
 type LoginInput struct {
@@ -153,6 +157,7 @@ type service struct {
 	google          GoogleTokenVerifier
 	businessCreator BusinessCreator
 	mailer          email.Sender
+	userLocks       sync.Map
 }
 
 func NewService(repo Repository, cfg *config.Config, businesses BusinessChecker, google GoogleTokenVerifier, businessCreator BusinessCreator, mailer email.Sender) Service {
@@ -161,12 +166,17 @@ func NewService(repo Repository, cfg *config.Config, businesses BusinessChecker,
 
 func (s *service) Register(input RegisterInput) (*User, error) {
 	input.Email = normalizeEmail(input.Email)
-	exists, err := s.businesses.Exists(input.BusinessID)
-	if err != nil {
-		return nil, err
-	}
-	if !exists {
-		return nil, ErrBusinessNotFound
+
+	businessName := strings.TrimSpace(input.BusinessName)
+	if businessName == "" {
+		// Legacy path: an existing business is supplied explicitly.
+		exists, err := s.businesses.Exists(input.BusinessID)
+		if err != nil {
+			return nil, err
+		}
+		if !exists {
+			return nil, ErrBusinessNotFound
+		}
 	}
 
 	if _, err := s.repo.FindByEmail(input.Email); err == nil {
@@ -177,8 +187,32 @@ func (s *service) Register(input RegisterInput) (*User, error) {
 	if err != nil {
 		return nil, err
 	}
-
 	hashStr := string(hash)
+
+	if businessName != "" {
+		if s.businessCreator == nil {
+			return nil, ErrBusinessRequired
+		}
+		user := &User{
+			Name:          input.Name,
+			Email:         input.Email,
+			PasswordHash:  &hashStr,
+			Role:          "owner",
+			Active:        true,
+			EmailVerified: false,
+		}
+		// Create the workspace and its owner atomically so a failed sign-up
+		// cannot leave an ownerless business behind.
+		if err := s.businessCreator.CreateWithOwner(businessName, strings.TrimSpace(input.BusinessPhone), user); err != nil {
+			if errors.Is(err, gorm.ErrDuplicatedKey) {
+				return nil, ErrEmailTaken
+			}
+			return nil, err
+		}
+		s.issueEmailVerification(user)
+		return user, nil
+	}
+
 	user := &User{
 		BusinessID:    input.BusinessID,
 		Name:          input.Name,
@@ -188,13 +222,27 @@ func (s *service) Register(input RegisterInput) (*User, error) {
 		Active:        true,
 		EmailVerified: false,
 	}
-
 	if err := s.repo.Create(user); err != nil {
+		if errors.Is(err, gorm.ErrDuplicatedKey) {
+			return nil, ErrEmailTaken
+		}
 		return nil, err
 	}
 
 	s.issueEmailVerification(user)
 	return user, nil
+}
+
+// lockUser serializes verification-state changes for a single account so a
+// resend issuing a token cannot race the cleanup performed after verification.
+func (s *service) lockUser(id uuid.UUID) func() {
+	value, _ := s.userLocks.LoadOrStore(id, &sync.Mutex{})
+	mu, ok := value.(*sync.Mutex)
+	if !ok {
+		mu = &sync.Mutex{}
+	}
+	mu.Lock()
+	return mu.Unlock
 }
 
 func (s *service) Login(input LoginInput) (*AuthResult, error) {
@@ -373,12 +421,13 @@ func (s *service) VerifyEmail(token string) error {
 		}
 		return err
 	}
-	if record.UsedAt != nil {
-		return ErrInvalidVerificationToken
-	}
 	if time.Now().After(record.ExpiresAt) {
 		return ErrExpiredVerificationToken
 	}
+
+	unlock := s.lockUser(record.UserID)
+	defer unlock()
+
 	consumed, err := s.repo.ConsumeEmailVerificationToken(record.ID)
 	if err != nil {
 		return err
@@ -396,12 +445,22 @@ func (s *service) VerifyEmail(token string) error {
 func (s *service) ResendVerification(emailAddress string) error {
 	emailAddress = normalizeEmail(emailAddress)
 	user, err := s.repo.FindByEmail(emailAddress)
-	if err != nil || !user.Active || user.EmailVerified {
-		// Deliberately generic: revealing whether an address exists, is active,
-		// or is already verified enables enumeration.
+	if err != nil {
+		// Deliberately generic: revealing whether an address exists enables
+		// enumeration.
 		return nil
 	}
-	s.issueEmailVerification(user)
+
+	unlock := s.lockUser(user.ID)
+	defer unlock()
+
+	// Re-read under the lock so a concurrent verification cannot be missed, and
+	// so a fresh token cannot be written after verification cleanup runs.
+	fresh, err := s.repo.FindByID(user.ID)
+	if err != nil || !fresh.Active || fresh.EmailVerified {
+		return nil
+	}
+	s.issueEmailVerification(fresh)
 	return nil
 }
 

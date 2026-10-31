@@ -35,7 +35,12 @@ function formatDate(value: string): string {
 }
 
 function isDateOnly(value: string | null | undefined): value is string {
-  return typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value);
+  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const [year, month, day] = value.split("-").map(Number);
+  if (month < 1 || month > 12 || day < 1) return false;
+  // Day 0 of the following month is the last day of this one.
+  const daysInMonth = new Date(Date.UTC(year, month, 0)).getUTCDate();
+  return day <= daysInMonth;
 }
 
 export function SupplierAgingReport({ initialAsOf }: { initialAsOf?: string | null }) {

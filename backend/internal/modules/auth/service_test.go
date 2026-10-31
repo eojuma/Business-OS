@@ -676,3 +676,33 @@ func TestUnlinkGoogleWithPassword(t *testing.T) {
 		t.Fatal("expected google id to be cleared")
 	}
 }
+
+func TestRegisterCreatesWorkspaceInOneRequest(t *testing.T) {
+	repo := &fakeRepository{}
+	creator := &fakeBusinessCreator{repo: repo}
+	mailer := &fakeMailer{}
+	svc := testServiceWithMailer(repo, nil, creator, mailer)
+
+	user, err := svc.Register(RegisterInput{
+		BusinessName:  "New Store",
+		BusinessPhone: "0700",
+		Name:          "Owner",
+		Email:         "owner@example.com",
+		Password:      "secret123",
+	})
+	if err != nil {
+		t.Fatalf("Register failed: %v", err)
+	}
+	if creator.calls != 1 || creator.name != "New Store" || creator.phone != "0700" {
+		t.Fatalf("creator called %d times name=%q phone=%q", creator.calls, creator.name, creator.phone)
+	}
+	if user.BusinessID != creator.businessID {
+		t.Fatal("expected the user to be attached to the created business")
+	}
+	if user.EmailVerified {
+		t.Fatal("new sign-ups must stay unverified until the email is confirmed")
+	}
+	if len(mailer.sent) != 1 {
+		t.Fatalf("verification emails = %d, want 1", len(mailer.sent))
+	}
+}

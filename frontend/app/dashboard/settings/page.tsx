@@ -114,12 +114,12 @@ export default function SettingsPage() {
           )}
 
           <div className="mt-5">
-            {me?.google_linked ? (
+            {!me ? null : me.google_linked ? (
               <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border-subtle p-4">
                 <div>
                   <p className="text-sm font-semibold">Google is connected</p>
                   <p className="text-xs text-muted">
-                    You can sign in with Google or your password.
+                    You can sign in with Google.
                   </p>
                 </div>
                 <button

@@ -1,6 +1,7 @@
 package suppliers
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"math"
@@ -19,7 +20,7 @@ type testRepository struct {
 	getAging  func(uuid.UUID, time.Time) ([]AgingSupplier, error)
 }
 
-func (r *testRepository) GetAging(businessID uuid.UUID, asOf time.Time) ([]AgingSupplier, error) {
+func (r *testRepository) GetAging(_ context.Context, businessID uuid.UUID, asOf time.Time) ([]AgingSupplier, error) {
 	if r.getAging != nil {
 		return r.getAging(businessID, asOf)
 	}
@@ -43,7 +44,7 @@ func TestGetAgingGroupsSuppliersAndTotals(t *testing.T) {
 		}
 		return rows, nil
 	}
-	report, err := NewService(repo).GetAging(businessID, asOf)
+	report, err := NewService(repo).GetAging(context.Background(), businessID, asOf)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -70,7 +71,7 @@ func TestGetAgingGroupsSuppliersAndTotals(t *testing.T) {
 }
 
 func TestGetAgingEmptyReportJSON(t *testing.T) {
-	report, err := NewService(newTestRepository()).GetAging(uuid.New(), time.Now())
+	report, err := NewService(newTestRepository()).GetAging(context.Background(), uuid.New(), time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -110,7 +111,7 @@ func TestGetAgingErrors(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			repo := newTestRepository()
 			repo.getAging = func(uuid.UUID, time.Time) ([]AgingSupplier, error) { return tc.rows, tc.err }
-			report, err := NewService(repo).GetAging(uuid.New(), time.Now())
+			report, err := NewService(repo).GetAging(context.Background(), uuid.New(), time.Now())
 			if report != nil || err == nil || (tc.want != nil && !errors.Is(err, tc.want)) {
 				t.Fatalf("GetAging = %+v, %v; want nil report and %v", report, err, tc.want)
 			}

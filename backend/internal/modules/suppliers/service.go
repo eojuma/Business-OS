@@ -1,6 +1,7 @@
 package suppliers
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"math"
@@ -36,7 +37,7 @@ type Service interface {
 	Get(id, businessID uuid.UUID) (*Supplier, error)
 	List(businessID uuid.UUID, includeArchived bool) ([]Supplier, error)
 	ListPaginated(businessID uuid.UUID, page, limit int, search string, includeArchived bool) ([]Supplier, int64, error)
-	GetAging(businessID uuid.UUID, asOf time.Time) (*AgingReport, error)
+	GetAging(ctx context.Context, businessID uuid.UUID, asOf time.Time) (*AgingReport, error)
 	Update(id, businessID uuid.UUID, input UpdateInput) (*Supplier, error)
 	Delete(id, businessID uuid.UUID) error
 	Restore(id, businessID uuid.UUID) (*Supplier, error)
@@ -76,8 +77,8 @@ func (s *service) ListPaginated(businessID uuid.UUID, page, limit int, search st
 	return s.repo.ListPaginated(businessID, page, limit, strings.TrimSpace(search), includeArchived)
 }
 
-func (s *service) GetAging(businessID uuid.UUID, asOf time.Time) (*AgingReport, error) {
-	rows, err := s.repo.GetAging(businessID, asOf.UTC())
+func (s *service) GetAging(ctx context.Context, businessID uuid.UUID, asOf time.Time) (*AgingReport, error) {
+	rows, err := s.repo.GetAging(ctx, businessID, asOf.UTC())
 	if err != nil {
 		return nil, err
 	}

@@ -164,7 +164,7 @@ func (h *Handler) GetAging(c *gin.Context) {
 			return
 		}
 	}
-	report, err := h.service.GetAging(businessID, asOf)
+	report, err := h.service.GetAging(c.Request.Context(), businessID, asOf)
 	if err != nil {
 		response.Error(c, http.StatusInternalServerError, "failed to load supplier aging report")
 		return

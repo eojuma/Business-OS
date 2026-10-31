@@ -1,6 +1,7 @@
 package suppliers
 
 import (
+	"context"
 	"database/sql"
 	"math"
 	"strings"
@@ -16,7 +17,7 @@ type Repository interface {
 	FindByID(id, businessID uuid.UUID) (*Supplier, error)
 	List(businessID uuid.UUID, includeArchived bool) ([]Supplier, error)
 	ListPaginated(businessID uuid.UUID, page, limit int, search string, includeArchived bool) ([]Supplier, int64, error)
-	GetAging(businessID uuid.UUID, asOf time.Time) ([]AgingSupplier, error)
+	GetAging(ctx context.Context, businessID uuid.UUID, asOf time.Time) ([]AgingSupplier, error)
 	Update(*Supplier) error
 	Delete(id, businessID uuid.UUID) error
 	Restore(id, businessID uuid.UUID) error
@@ -50,7 +51,7 @@ func (r *repository) List(businessID uuid.UUID, includeArchived bool) ([]Supplie
 
 // GetAging reads all buckets in one snapshot. Explicit UTC date arithmetic
 // keeps calendar-day boundaries independent of the connection's time zone.
-func (r *repository) GetAging(businessID uuid.UUID, asOf time.Time) ([]AgingSupplier, error) {
+func (r *repository) GetAging(ctx context.Context, businessID uuid.UUID, asOf time.Time) ([]AgingSupplier, error) {
 	var rows []AgingSupplier
 	err := r.db.Raw(`
 		SELECT id, name, outstanding_balance, due_date, days_overdue,

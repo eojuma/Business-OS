@@ -93,8 +93,8 @@ export default function VerifyEmailPage() {
             <>
               <h1 className="text-2xl font-bold">Could not verify your email</h1>
               <p className="mt-3 text-sm text-muted">
-                Something went wrong on our side. Your link is still valid — try the
-                same link again.
+                Verification may have completed. Try signing in, or try the same link
+                again if sign-in does not work.
               </p>
               <button
                 type="button"
@@ -113,7 +113,7 @@ export default function VerifyEmailPage() {
               </h1>
               <p className="mt-3 text-sm text-muted">
                 {state === "expired"
-                  ? "Verification links expire after 24 hours. Enter your email to get a new one."
+                  ? "Verification links expire after a short time. Enter your email to get a new one."
                   : "The link may have already been used. Enter your email to get a new one."}
               </p>
               <form onSubmit={resend} className="mt-6 space-y-3 text-left">

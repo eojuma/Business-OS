@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"html"
 	"log"
 	"net/url"
 	"strings"
@@ -42,7 +43,11 @@ var (
 	ErrEmailNotVerified         = errors.New("verify your email address before signing in")
 	ErrInvalidVerificationToken = errors.New("this verification link is invalid or has already been used")
 	ErrExpiredVerificationToken = errors.New("this verification link has expired")
+	ErrVerificationEmailFailed  = errors.New("could not send the verification email")
 )
+
+// resendCooldown limits how often one account can trigger a verification email.
+const resendCooldown = time.Minute
 
 // dummyPasswordHash is compared when an account has no local password, so a
 // login attempt takes the same time whether the address belongs to a
@@ -54,9 +59,11 @@ type BusinessChecker interface {
 	Exists(id uuid.UUID) (bool, error)
 }
 
-// BusinessCreator creates a business and its owner in one transaction.
+// BusinessCreator creates a business and its owner in one transaction, and can
+// remove a workspace whose sign-up failed before the owner could be verified.
 type BusinessCreator interface {
 	CreateWithOwner(name, phone string, user *User) error
+	DeleteWorkspace(businessID uuid.UUID) error
 }
 
 type GoogleIdentity struct {
@@ -158,6 +165,9 @@ type service struct {
 	businessCreator BusinessCreator
 	mailer          email.Sender
 	userLocks       sync.Map
+	background      sync.WaitGroup
+	resendMu        sync.Mutex
+	resendAt        map[uuid.UUID]time.Time
 }
 
 func NewService(repo Repository, cfg *config.Config, businesses BusinessChecker, google GoogleTokenVerifier, businessCreator BusinessCreator, mailer email.Sender) Service {
@@ -209,7 +219,12 @@ func (s *service) Register(input RegisterInput) (*User, error) {
 			}
 			return nil, err
 		}
-		s.issueEmailVerification(user)
+		if err := s.issueEmailVerification(user); err != nil {
+			// The account cannot sign in until it is verified, so remove the
+			// workspace now and let the owner retry sign-up cleanly.
+			_ = s.businessCreator.DeleteWorkspace(user.BusinessID)
+			return nil, err
+		}
 		return user, nil
 	}
 
@@ -229,7 +244,10 @@ func (s *service) Register(input RegisterInput) (*User, error) {
 		return nil, err
 	}
 
-	s.issueEmailVerification(user)
+	if err := s.issueEmailVerification(user); err != nil {
+		_ = s.repo.DeleteUser(user.ID)
+		return nil, err
+	}
 	return user, nil
 }
 
@@ -321,24 +339,19 @@ func (s *service) GoogleLogin(ctx context.Context, input GoogleLoginInput) (*Aut
 		// proved control of this inbox. Google did. Let the verified Google
 		// owner claim the account and drop the untrusted password so the
 		// original registrant cannot keep access.
-		if err := s.repo.SetGoogleID(user.ID, identity.Subject); err != nil {
+		// Link the subject, verify the address, and drop the untrusted password
+		// in one conditional update so a partial failure cannot leave the
+		// account half-claimed.
+		if err := s.repo.ClaimUnverifiedAccountForGoogle(user.ID, identity.Subject); err != nil {
 			if errors.Is(err, ErrGoogleIDTaken) {
 				return nil, ErrGoogleAccountConflict
 			}
 			return nil, err
 		}
-		if err := s.repo.MarkEmailVerified(user.ID); err != nil {
-			return nil, err
-		}
-		if user.PasswordHash != nil {
-			if err := s.repo.ClearPassword(user.ID); err != nil {
-				return nil, err
-			}
-			user.PasswordHash = nil
-		}
 		googleID := identity.Subject
 		user.GoogleID = &googleID
 		user.EmailVerified = true
+		user.PasswordHash = nil
 		return s.result(user)
 	}
 	if !errors.Is(err, gorm.ErrRecordNotFound) {
@@ -374,39 +387,52 @@ func (s *service) GoogleLogin(ctx context.Context, input GoogleLoginInput) (*Aut
 	return s.result(user)
 }
 
-func (s *service) issueEmailVerification(user *User) {
+func (s *service) issueEmailVerification(user *User) error {
 	if s.mailer == nil {
 		log.Printf("auth: no email sender configured; verification email for %s was not sent", user.Email)
-		return
+		return nil
 	}
 	raw, err := randomToken()
 	if err != nil {
-		log.Printf("auth: could not generate verification token for %s: %v", user.Email, err)
-		return
+		return fmt.Errorf("%w: %v", ErrVerificationEmailFailed, err)
 	}
 	ttl := time.Duration(s.cfg.EmailVerificationTTLHours) * time.Hour
 	if ttl <= 0 {
 		ttl = 24 * time.Hour
 	}
-	// Only the newest link should work.
-	_ = s.repo.DeleteEmailVerificationTokensForUser(user.ID)
 	token := &EmailVerificationToken{
 		UserID:    user.ID,
 		TokenHash: hashToken(raw),
 		ExpiresAt: time.Now().Add(ttl),
 	}
 	if err := s.repo.CreateEmailVerificationToken(token); err != nil {
-		log.Printf("auth: could not persist verification token for %s: %v", user.Email, err)
-		return
+		return fmt.Errorf("%w: %v", ErrVerificationEmailFailed, err)
 	}
 
-	link := fmt.Sprintf("%s/verify-email?token=%s", strings.TrimRight(s.cfg.FrontendURL, "/"), url.QueryEscape(raw))
+	link := fmt.Sprintf("%s/verify-email?token=%s", firstFrontendOrigin(s.cfg.FrontendURL), url.QueryEscape(raw))
 	hours := int(ttl.Hours())
 	text := fmt.Sprintf("Hi %s,\n\nConfirm your email address to finish setting up Business OS:\n\n%s\n\nThis link expires in %d hours. If you did not sign up, you can ignore this email.\n", user.Name, link, hours)
-	html := fmt.Sprintf("<p>Hi %s,</p><p>Confirm your email address to finish setting up Business OS:</p><p><a href=\"%s\">Verify my email</a></p><p>This link expires in %d hours. If you did not sign up, you can ignore this email.</p>", user.Name, link, hours)
-	if err := s.mailer.Send(context.Background(), email.Message{To: user.Email, Subject: "Verify your Business OS email", Text: text, HTML: html}); err != nil {
-		log.Printf("auth: could not send verification email to %s: %v", user.Email, err)
+	htmlBody := fmt.Sprintf("<p>Hi %s,</p><p>Confirm your email address to finish setting up Business OS:</p><p><a href=\"%s\">Verify my email</a></p><p>This link expires in %d hours. If you did not sign up, you can ignore this email.</p>", html.EscapeString(user.Name), link, hours)
+	if err := s.mailer.Send(context.Background(), email.Message{To: user.Email, Subject: "Verify your Business OS email", Text: text, HTML: htmlBody}); err != nil {
+		// Remove the undelivered token so the previous link keeps working.
+		_ = s.repo.DeleteEmailVerificationToken(token.ID)
+		return fmt.Errorf("%w: %v", ErrVerificationEmailFailed, err)
 	}
+	// Only the newest delivered link should work.
+	_ = s.repo.DeleteEmailVerificationTokensForUserExcept(user.ID, token.ID)
+	return nil
+}
+
+// firstFrontendOrigin picks one origin from the comma-separated FRONTEND_URL
+// allowlist so verification links always have a single valid host.
+func firstFrontendOrigin(raw string) string {
+	for _, part := range strings.Split(raw, ",") {
+		origin := strings.TrimRight(strings.TrimSpace(part), "/")
+		if origin != "" {
+			return origin
+		}
+	}
+	return "http://localhost:3000"
 }
 
 func (s *service) VerifyEmail(token string) error {
@@ -428,15 +454,12 @@ func (s *service) VerifyEmail(token string) error {
 	unlock := s.lockUser(record.UserID)
 	defer unlock()
 
-	consumed, err := s.repo.ConsumeEmailVerificationToken(record.ID)
+	consumed, err := s.repo.ConsumeTokenAndMarkEmailVerified(record.ID, record.UserID)
 	if err != nil {
 		return err
 	}
 	if !consumed {
 		return ErrInvalidVerificationToken
-	}
-	if err := s.repo.MarkEmailVerified(record.UserID); err != nil {
-		return err
 	}
 	_ = s.repo.DeleteEmailVerificationTokensForUser(record.UserID)
 	return nil
@@ -450,18 +473,58 @@ func (s *service) ResendVerification(emailAddress string) error {
 		// enumeration.
 		return nil
 	}
-
-	unlock := s.lockUser(user.ID)
-	defer unlock()
-
-	// Re-read under the lock so a concurrent verification cannot be missed, and
-	// so a fresh token cannot be written after verification cleanup runs.
-	fresh, err := s.repo.FindByID(user.ID)
-	if err != nil || !fresh.Active || fresh.EmailVerified {
+	if !s.beginResend(user.ID) {
 		return nil
 	}
-	s.issueEmailVerification(fresh)
+
+	userID := user.ID
+	// Issue asynchronously so the response time does not reveal whether the
+	// address exists or whether a link was actually sent.
+	s.background.Add(1)
+	go func() {
+		defer s.background.Done()
+		unlock := s.lockUser(userID)
+		defer unlock()
+		// Re-read under the lock so a concurrent verification cannot be missed,
+		// and so a fresh token cannot be written after verification cleanup runs.
+		fresh, err := s.repo.FindByID(userID)
+		if err != nil || !fresh.Active || fresh.EmailVerified {
+			return
+		}
+		if err := s.issueEmailVerification(fresh); err != nil {
+			log.Printf("auth: could not resend verification email to %s: %v", fresh.Email, err)
+		}
+	}()
 	return nil
+}
+
+// beginResend enforces a per-account cooldown so repeated requests cannot flood
+// the recipient or the SMTP relay.
+func (s *service) beginResend(id uuid.UUID) bool {
+	s.resendMu.Lock()
+	defer s.resendMu.Unlock()
+	if s.resendAt == nil {
+		s.resendAt = make(map[uuid.UUID]time.Time)
+	}
+	now := time.Now()
+	if last, ok := s.resendAt[id]; ok && now.Sub(last) < resendCooldown {
+		return false
+	}
+	s.resendAt[id] = now
+	if len(s.resendAt) > 1024 {
+		for key, at := range s.resendAt {
+			if now.Sub(at) >= resendCooldown {
+				delete(s.resendAt, key)
+			}
+		}
+	}
+	return true
+}
+
+// waitForBackground blocks until asynchronous verification work finishes. Tests
+// use it to observe side effects deterministically.
+func (s *service) waitForBackground() {
+	s.background.Wait()
 }
 
 func (s *service) LinkGoogle(ctx context.Context, userID uuid.UUID, credential string) (*User, error) {

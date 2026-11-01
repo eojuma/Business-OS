@@ -113,6 +113,10 @@ export default function SettingsPage() {
             </p>
           )}
 
+          {error && (
+            <p className="mt-4 rounded-lg bg-danger-soft p-3 text-sm text-danger">{error}</p>
+          )}
+
           <div className="mt-5">
             {!me ? null : me.google_linked ? (
               <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border-subtle p-4">
@@ -160,9 +164,6 @@ export default function SettingsPage() {
             <p className="eyebrow">Team access</p>
             <h2 className="mt-1 text-lg font-bold">Add a team member</h2>
           </div>
-          {error && (
-            <p className="rounded-lg bg-danger-soft p-3 text-sm text-danger">{error}</p>
-          )}
           {teamError && (
             <p className="rounded-lg bg-danger-soft p-3 text-sm text-danger">{teamError}</p>
           )}

@@ -9,6 +9,7 @@ import (
 	"github.com/businessos/backend/internal/shared/email"
 	"github.com/businessos/backend/internal/shared/middleware"
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
 
@@ -28,6 +29,12 @@ func (c *businessOwnerCreator) CreateWithOwner(name, phone string, user *User) e
 		}
 		return tx.Model(&business.Business{}).Where("id = ?", b.ID).Update("owner_user_id", user.ID).Error
 	})
+}
+
+// DeleteWorkspace removes a workspace whose sign-up could not deliver a
+// verification email. Users cascade with the business row.
+func (c *businessOwnerCreator) DeleteWorkspace(businessID uuid.UUID) error {
+	return c.db.Where("id = ?", businessID).Delete(&business.Business{}).Error
 }
 
 func RegisterRoutes(rg *gin.RouterGroup, db *gorm.DB, cfg *config.Config) {

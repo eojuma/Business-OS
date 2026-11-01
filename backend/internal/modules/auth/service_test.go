@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -33,6 +34,17 @@ func (r *fakeRepository) Create(user *User) error {
 	}
 	r.created = user
 	r.users = append(r.users, user)
+	return nil
+}
+
+func (r *fakeRepository) DeleteUser(id uuid.UUID) error {
+	kept := r.users[:0]
+	for _, user := range r.users {
+		if user.ID != id {
+			kept = append(kept, user)
+		}
+	}
+	r.users = kept
 	return nil
 }
 
@@ -86,20 +98,29 @@ func (r *fakeRepository) SetGoogleID(id uuid.UUID, googleID string) error {
 	return gorm.ErrRecordNotFound
 }
 
-func (r *fakeRepository) ClearGoogleID(id uuid.UUID) error {
+func (r *fakeRepository) ClaimUnverifiedAccountForGoogle(id uuid.UUID, googleID string) error {
 	for _, user := range r.users {
-		if user.ID == id {
-			user.GoogleID = nil
-			return nil
+		if user.ID != id {
+			continue
 		}
+		if user.GoogleID != nil || user.EmailVerified {
+			return ErrGoogleIDTaken
+		}
+		sub := googleID
+		user.GoogleID = &sub
+		user.EmailVerified = true
+		user.PasswordHash = nil
+		r.setID = id
+		r.setSub = googleID
+		return nil
 	}
 	return gorm.ErrRecordNotFound
 }
 
-func (r *fakeRepository) ClearPassword(id uuid.UUID) error {
+func (r *fakeRepository) ClearGoogleID(id uuid.UUID) error {
 	for _, user := range r.users {
 		if user.ID == id {
-			user.PasswordHash = nil
+			user.GoogleID = nil
 			return nil
 		}
 	}
@@ -133,24 +154,46 @@ func (r *fakeRepository) FindEmailVerificationTokenByHash(hash string) (*EmailVe
 	return nil, gorm.ErrRecordNotFound
 }
 
-func (r *fakeRepository) ConsumeEmailVerificationToken(id uuid.UUID) (bool, error) {
+func (r *fakeRepository) ConsumeTokenAndMarkEmailVerified(tokenID, userID uuid.UUID) (bool, error) {
 	for _, token := range r.tokens {
-		if token.ID == id {
-			if token.UsedAt != nil {
-				return false, nil
-			}
-			now := time.Now()
-			token.UsedAt = &now
-			return true, nil
+		if token.ID != tokenID {
+			continue
 		}
+		if token.UsedAt != nil || time.Now().After(token.ExpiresAt) {
+			return false, nil
+		}
+		for _, user := range r.users {
+			if user.ID == userID {
+				now := time.Now()
+				token.UsedAt = &now
+				user.EmailVerified = true
+				return true, nil
+			}
+		}
+		return false, gorm.ErrRecordNotFound
 	}
 	return false, nil
 }
 
-func (r *fakeRepository) DeleteEmailVerificationTokensForUser(userID uuid.UUID) error {
+func (r *fakeRepository) DeleteEmailVerificationToken(id uuid.UUID) error {
 	kept := r.tokens[:0]
 	for _, token := range r.tokens {
-		if token.UserID != userID {
+		if token.ID != id {
+			kept = append(kept, token)
+		}
+	}
+	r.tokens = kept
+	return nil
+}
+
+func (r *fakeRepository) DeleteEmailVerificationTokensForUser(userID uuid.UUID) error {
+	return r.DeleteEmailVerificationTokensForUserExcept(userID, uuid.Nil)
+}
+
+func (r *fakeRepository) DeleteEmailVerificationTokensForUserExcept(userID, keepID uuid.UUID) error {
+	kept := r.tokens[:0]
+	for _, token := range r.tokens {
+		if token.UserID != userID || token.ID == keepID {
 			kept = append(kept, token)
 		}
 	}
@@ -179,6 +222,7 @@ func (c *fakeBusinessChecker) Exists(uuid.UUID) (bool, error) {
 type fakeBusinessCreator struct {
 	repo       *fakeRepository
 	businessID uuid.UUID
+	deleted    uuid.UUID
 	err        error
 	calls      int
 	name       string
@@ -200,6 +244,20 @@ func (c *fakeBusinessCreator) CreateWithOwner(name, phone string, user *User) er
 	}
 	if c.repo != nil {
 		return c.repo.Create(user)
+	}
+	return nil
+}
+
+func (c *fakeBusinessCreator) DeleteWorkspace(businessID uuid.UUID) error {
+	c.deleted = businessID
+	if c.repo != nil {
+		kept := c.repo.users[:0]
+		for _, user := range c.repo.users {
+			if user.BusinessID != businessID {
+				kept = append(kept, user)
+			}
+		}
+		c.repo.users = kept
 	}
 	return nil
 }
@@ -704,5 +762,55 @@ func TestRegisterCreatesWorkspaceInOneRequest(t *testing.T) {
 	}
 	if len(mailer.sent) != 1 {
 		t.Fatalf("verification emails = %d, want 1", len(mailer.sent))
+	}
+}
+
+func TestRegisterRollsBackWorkspaceWhenVerificationEmailFails(t *testing.T) {
+	repo := &fakeRepository{}
+	creator := &fakeBusinessCreator{repo: repo}
+	mailer := &fakeMailer{err: errors.New("smtp unavailable")}
+	svc := testServiceWithMailer(repo, nil, creator, mailer)
+
+	_, err := svc.Register(RegisterInput{
+		BusinessName: "New Store",
+		Name:         "Owner",
+		Email:        "owner@example.com",
+		Password:     "secret123",
+	})
+	if !errors.Is(err, ErrVerificationEmailFailed) {
+		t.Fatalf("error = %v, want %v", err, ErrVerificationEmailFailed)
+	}
+	if len(repo.users) != 0 {
+		t.Fatalf("users = %d, want the unverifiable account rolled back", len(repo.users))
+	}
+	if creator.deleted != creator.businessID {
+		t.Fatalf("deleted workspace = %v, want %v", creator.deleted, creator.businessID)
+	}
+	if len(repo.tokens) != 0 {
+		t.Fatalf("tokens = %d, want the undelivered token removed", len(repo.tokens))
+	}
+}
+
+func TestResendVerificationSendsOncePerCooldown(t *testing.T) {
+	user := &User{ID: uuid.New(), BusinessID: uuid.New(), Name: "Owner", Email: "owner@example.com", Active: true, EmailVerified: false}
+	repo := &fakeRepository{users: []*User{user}}
+	mailer := &fakeMailer{}
+	svc := testServiceWithMailer(repo, nil, nil, mailer)
+	impl := svc.(*service)
+
+	if err := svc.ResendVerification(user.Email); err != nil {
+		t.Fatalf("ResendVerification failed: %v", err)
+	}
+	impl.waitForBackground()
+	if len(mailer.sent) != 1 {
+		t.Fatalf("verification emails = %d, want 1", len(mailer.sent))
+	}
+
+	if err := svc.ResendVerification(user.Email); err != nil {
+		t.Fatalf("second ResendVerification failed: %v", err)
+	}
+	impl.waitForBackground()
+	if len(mailer.sent) != 1 {
+		t.Fatalf("verification emails after cooldown = %d, want 1", len(mailer.sent))
 	}
 }

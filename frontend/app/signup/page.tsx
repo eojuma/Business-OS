@@ -109,8 +109,8 @@ export default function SignupPage() {
               it to finish setting up your workspace.
             </p>
             <p className="mt-2 text-xs text-subtle">
-              The link expires in 24 hours. You can request a new one from the sign-in
-              page.
+              Verification links expire after a short time. You can request a new one
+              from the sign-in page.
             </p>
             <Link href="/login" className="btn-primary mt-6 inline-flex">
               Go to sign in

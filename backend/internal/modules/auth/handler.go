@@ -138,6 +138,10 @@ func (h *Handler) Register(c *gin.Context) {
 			response.Error(c, http.StatusBadRequest, err.Error())
 			return
 		}
+		if errors.Is(err, ErrVerificationEmailFailed) {
+			response.ErrorWithCode(c, http.StatusBadGateway, "verification_email_failed", "We could not send the verification email. Please try again.")
+			return
+		}
 		response.Error(c, http.StatusInternalServerError, "failed to register user")
 		return
 	}

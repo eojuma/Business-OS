@@ -149,7 +149,12 @@ export default function LoginPage() {
                 className="field mt-1.5"
                 type="email"
                 value={email}
-                onChange={(e) => setEmail(e.target.value)}
+                onChange={(e) => {
+                  setEmail(e.target.value);
+                  // Never resend to an address the form no longer shows.
+                  setPendingEmail("");
+                  setResendNotice("");
+                }}
                 required
               />
             </label>

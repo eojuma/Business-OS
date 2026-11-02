@@ -28,6 +28,7 @@ func (s *stubService) UnlinkGoogle(uuid.UUID) (*User, error)       { return nil,
 func (s *stubService) CreateTeamUser(RegisterInput) (*User, error) { return nil, nil }
 func (s *stubService) ListTeam(uuid.UUID) ([]User, error)          { return nil, nil }
 func (s *stubService) GetByID(uuid.UUID) (*User, error)            { return nil, nil }
+func (s *stubService) WaitBackground(context.Context)              {}
 
 func TestGoogleHandlerReturnsStableErrorCodes(t *testing.T) {
 	gin.SetMode(gin.TestMode)

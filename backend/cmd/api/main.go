@@ -74,12 +74,21 @@ func main() {
 	log.Printf("business-os api shutting down")
 
 	// Drain HTTP handlers first so no request can enqueue more background work,
-	// then wait for the pending verification sends to finish.
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	if err := server.Shutdown(shutdownCtx); err != nil {
+	// then wait for pending verification sends. Each phase gets its own bounded
+	// window so draining cannot starve the background wait.
+	httpCtx, cancelHTTP := context.WithTimeout(context.Background(), 30*time.Second)
+	if err := server.Shutdown(httpCtx); err != nil {
 		log.Printf("server shutdown: %v", err)
+		// Force remaining connections closed so no handler can enqueue work
+		// after the background wait begins.
+		if closeErr := server.Close(); closeErr != nil {
+			log.Printf("server close: %v", closeErr)
+		}
 	}
-	waitAuthBackground(shutdownCtx)
+	cancelHTTP()
+
+	bgCtx, cancelBG := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancelBG()
+	waitAuthBackground(bgCtx)
 	log.Printf("business-os api stopped")
 }

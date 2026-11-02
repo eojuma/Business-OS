@@ -12,6 +12,10 @@ import (
 // different user account.
 var ErrGoogleIDTaken = errors.New("this google account is already linked to another user")
 
+// ErrGoogleLinkChanged is returned when an unlink request targets a Google
+// subject that is no longer the one linked to the account.
+var ErrGoogleLinkChanged = errors.New("the linked google account changed; refresh and try again")
+
 // errTokenNotConsumed rolls back the verification transaction without changing
 // either row.
 var errTokenNotConsumed = errors.New("email verification token not consumed")
@@ -26,6 +30,7 @@ type Repository interface {
 	SetGoogleID(id uuid.UUID, googleID string) error
 	ClaimUnverifiedAccountForGoogle(id uuid.UUID, googleID string) error
 	ClearGoogleID(id uuid.UUID) error
+	ClearGoogleIDIfMatches(id uuid.UUID, googleID string) error
 	MarkEmailVerified(id uuid.UUID) error
 	CreateEmailVerificationToken(token *EmailVerificationToken) error
 	FindEmailVerificationTokenByHash(hash string) (*EmailVerificationToken, error)
@@ -33,6 +38,7 @@ type Repository interface {
 	DeleteEmailVerificationToken(id uuid.UUID) error
 	DeleteEmailVerificationTokensForUser(userID uuid.UUID) error
 	DeleteEmailVerificationTokensForUserExcept(userID, keepID uuid.UUID) error
+	LatestEmailVerificationTokenCreatedAt(userID uuid.UUID) (time.Time, error)
 }
 
 func (r *repository) ListByBusiness(businessID uuid.UUID) ([]User, error) {
@@ -154,6 +160,21 @@ func (r *repository) ClearGoogleID(id uuid.UUID) error {
 	return nil
 }
 
+// ClearGoogleIDIfMatches detaches Google only when the stored subject still
+// equals googleID, so a stale unlink cannot clear a subject linked in between.
+func (r *repository) ClearGoogleIDIfMatches(id uuid.UUID, googleID string) error {
+	result := r.db.Model(&User{}).
+		Where("id = ? AND google_id = ?", id, googleID).
+		Update("google_id", nil)
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
+		return ErrGoogleLinkChanged
+	}
+	return nil
+}
+
 func (r *repository) MarkEmailVerified(id uuid.UUID) error {
 	result := r.db.Model(&User{}).Where("id = ?", id).Update("email_verified", true)
 	if result.Error != nil {
@@ -208,6 +229,23 @@ func (r *repository) ConsumeTokenAndMarkEmailVerified(tokenID, userID uuid.UUID)
 		return false, err
 	}
 	return true, nil
+}
+
+// LatestEmailVerificationTokenCreatedAt returns when the newest outstanding
+// token was created. The resend cooldown is derived from this so it survives
+// process restarts.
+func (r *repository) LatestEmailVerificationTokenCreatedAt(userID uuid.UUID) (time.Time, error) {
+	var createdAt *time.Time
+	if err := r.db.Model(&EmailVerificationToken{}).
+		Where("user_id = ?", userID).
+		Select("MAX(created_at)").
+		Scan(&createdAt).Error; err != nil {
+		return time.Time{}, err
+	}
+	if createdAt == nil {
+		return time.Time{}, gorm.ErrRecordNotFound
+	}
+	return *createdAt, nil
 }
 
 func (r *repository) DeleteEmailVerificationToken(id uuid.UUID) error {

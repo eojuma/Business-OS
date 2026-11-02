@@ -168,6 +168,17 @@ func (c *Config) Validate() error {
 	if !c.FrontendURLSet {
 		return fmt.Errorf("FRONTEND_URL must be set in production to the deployed frontend origin")
 	}
+	// Every entry must be a usable absolute HTTP(S) origin: the verification
+	// link is built from the first one.
+	for _, part := range strings.Split(c.FrontendURL, ",") {
+		origin := strings.TrimSpace(part)
+		parsed, err := url.Parse(origin)
+		if origin == "" || err != nil || !parsed.IsAbs() ||
+			(!strings.EqualFold(parsed.Scheme, "http") && !strings.EqualFold(parsed.Scheme, "https")) ||
+			parsed.Host == "" {
+			return fmt.Errorf("FRONTEND_URL must contain valid HTTP(S) origins in production")
+		}
+	}
 	if containsLoopbackOrigin(c.FrontendURL) {
 		return fmt.Errorf("FRONTEND_URL must be the deployed frontend origin, not a localhost address, in production")
 	}

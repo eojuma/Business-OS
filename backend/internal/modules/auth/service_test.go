@@ -16,8 +16,10 @@ import (
 )
 
 const (
-	testCredential = "token"
-	testRoleOwner  = "owner"
+	testCredential   = "token"
+	testRoleOwner    = "owner"
+	testBusinessName = "New Store"
+	testOwnerEmail   = "owner@example.com"
 )
 
 type fakeRepository struct {
@@ -361,13 +363,13 @@ func TestGoogleLoginCreatesWorkspaceForNewUser(t *testing.T) {
 
 	result, err := svc.GoogleLogin(context.Background(), GoogleLoginInput{
 		Credential:    "token",
-		BusinessName:  "New Store",
+		BusinessName:  testBusinessName,
 		BusinessPhone: "0700",
 	})
 	if err != nil {
 		t.Fatalf("GoogleLogin failed: %v", err)
 	}
-	if creator.calls != 1 || creator.name != "New Store" || creator.phone != "0700" {
+	if creator.calls != 1 || creator.name != testBusinessName || creator.phone != "0700" {
 		t.Fatalf("creator called %d times with name=%q phone=%q", creator.calls, creator.name, creator.phone)
 	}
 	if result.User.BusinessID != creator.businessID {
@@ -684,7 +686,7 @@ func TestGoogleLoginVerifiedPasswordAccountRequiresLink(t *testing.T) {
 }
 
 func TestLinkGoogleRequiresMatchingEmail(t *testing.T) {
-	user := &User{ID: uuid.New(), BusinessID: uuid.New(), Email: "owner@example.com", Active: true, EmailVerified: true}
+	user := &User{ID: uuid.New(), BusinessID: uuid.New(), Email: testOwnerEmail, Active: true, EmailVerified: true}
 	repo := &fakeRepository{users: []*User{user}}
 	svc := testService(repo, &fakeVerifier{identity: googleIdentity("google-sub-x", "other@example.com", true)}, nil)
 
@@ -697,7 +699,7 @@ func TestLinkGoogleRequiresMatchingEmail(t *testing.T) {
 }
 
 func TestLinkGoogleSuccess(t *testing.T) {
-	user := &User{ID: uuid.New(), BusinessID: uuid.New(), Email: "owner@example.com", Active: true, EmailVerified: true}
+	user := &User{ID: uuid.New(), BusinessID: uuid.New(), Email: testOwnerEmail, Active: true, EmailVerified: true}
 	repo := &fakeRepository{users: []*User{user}}
 	svc := testService(repo, &fakeVerifier{identity: googleIdentity("google-sub-ok", user.Email, true)}, nil)
 
@@ -742,16 +744,16 @@ func TestRegisterCreatesWorkspaceInOneRequest(t *testing.T) {
 	svc := testServiceWithMailer(repo, nil, creator, mailer)
 
 	user, err := svc.Register(RegisterInput{
-		BusinessName:  "New Store",
+		BusinessName:  testBusinessName,
 		BusinessPhone: "0700",
 		Name:          "Owner",
-		Email:         "owner@example.com",
+		Email:         testOwnerEmail,
 		Password:      "secret123",
 	})
 	if err != nil {
 		t.Fatalf("Register failed: %v", err)
 	}
-	if creator.calls != 1 || creator.name != "New Store" || creator.phone != "0700" {
+	if creator.calls != 1 || creator.name != testBusinessName || creator.phone != "0700" {
 		t.Fatalf("creator called %d times name=%q phone=%q", creator.calls, creator.name, creator.phone)
 	}
 	if user.BusinessID != creator.businessID {
@@ -772,9 +774,9 @@ func TestRegisterRollsBackWorkspaceWhenVerificationEmailFails(t *testing.T) {
 	svc := testServiceWithMailer(repo, nil, creator, mailer)
 
 	_, err := svc.Register(RegisterInput{
-		BusinessName: "New Store",
+		BusinessName: testBusinessName,
 		Name:         "Owner",
-		Email:        "owner@example.com",
+		Email:        testOwnerEmail,
 		Password:     "secret123",
 	})
 	if !errors.Is(err, ErrVerificationEmailFailed) {
@@ -792,11 +794,14 @@ func TestRegisterRollsBackWorkspaceWhenVerificationEmailFails(t *testing.T) {
 }
 
 func TestResendVerificationSendsOncePerCooldown(t *testing.T) {
-	user := &User{ID: uuid.New(), BusinessID: uuid.New(), Name: "Owner", Email: "owner@example.com", Active: true, EmailVerified: false}
+	user := &User{ID: uuid.New(), BusinessID: uuid.New(), Name: "Owner", Email: testOwnerEmail, Active: true, EmailVerified: false}
 	repo := &fakeRepository{users: []*User{user}}
 	mailer := &fakeMailer{}
 	svc := testServiceWithMailer(repo, nil, nil, mailer)
-	impl := svc.(*service)
+	impl, ok := svc.(*service)
+	if !ok {
+		t.Fatal("expected the concrete service type")
+	}
 
 	if err := svc.ResendVerification(user.Email); err != nil {
 		t.Fatalf("ResendVerification failed: %v", err)

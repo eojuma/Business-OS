@@ -246,15 +246,6 @@ func (v *fakeVerifier) Verify(context.Context, string) (*GoogleIdentity, error) 
 	return v.identity, v.err
 }
 
-type fakeBusinessChecker struct {
-	exists bool
-	err    error
-}
-
-func (c *fakeBusinessChecker) Exists(uuid.UUID) (bool, error) {
-	return c.exists, c.err
-}
-
 type fakeBusinessCreator struct {
 	repo       *fakeRepository
 	businessID uuid.UUID
@@ -302,7 +293,6 @@ func testService(repo Repository, google GoogleTokenVerifier, creator BusinessCr
 	return NewService(
 		repo,
 		&config.Config{JWTSecret: "test-secret", JWTExpiryHours: 1, GoogleClientID: "client-id"},
-		&fakeBusinessChecker{exists: true},
 		google,
 		creator,
 		nil,
@@ -445,7 +435,7 @@ func TestGoogleLoginRejectsInvalidToken(t *testing.T) {
 }
 
 func TestGoogleLoginUnavailableWhenNotConfigured(t *testing.T) {
-	svc := NewService(&fakeRepository{}, &config.Config{JWTSecret: "test-secret", JWTExpiryHours: 1}, &fakeBusinessChecker{}, nil, nil, nil)
+	svc := NewService(&fakeRepository{}, &config.Config{JWTSecret: "test-secret", JWTExpiryHours: 1}, nil, nil, nil)
 	if _, err := svc.GoogleLogin(context.Background(), GoogleLoginInput{Credential: testCredential}); err != ErrGoogleAuthUnavailable {
 		t.Fatalf("error = %v, want %v", err, ErrGoogleAuthUnavailable)
 	}
@@ -547,9 +537,10 @@ func TestGoogleTokenVerifierRejectsUnexpectedIssuer(t *testing.T) {
 
 func TestRegisterNormalizesEmail(t *testing.T) {
 	repo := &fakeRepository{}
-	svc := NewService(repo, &config.Config{JWTSecret: "test-secret", JWTExpiryHours: 1}, &fakeBusinessChecker{exists: true}, nil, nil, nil)
+	creator := &fakeBusinessCreator{repo: repo}
+	svc := testServiceWithMailer(repo, nil, creator, &fakeMailer{})
 
-	result, err := svc.Register(RegisterInput{BusinessID: uuid.New(), Name: "John", Email: " John@Example.COM ", Password: "secret"})
+	result, err := svc.Register(RegisterInput{BusinessName: testBusinessName, Name: "John", Email: " John@Example.COM ", Password: "secret"})
 	if err != nil {
 		t.Fatalf("Register failed: %v", err)
 	}
@@ -595,7 +586,6 @@ func testServiceWithMailer(repo Repository, google GoogleTokenVerifier, creator 
 	return NewService(
 		repo,
 		&config.Config{JWTSecret: "test-secret", JWTExpiryHours: 1, GoogleClientID: "client-id", EmailVerificationTTLHours: 24, FrontendURL: "http://localhost:3000"},
-		&fakeBusinessChecker{exists: true},
 		google,
 		creator,
 		mailer,
@@ -604,10 +594,11 @@ func testServiceWithMailer(repo Repository, google GoogleTokenVerifier, creator 
 
 func TestRegisterCreatesUnverifiedUserAndSendsEmail(t *testing.T) {
 	repo := &fakeRepository{}
+	creator := &fakeBusinessCreator{repo: repo}
 	mailer := &fakeMailer{}
-	svc := testServiceWithMailer(repo, nil, nil, mailer)
+	svc := testServiceWithMailer(repo, nil, creator, mailer)
 
-	user, err := svc.Register(RegisterInput{BusinessID: uuid.New(), Name: "John", Email: "john@example.com", Password: "secret123"})
+	user, err := svc.Register(RegisterInput{BusinessName: testBusinessName, Name: "John", Email: "john@example.com", Password: "secret123"})
 	if err != nil {
 		t.Fatalf("Register failed: %v", err)
 	}

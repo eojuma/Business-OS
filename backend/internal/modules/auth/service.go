@@ -55,10 +55,6 @@ const resendCooldown = time.Minute
 // credentials error this prevents account enumeration.
 var dummyPasswordHash, _ = bcrypt.GenerateFromPassword([]byte("businessos-dummy-password"), bcrypt.DefaultCost)
 
-type BusinessChecker interface {
-	Exists(id uuid.UUID) (bool, error)
-}
-
 // BusinessCreator creates a business and its owner in one transaction, and can
 // remove a workspace whose sign-up failed before the owner could be verified.
 type BusinessCreator interface {
@@ -79,6 +75,8 @@ type GoogleTokenVerifier interface {
 }
 
 type RegisterInput struct {
+	// BusinessID is used by CreateTeamUser (an owner-scoped path); the public
+	// Register endpoint ignores it and always creates a new workspace.
 	BusinessID    uuid.UUID
 	BusinessName  string
 	BusinessPhone string
@@ -162,16 +160,15 @@ func (s *service) GetByID(id uuid.UUID) (*User, error) {
 type service struct {
 	repo            Repository
 	cfg             *config.Config
-	businesses      BusinessChecker
 	google          GoogleTokenVerifier
 	businessCreator BusinessCreator
 	mailer          email.Sender
-	userLocks       sync.Map
+	userLocks       keyedLocks
 	background      sync.WaitGroup
 }
 
-func NewService(repo Repository, cfg *config.Config, businesses BusinessChecker, google GoogleTokenVerifier, businessCreator BusinessCreator, mailer email.Sender) Service {
-	return &service{repo: repo, cfg: cfg, businesses: businesses, google: google, businessCreator: businessCreator, mailer: mailer}
+func NewService(repo Repository, cfg *config.Config, google GoogleTokenVerifier, businessCreator BusinessCreator, mailer email.Sender) Service {
+	return &service{repo: repo, cfg: cfg, google: google, businessCreator: businessCreator, mailer: mailer}
 }
 
 func (s *service) Register(input RegisterInput) (*User, error) {
@@ -179,14 +176,10 @@ func (s *service) Register(input RegisterInput) (*User, error) {
 
 	businessName := strings.TrimSpace(input.BusinessName)
 	if businessName == "" {
-		// Legacy path: an existing business is supplied explicitly.
-		exists, err := s.businesses.Exists(input.BusinessID)
-		if err != nil {
-			return nil, err
-		}
-		if !exists {
-			return nil, ErrBusinessNotFound
-		}
+		return nil, ErrBusinessRequired
+	}
+	if s.businessCreator == nil {
+		return nil, ErrBusinessRequired
 	}
 
 	if _, err := s.repo.FindByEmail(input.Email); err == nil {
@@ -199,39 +192,7 @@ func (s *service) Register(input RegisterInput) (*User, error) {
 	}
 	hashStr := string(hash)
 
-	if businessName != "" {
-		if s.businessCreator == nil {
-			return nil, ErrBusinessRequired
-		}
-		user := &User{
-			Name:          input.Name,
-			Email:         input.Email,
-			PasswordHash:  &hashStr,
-			Role:          "owner",
-			Active:        true,
-			EmailVerified: false,
-		}
-		// Create the workspace and its owner atomically so a failed sign-up
-		// cannot leave an ownerless business behind.
-		if err := s.businessCreator.CreateWithOwner(businessName, strings.TrimSpace(input.BusinessPhone), user); err != nil {
-			if errors.Is(err, gorm.ErrDuplicatedKey) {
-				return nil, ErrEmailTaken
-			}
-			return nil, err
-		}
-		if err := s.issueEmailVerificationLocked(user); err != nil {
-			// The account cannot sign in until it is verified, so remove the
-			// workspace now and let the owner retry sign-up cleanly.
-			if cleanupErr := s.businessCreator.DeleteWorkspace(user.BusinessID); cleanupErr != nil {
-				log.Printf("auth: cleanup failed after verification email error: user=%s business=%s cleanup=%v send=%v", user.ID, user.BusinessID, cleanupErr, err)
-			}
-			return nil, err
-		}
-		return user, nil
-	}
-
 	user := &User{
-		BusinessID:    input.BusinessID,
 		Name:          input.Name,
 		Email:         input.Email,
 		PasswordHash:  &hashStr,
@@ -239,32 +200,69 @@ func (s *service) Register(input RegisterInput) (*User, error) {
 		Active:        true,
 		EmailVerified: false,
 	}
-	if err := s.repo.Create(user); err != nil {
+	// Create the workspace and its owner atomically so a failed sign-up cannot
+	// leave an ownerless business behind.
+	if err := s.businessCreator.CreateWithOwner(businessName, strings.TrimSpace(input.BusinessPhone), user); err != nil {
 		if errors.Is(err, gorm.ErrDuplicatedKey) {
 			return nil, ErrEmailTaken
 		}
 		return nil, err
 	}
-
 	if err := s.issueEmailVerificationLocked(user); err != nil {
-		if cleanupErr := s.repo.DeleteUser(user.ID); cleanupErr != nil {
-			log.Printf("auth: cleanup failed after verification email error: user=%s cleanup=%v send=%v", user.ID, cleanupErr, err)
+		// The account cannot sign in until it is verified, so remove both the
+		// workspace and the owner now and let the user retry sign-up cleanly.
+		if cleanupErr := s.businessCreator.DeleteWorkspace(user.BusinessID); cleanupErr != nil {
+			log.Printf("auth: cleanup failed after verification email error: user=%s business=%s cleanup=%v send=%v", user.ID, user.BusinessID, cleanupErr, err)
+		}
+		if cleanupErr := s.repo.DeleteUser(user.ID); cleanupErr != nil && !errors.Is(cleanupErr, gorm.ErrRecordNotFound) {
+			log.Printf("auth: user cleanup failed after verification email error: user=%s cleanup=%v send=%v", user.ID, cleanupErr, err)
 		}
 		return nil, err
 	}
 	return user, nil
 }
 
+// keyedLocks provides per-id mutexes without retaining an entry for every id
+// ever seen: the entry is removed when the last holder releases it.
+type keyedLocks struct {
+	mu    sync.Mutex
+	locks map[uuid.UUID]*lockEntry
+}
+
+type lockEntry struct {
+	mu   sync.Mutex
+	refs int
+}
+
+func (k *keyedLocks) lock(id uuid.UUID) func() {
+	k.mu.Lock()
+	if k.locks == nil {
+		k.locks = make(map[uuid.UUID]*lockEntry)
+	}
+	entry := k.locks[id]
+	if entry == nil {
+		entry = &lockEntry{}
+		k.locks[id] = entry
+	}
+	entry.refs++
+	k.mu.Unlock()
+
+	entry.mu.Lock()
+	return func() {
+		entry.mu.Unlock()
+		k.mu.Lock()
+		entry.refs--
+		if entry.refs == 0 {
+			delete(k.locks, id)
+		}
+		k.mu.Unlock()
+	}
+}
+
 // lockUser serializes verification-state changes for a single account so a
 // resend issuing a token cannot race the cleanup performed after verification.
 func (s *service) lockUser(id uuid.UUID) func() {
-	value, _ := s.userLocks.LoadOrStore(id, &sync.Mutex{})
-	mu, ok := value.(*sync.Mutex)
-	if !ok {
-		mu = &sync.Mutex{}
-	}
-	mu.Lock()
-	return mu.Unlock
+	return s.userLocks.lock(id)
 }
 
 // issueEmailVerificationLocked serializes token issuance for a user with

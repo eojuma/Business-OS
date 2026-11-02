@@ -37,7 +37,7 @@ func (c *businessOwnerCreator) DeleteWorkspace(businessID uuid.UUID) error {
 	return c.db.Where("id = ?", businessID).Delete(&business.Business{}).Error
 }
 
-func RegisterRoutes(rg *gin.RouterGroup, db *gorm.DB, cfg *config.Config) {
+func RegisterRoutes(rg *gin.RouterGroup, db *gorm.DB, cfg *config.Config) func(context.Context) {
 	repo := NewRepository(db)
 	businessRepo := business.NewRepository(db)
 
@@ -68,4 +68,8 @@ func RegisterRoutes(rg *gin.RouterGroup, db *gorm.DB, cfg *config.Config) {
 	team.Use(middleware.RequireAuth(cfg), middleware.RequireRole("owner"))
 	team.GET("", handler.ListTeam)
 	team.POST("", handler.CreateTeamUser)
+
+	// Returned so the process can drain background verification sends on
+	// shutdown.
+	return svc.WaitBackground
 }

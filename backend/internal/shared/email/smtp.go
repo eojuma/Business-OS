@@ -116,8 +116,8 @@ func (s *SMTPSender) Send(ctx context.Context, msg Message) error {
 	if err := writer.Close(); err != nil {
 		return fmt.Errorf("email: close message: %w", err)
 	}
-	if err := client.Quit(); err != nil {
-		return fmt.Errorf("email: quit: %w", err)
-	}
+	// QUIT is best-effort: once DATA was accepted the message is delivered, so a
+	// failed QUIT must not turn an accepted message into a delivery error.
+	_ = client.Quit()
 	return nil
 }

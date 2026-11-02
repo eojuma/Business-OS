@@ -86,8 +86,7 @@ func (h *Handler) Me(c *gin.Context) {
 }
 
 type registerRequest struct {
-	BusinessID    string `json:"business_id"`
-	BusinessName  string `json:"business_name"`
+	BusinessName  string `json:"business_name" binding:"required"`
 	BusinessPhone string `json:"business_phone"`
 	Name          string `json:"name" binding:"required"`
 	Email         string `json:"email" binding:"required,email"`
@@ -102,22 +101,7 @@ func (h *Handler) Register(c *gin.Context) {
 		return
 	}
 
-	if req.BusinessID == "" && req.BusinessName == "" {
-		response.Error(c, http.StatusBadRequest, "a business name or business_id is required")
-		return
-	}
-	var businessID uuid.UUID
-	if req.BusinessID != "" {
-		parsed, err := uuid.Parse(req.BusinessID)
-		if err != nil {
-			response.Error(c, http.StatusBadRequest, "invalid business_id")
-			return
-		}
-		businessID = parsed
-	}
-
 	user, err := h.service.Register(RegisterInput{
-		BusinessID:    businessID,
 		BusinessName:  req.BusinessName,
 		BusinessPhone: req.BusinessPhone,
 		Name:          req.Name,
@@ -354,6 +338,8 @@ func (h *Handler) UnlinkGoogle(c *gin.Context) {
 		response.Success(c, http.StatusOK, user)
 	case errors.Is(err, ErrCannotUnlinkGoogleOnly):
 		response.ErrorWithCode(c, http.StatusConflict, "cannot_unlink_google_only", err.Error())
+	case errors.Is(err, ErrGoogleLinkChanged):
+		response.ErrorWithCode(c, http.StatusConflict, "google_link_changed", err.Error())
 	case errors.Is(err, ErrInvalidCredentials):
 		response.Error(c, http.StatusNotFound, "user not found")
 	default:

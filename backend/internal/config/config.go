@@ -13,9 +13,12 @@ import (
 
 // Config holds all application configuration.
 type Config struct {
-	AppEnv         string
-	AppPort        string
-	FrontendURL    string
+	AppEnv      string
+	AppPort     string
+	FrontendURL string
+	// FrontendURLSet reports whether FRONTEND_URL was provided explicitly (as
+	// opposed to the development default).
+	FrontendURLSet bool
 	AllowedOrigins []string
 
 	DBHost     string
@@ -64,11 +67,19 @@ func Load() *Config {
 	appEnv := normalizeEnv(getEnv("APP_ENV", "development"))
 	redisHost, redisPort, redisPassword := parseRedisURL(getEnv("REDIS_URL", "redis://localhost:6379"))
 
+	frontendRaw, frontendOK := os.LookupEnv("FRONTEND_URL")
+	frontendURL := strings.TrimSpace(frontendRaw)
+	frontendSet := frontendOK && frontendURL != ""
+	if !frontendSet {
+		frontendURL = "http://localhost:3000"
+	}
+
 	return &Config{
 		AppEnv:         appEnv,
 		AppPort:        getEnv("APP_PORT", "8080"),
-		FrontendURL:    getEnv("FRONTEND_URL", "http://localhost:3000"),
-		AllowedOrigins: parseOrigins(getEnv("FRONTEND_URL", "http://localhost:3000"), appEnv == "production"),
+		FrontendURL:    frontendURL,
+		FrontendURLSet: frontendSet,
+		AllowedOrigins: parseOrigins(frontendURL, appEnv == "production"),
 
 		DBHost:     getEnv("DB_HOST", "localhost"),
 		DBPort:     getEnv("DB_PORT", "5432"),
@@ -152,7 +163,35 @@ func (c *Config) Validate() error {
 	if c.SMTPFrom == "" {
 		return fmt.Errorf("SMTP_FROM must be configured in production")
 	}
+	// Verification links and CORS use FRONTEND_URL, so production must point at
+	// the deployed origin rather than silently keeping the localhost default.
+	if !c.FrontendURLSet {
+		return fmt.Errorf("FRONTEND_URL must be set in production to the deployed frontend origin")
+	}
+	if containsLoopbackOrigin(c.FrontendURL) {
+		return fmt.Errorf("FRONTEND_URL must be the deployed frontend origin, not a localhost address, in production")
+	}
 	return nil
+}
+
+// containsLoopbackOrigin reports whether any comma-separated FRONTEND_URL
+// entry points at a loopback/local development host.
+func containsLoopbackOrigin(raw string) bool {
+	for _, part := range strings.Split(raw, ",") {
+		origin := strings.TrimSpace(part)
+		if origin == "" {
+			continue
+		}
+		parsed, err := url.Parse(origin)
+		if err != nil {
+			continue
+		}
+		switch strings.ToLower(parsed.Hostname()) {
+		case "localhost", "127.0.0.1", "::1", "0.0.0.0":
+			return true
+		}
+	}
+	return false
 }
 
 // parseOrigins splits a comma-separated FRONTEND_URL into an allowlist.

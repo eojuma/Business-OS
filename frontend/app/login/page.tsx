@@ -155,6 +155,7 @@ export default function LoginPage() {
                   setPendingEmail("");
                   setResendNotice("");
                 }}
+                disabled={loading}
                 required
               />
             </label>

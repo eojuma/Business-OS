@@ -129,6 +129,19 @@ func (r *fakeRepository) ClearGoogleID(id uuid.UUID) error {
 	return gorm.ErrRecordNotFound
 }
 
+func (r *fakeRepository) ClearGoogleIDIfMatches(id uuid.UUID, googleID string) error {
+	for _, user := range r.users {
+		if user.ID == id {
+			if user.GoogleID == nil || *user.GoogleID != googleID {
+				return ErrGoogleLinkChanged
+			}
+			user.GoogleID = nil
+			return nil
+		}
+	}
+	return gorm.ErrRecordNotFound
+}
+
 func (r *fakeRepository) MarkEmailVerified(id uuid.UUID) error {
 	for _, user := range r.users {
 		if user.ID == id {
@@ -143,8 +156,29 @@ func (r *fakeRepository) CreateEmailVerificationToken(token *EmailVerificationTo
 	if token.ID == uuid.Nil {
 		token.ID = uuid.New()
 	}
+	if token.CreatedAt.IsZero() {
+		token.CreatedAt = time.Now()
+	}
 	r.tokens = append(r.tokens, token)
 	return nil
+}
+
+func (r *fakeRepository) LatestEmailVerificationTokenCreatedAt(userID uuid.UUID) (time.Time, error) {
+	var latest time.Time
+	found := false
+	for _, token := range r.tokens {
+		if token.UserID != userID {
+			continue
+		}
+		if !found || token.CreatedAt.After(latest) {
+			latest = token.CreatedAt
+			found = true
+		}
+	}
+	if !found {
+		return time.Time{}, gorm.ErrRecordNotFound
+	}
+	return latest, nil
 }
 
 func (r *fakeRepository) FindEmailVerificationTokenByHash(hash string) (*EmailVerificationToken, error) {

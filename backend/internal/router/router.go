@@ -1,6 +1,7 @@
 package router
 
 import (
+	"context"
 	"net/http"
 
 	"github.com/businessos/backend/internal/config"
@@ -23,7 +24,7 @@ import (
 	"gorm.io/gorm"
 )
 
-func New(db *gorm.DB, cfg *config.Config) *gin.Engine {
+func New(db *gorm.DB, cfg *config.Config) (*gin.Engine, func(context.Context)) {
 	if cfg.IsProduction() {
 		gin.SetMode(gin.ReleaseMode)
 	}
@@ -39,7 +40,7 @@ func New(db *gorm.DB, cfg *config.Config) *gin.Engine {
 
 	v1 := r.Group("/api/v1")
 
-	auth.RegisterRoutes(v1, db, cfg)
+	waitAuthBackground := auth.RegisterRoutes(v1, db, cfg)
 	business.RegisterRoutes(v1, db, cfg)
 
 	protected := v1.Group("")
@@ -59,5 +60,5 @@ func New(db *gorm.DB, cfg *config.Config) *gin.Engine {
 		receipts.RegisterRoutes(protected, db, cfg)
 	}
 
-	return r
+	return r, waitAuthBackground
 }

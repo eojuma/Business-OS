@@ -540,6 +540,12 @@ func (s *service) LinkGoogle(ctx context.Context, userID uuid.UUID, credential s
 		return nil, ErrUnverifiedGoogleEmail
 	}
 
+	// Serialize the whole read-check-update against unlink/claim so the
+	// conditional update cannot race a concurrent link change. Lock on the
+	// caller-supplied id before reading the row.
+	unlock := s.lockUser(userID)
+	defer unlock()
+
 	user, err := s.repo.FindByID(userID)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -553,11 +559,6 @@ func (s *service) LinkGoogle(ctx context.Context, userID uuid.UUID, credential s
 	if normalizeEmail(identity.Email) != normalizeEmail(user.Email) {
 		return nil, ErrGoogleEmailMismatch
 	}
-
-	// Serialize with unlink/claim so the compare-and-set below cannot race a
-	// concurrent link change.
-	unlock := s.lockUser(user.ID)
-	defer unlock()
 
 	if user.GoogleID != nil {
 		if *user.GoogleID == identity.Subject {

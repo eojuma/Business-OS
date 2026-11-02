@@ -117,6 +117,8 @@ type Service interface {
 	CreateTeamUser(input RegisterInput) (*User, error)
 	ListTeam(businessID uuid.UUID) ([]User, error)
 	GetByID(id uuid.UUID) (*User, error)
+	// WaitBackground blocks until pending verification sends finish or ctx ends.
+	WaitBackground(ctx context.Context)
 }
 
 func validRole(role string) bool { return role == "owner" || role == "manager" || role == "cashier" }
@@ -166,8 +168,6 @@ type service struct {
 	mailer          email.Sender
 	userLocks       sync.Map
 	background      sync.WaitGroup
-	resendMu        sync.Mutex
-	resendAt        map[uuid.UUID]time.Time
 }
 
 func NewService(repo Repository, cfg *config.Config, businesses BusinessChecker, google GoogleTokenVerifier, businessCreator BusinessCreator, mailer email.Sender) Service {
@@ -219,10 +219,12 @@ func (s *service) Register(input RegisterInput) (*User, error) {
 			}
 			return nil, err
 		}
-		if err := s.issueEmailVerification(user); err != nil {
+		if err := s.issueEmailVerificationLocked(user); err != nil {
 			// The account cannot sign in until it is verified, so remove the
 			// workspace now and let the owner retry sign-up cleanly.
-			_ = s.businessCreator.DeleteWorkspace(user.BusinessID)
+			if cleanupErr := s.businessCreator.DeleteWorkspace(user.BusinessID); cleanupErr != nil {
+				log.Printf("auth: cleanup failed after verification email error: user=%s business=%s cleanup=%v send=%v", user.ID, user.BusinessID, cleanupErr, err)
+			}
 			return nil, err
 		}
 		return user, nil
@@ -244,8 +246,10 @@ func (s *service) Register(input RegisterInput) (*User, error) {
 		return nil, err
 	}
 
-	if err := s.issueEmailVerification(user); err != nil {
-		_ = s.repo.DeleteUser(user.ID)
+	if err := s.issueEmailVerificationLocked(user); err != nil {
+		if cleanupErr := s.repo.DeleteUser(user.ID); cleanupErr != nil {
+			log.Printf("auth: cleanup failed after verification email error: user=%s cleanup=%v send=%v", user.ID, cleanupErr, err)
+		}
 		return nil, err
 	}
 	return user, nil
@@ -261,6 +265,14 @@ func (s *service) lockUser(id uuid.UUID) func() {
 	}
 	mu.Lock()
 	return mu.Unlock
+}
+
+// issueEmailVerificationLocked serializes token issuance for a user with
+// VerifyEmail/ResendVerification so cleanup cannot delete a fresh token.
+func (s *service) issueEmailVerificationLocked(user *User) error {
+	unlock := s.lockUser(user.ID)
+	defer unlock()
+	return s.issueEmailVerification(user)
 }
 
 func (s *service) Login(input LoginInput) (*AuthResult, error) {
@@ -473,9 +485,6 @@ func (s *service) ResendVerification(emailAddress string) error {
 		// enumeration.
 		return nil
 	}
-	if !s.beginResend(user.ID) {
-		return nil
-	}
 
 	userID := user.ID
 	// Issue asynchronously so the response time does not reveal whether the
@@ -491,6 +500,10 @@ func (s *service) ResendVerification(emailAddress string) error {
 		if err != nil || !fresh.Active || fresh.EmailVerified {
 			return
 		}
+		// Enforce the cooldown from the newest token so it survives restarts.
+		if last, err := s.repo.LatestEmailVerificationTokenCreatedAt(userID); err == nil && time.Since(last) < resendCooldown {
+			return
+		}
 		if err := s.issueEmailVerification(fresh); err != nil {
 			log.Printf("auth: could not resend verification email to %s: %v", fresh.Email, err)
 		}
@@ -498,33 +511,23 @@ func (s *service) ResendVerification(emailAddress string) error {
 	return nil
 }
 
-// beginResend enforces a per-account cooldown so repeated requests cannot flood
-// the recipient or the SMTP relay.
-func (s *service) beginResend(id uuid.UUID) bool {
-	s.resendMu.Lock()
-	defer s.resendMu.Unlock()
-	if s.resendAt == nil {
-		s.resendAt = make(map[uuid.UUID]time.Time)
-	}
-	now := time.Now()
-	if last, ok := s.resendAt[id]; ok && now.Sub(last) < resendCooldown {
-		return false
-	}
-	s.resendAt[id] = now
-	if len(s.resendAt) > 1024 {
-		for key, at := range s.resendAt {
-			if now.Sub(at) >= resendCooldown {
-				delete(s.resendAt, key)
-			}
-		}
-	}
-	return true
-}
-
 // waitForBackground blocks until asynchronous verification work finishes. Tests
 // use it to observe side effects deterministically.
 func (s *service) waitForBackground() {
 	s.background.Wait()
+}
+
+// WaitBackground blocks until pending verification sends finish or ctx ends.
+func (s *service) WaitBackground(ctx context.Context) {
+	done := make(chan struct{})
+	go func() {
+		s.background.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-ctx.Done():
+	}
 }
 
 func (s *service) LinkGoogle(ctx context.Context, userID uuid.UUID, credential string) (*User, error) {
@@ -552,6 +555,12 @@ func (s *service) LinkGoogle(ctx context.Context, userID uuid.UUID, credential s
 	if normalizeEmail(identity.Email) != normalizeEmail(user.Email) {
 		return nil, ErrGoogleEmailMismatch
 	}
+
+	// Serialize with unlink/claim so the compare-and-set below cannot race a
+	// concurrent link change.
+	unlock := s.lockUser(user.ID)
+	defer unlock()
+
 	if user.GoogleID != nil {
 		if *user.GoogleID == identity.Subject {
 			return user, nil
@@ -580,6 +589,9 @@ func (s *service) LinkGoogle(ctx context.Context, userID uuid.UUID, credential s
 }
 
 func (s *service) UnlinkGoogle(userID uuid.UUID) (*User, error) {
+	unlock := s.lockUser(userID)
+	defer unlock()
+
 	user, err := s.repo.FindByID(userID)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -590,7 +602,12 @@ func (s *service) UnlinkGoogle(userID uuid.UUID) (*User, error) {
 	if user.PasswordHash == nil {
 		return nil, ErrCannotUnlinkGoogleOnly
 	}
-	if err := s.repo.ClearGoogleID(user.ID); err != nil {
+	if user.GoogleID == nil {
+		return user, nil
+	}
+	// Only detach the subject that was observed under the lock; a concurrent
+	// re-link with a different subject must not be cleared by this request.
+	if err := s.repo.ClearGoogleIDIfMatches(user.ID, *user.GoogleID); err != nil {
 		return nil, err
 	}
 	user.GoogleID = nil

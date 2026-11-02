@@ -39,7 +39,6 @@ func (c *businessOwnerCreator) DeleteWorkspace(businessID uuid.UUID) error {
 
 func RegisterRoutes(rg *gin.RouterGroup, db *gorm.DB, cfg *config.Config) func(context.Context) {
 	repo := NewRepository(db)
-	businessRepo := business.NewRepository(db)
 
 	googleVerifier, err := NewGoogleTokenVerifier(context.Background(), cfg.GoogleClientID)
 	if err != nil {
@@ -48,7 +47,7 @@ func RegisterRoutes(rg *gin.RouterGroup, db *gorm.DB, cfg *config.Config) func(c
 		log.Printf("auth: google sign-in disabled: GOOGLE_CLIENT_ID is not set")
 	}
 
-	svc := NewService(repo, cfg, businessRepo, googleVerifier, &businessOwnerCreator{db: db}, email.NewFromConfig(cfg))
+	svc := NewService(repo, cfg, googleVerifier, &businessOwnerCreator{db: db}, email.NewFromConfig(cfg))
 	handler := NewHandler(svc)
 
 	authGroup := rg.Group("/auth")

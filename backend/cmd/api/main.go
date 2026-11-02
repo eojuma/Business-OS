@@ -1,8 +1,13 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"log"
+	"net/http"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"github.com/businessos/backend/internal/config"
@@ -48,10 +53,33 @@ func main() {
 	// and then every 15 minutes.
 	notifications.StartScheduler(db, 15*time.Minute)
 
-	r := router.New(db, cfg)
+	engine, waitAuthBackground := router.New(db, cfg)
+
+	server := &http.Server{
+		Addr:              ":" + cfg.AppPort,
+		Handler:           engine,
+		ReadHeaderTimeout: 10 * time.Second,
+	}
 
 	log.Printf("business-os api starting on :%s (env=%s)", cfg.AppPort, cfg.AppEnv)
-	if err := r.Run(":" + cfg.AppPort); err != nil {
-		log.Fatalf("server failed: %v", err)
+	go func() {
+		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			log.Fatalf("server failed: %v", err)
+		}
+	}()
+
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+	<-quit
+	log.Printf("business-os api shutting down")
+
+	// Drain HTTP handlers first so no request can enqueue more background work,
+	// then wait for the pending verification sends to finish.
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := server.Shutdown(shutdownCtx); err != nil {
+		log.Printf("server shutdown: %v", err)
 	}
+	waitAuthBackground(shutdownCtx)
+	log.Printf("business-os api stopped")
 }

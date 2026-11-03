@@ -22,12 +22,28 @@ const GROUP_BUTTON_CLASS =
 const NAV_LINK_CLASS =
   "flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40";
 
+/** Matches Tailwind's `md` breakpoint, where the drawer becomes permanent. */
+function useIsBelowMd(): boolean {
+  const [isBelowMd, setIsBelowMd] = useState(false);
+  useEffect(() => {
+    const update = () => setIsBelowMd(window.innerWidth < 768);
+    update();
+    window.addEventListener("resize", update);
+    return () => window.removeEventListener("resize", update);
+  }, []);
+  return isBelowMd;
+}
+
+/** App chrome: responsive sidebar navigation and the authenticated page frame. */
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname(); const router = useRouter(); const [open, setOpen] = useState(false);
   const [unread, setUnread] = useState(0);
   const [collapsed, setCollapsed] = useState<string[]>([]);
   const [storageKey, setStorageKey] = useState<string | null>(null);
   const [hydrated, setHydrated] = useState(false);
+  const isBelowMd = useIsBelowMd();
+  const openButtonRef = useRef<HTMLButtonElement>(null);
+  const asideRef = useRef<HTMLElement>(null);
 
   useEffect(() => {
     let active = true;
@@ -63,7 +79,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   }, [collapsed, hydrated, storageKey]);
 
   const activeGroupId = findActiveGroupId(NAV_GROUPS, pathname);
-  const lastPathname = useRef(pathname);
+  const lastPathname = useRef<string | null>(null);
   useEffect(() => {
     if (lastPathname.current === pathname) return;
     lastPathname.current = pathname;
@@ -74,9 +90,19 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   }, [activeGroupId, pathname]);
 
   useEffect(() => {
+    const aside = asideRef.current;
+    if (!aside) return;
+    if (isBelowMd && !open) aside.setAttribute("inert", "");
+    else aside.removeAttribute("inert");
+  }, [isBelowMd, open]);
+
+  useEffect(() => {
     if (!open) return;
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setOpen(false);
+      if (event.key === "Escape") {
+        setOpen(false);
+        openButtonRef.current?.focus();
+      }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
@@ -88,10 +114,10 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   }
   return <div className="min-h-dvh bg-background">
     <header className="sticky top-0 z-30 flex h-16 items-center justify-between border-b border-border bg-card/95 px-4 backdrop-blur md:hidden">
-      <button aria-label="Open navigation" aria-expanded={open} aria-controls="workspace-navigation" onClick={() => setOpen(true)} className="rounded-lg p-2 text-muted hover:bg-hover"><Menu size={21}/></button>
+      <button ref={openButtonRef} aria-label="Open navigation" aria-expanded={open} aria-controls="workspace-navigation" onClick={() => setOpen(true)} className="rounded-lg p-2 text-muted hover:bg-hover"><Menu size={21}/></button>
       <Link href="/dashboard" className="font-bold tracking-tight">Business <span className="text-primary">OS</span></Link><ThemeToggle />
     </header>
-    <aside id="workspace-navigation" className={`fixed inset-y-0 left-0 z-40 flex w-64 flex-col border-r border-border bg-card px-4 py-5 transition-transform md:translate-x-0 ${open ? "translate-x-0" : "-translate-x-full"}`}>
+    <aside ref={asideRef} id="workspace-navigation" className={`fixed inset-y-0 left-0 z-40 flex w-64 flex-col border-r border-border bg-card px-4 py-5 transition-transform md:translate-x-0 ${open ? "translate-x-0" : "-translate-x-full"}`}>
       <div className="mb-8 flex items-center justify-between px-2"><Link href="/dashboard" className="text-lg font-bold tracking-tight">Business <span className="text-primary">OS</span></Link><button className="p-1 md:hidden" onClick={() => setOpen(false)} aria-label="Close navigation"><X size={19}/></button></div>
       <nav aria-label="Workspace" className="min-h-0 flex-1 space-y-3 overflow-y-auto pr-1">
         {NAV_GROUPS.map((group) => {

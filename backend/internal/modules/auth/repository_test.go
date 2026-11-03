@@ -164,8 +164,51 @@ func TestRepositorySetGoogleID(t *testing.T) {
 		t.Fatalf("found id = %v, want %v", found.ID, user.ID)
 	}
 
+	if err := repo.SetGoogleID(user.ID, "google-sub-db-replaced"); !errors.Is(err, ErrGoogleIDTaken) {
+		t.Fatalf("second SetGoogleID error = %v, want %v", err, ErrGoogleIDTaken)
+	}
 	if err := repo.SetGoogleID(uuid.New(), "google-sub-db-3"); !errors.Is(err, gorm.ErrRecordNotFound) {
 		t.Fatalf("SetGoogleID error = %v, want %v", err, gorm.ErrRecordNotFound)
+	}
+}
+
+func TestRepositoryClaimUnverifiedAccountForGoogle(t *testing.T) {
+	db, businessID := setupAuthTestDB(t)
+	repo := NewRepository(db)
+
+	hash := "untrusted-hash"
+	user := &User{BusinessID: businessID, Name: "Claim Me", Email: "claim-db@example.com", PasswordHash: &hash, EmailVerified: false}
+	if err := repo.Create(user); err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+
+	verified := &User{BusinessID: businessID, Name: "Verified", Email: "verified-claim-db@example.com", EmailVerified: true}
+	if err := repo.Create(verified); err != nil {
+		t.Fatalf("Create verified user failed: %v", err)
+	}
+	if err := repo.ClaimUnverifiedAccountForGoogle(verified.ID, "google-sub-verified"); !errors.Is(err, ErrGoogleIDTaken) {
+		t.Fatalf("claiming a verified account error = %v, want %v", err, ErrGoogleIDTaken)
+	}
+
+	if err := repo.ClaimUnverifiedAccountForGoogle(user.ID, "google-sub-claim"); err != nil {
+		t.Fatalf("ClaimUnverifiedAccountForGoogle failed: %v", err)
+	}
+	var stored User
+	if err := db.First(&stored, "id = ?", user.ID).Error; err != nil {
+		t.Fatalf("find claimed user: %v", err)
+	}
+	if stored.GoogleID == nil || *stored.GoogleID != "google-sub-claim" {
+		t.Fatalf("google_id = %v, want %q", stored.GoogleID, "google-sub-claim")
+	}
+	if !stored.EmailVerified {
+		t.Fatal("expected the claimed account to be verified")
+	}
+	if stored.PasswordHash != nil {
+		t.Fatal("expected the untrusted password to be cleared")
+	}
+
+	if err := repo.ClaimUnverifiedAccountForGoogle(user.ID, "google-sub-other"); !errors.Is(err, ErrGoogleIDTaken) {
+		t.Fatalf("second claim error = %v, want %v", err, ErrGoogleIDTaken)
 	}
 }
 
@@ -184,5 +227,86 @@ func TestRepositoryFindByEmailCaseInsensitive(t *testing.T) {
 	}
 	if found.ID != user.ID {
 		t.Fatalf("found user %v, want %v", found.ID, user.ID)
+	}
+}
+
+func TestRepositoryCreatePersistsUnverifiedFalse(t *testing.T) {
+	db, businessID := setupAuthTestDB(t)
+	repo := NewRepository(db)
+
+	user := &User{BusinessID: businessID, Name: "Unverified", Email: "unverified-db@example.com", EmailVerified: false}
+	if err := repo.Create(user); err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+
+	var stored User
+	if err := db.First(&stored, "id = ?", user.ID).Error; err != nil {
+		t.Fatalf("find user: %v", err)
+	}
+	if stored.EmailVerified {
+		t.Fatal("expected email_verified to stay false for a new sign-up")
+	}
+
+	if err := repo.MarkEmailVerified(user.ID); err != nil {
+		t.Fatalf("MarkEmailVerified failed: %v", err)
+	}
+	if err := db.First(&stored, "id = ?", user.ID).Error; err != nil {
+		t.Fatalf("find user after verify: %v", err)
+	}
+	if !stored.EmailVerified {
+		t.Fatal("expected email_verified to become true")
+	}
+}
+
+func TestRepositoryEmailVerificationTokenLifecycle(t *testing.T) {
+	db, businessID := setupAuthTestDB(t)
+	repo := NewRepository(db)
+
+	user := &User{BusinessID: businessID, Name: "Token User", Email: "token-db@example.com"}
+	if err := repo.Create(user); err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+
+	raw := "integration-token"
+	token := &EmailVerificationToken{UserID: user.ID, TokenHash: hashToken(raw), ExpiresAt: time.Now().Add(time.Hour)}
+	if err := repo.CreateEmailVerificationToken(token); err != nil {
+		t.Fatalf("CreateEmailVerificationToken failed: %v", err)
+	}
+
+	found, err := repo.FindEmailVerificationTokenByHash(hashToken(raw))
+	if err != nil {
+		t.Fatalf("FindEmailVerificationTokenByHash failed: %v", err)
+	}
+	if found.UserID != user.ID {
+		t.Fatalf("token user = %v, want %v", found.UserID, user.ID)
+	}
+
+	consumed, err := repo.ConsumeTokenAndMarkEmailVerified(found.ID, user.ID)
+	if err != nil {
+		t.Fatalf("ConsumeTokenAndMarkEmailVerified failed: %v", err)
+	}
+	if !consumed {
+		t.Fatal("expected the first consume to succeed")
+	}
+	var verified User
+	if err := db.First(&verified, "id = ?", user.ID).Error; err != nil {
+		t.Fatalf("find verified user: %v", err)
+	}
+	if !verified.EmailVerified {
+		t.Fatal("expected the user to be verified in the same transaction")
+	}
+	again, err := repo.ConsumeTokenAndMarkEmailVerified(found.ID, user.ID)
+	if err != nil {
+		t.Fatalf("second ConsumeTokenAndMarkEmailVerified failed: %v", err)
+	}
+	if again {
+		t.Fatal("a token must not be consumable twice")
+	}
+
+	if err := repo.DeleteEmailVerificationTokensForUser(user.ID); err != nil {
+		t.Fatalf("DeleteEmailVerificationTokensForUser failed: %v", err)
+	}
+	if _, err := repo.FindEmailVerificationTokenByHash(hashToken(raw)); !errors.Is(err, gorm.ErrRecordNotFound) {
+		t.Fatalf("token should be gone, got %v", err)
 	}
 }

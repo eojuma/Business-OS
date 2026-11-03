@@ -237,7 +237,8 @@ NEXT_PUBLIC_GOOGLE_CLIENT_ID=<client-id>.apps.googleusercontent.com
 
 Behaviour and security rules:
 
-- A password account is never linked to a Google identity automatically. Google sign-in returns `409` with code `google_link_requires_password`; the user signs in with the password instead.
+- A password account is **never** linked to a Google identity automatically. When a Google email matches a verified password account, sign-in returns `409` with code `google_link_requires_password` (or `google_link_required` for passwordless accounts). The user signs in with their existing method and connects Google from **Settings → Connected accounts** (`POST /auth/google/link`), which requires the Google email to match the account email.
+- A **verified** local account is never silently claimed. An **unverified** local account (password sign-up that was never confirmed) can be claimed by the Google-verified owner: the account is marked verified, the Google subject is attached, and the untrusted password is cleared. This resolves pre-registration/“pre-hijacking” abuse without locking out the real inbox owner.
 - If the Google subject behind an email changes (Workspace user recreated, address reassigned), sign-in returns `409` with code `google_account_conflict`. Re-linking is a deliberate operator action: verify the new owner out of band and clear the stale link before the user signs in again.
 
 ```sql
@@ -246,6 +247,27 @@ UPDATE users SET google_id = NULL WHERE email = 'user@example.com';
 
 - An account with a password always uses password sign-in; an unknown address and a Google-only account return the same generic credentials error, so account type is not disclosed.
 - With `GOOGLE_CLIENT_ID` empty, `/auth/google` returns `503` and the UI reports that Google sign-in is not configured.
+
+### 5b. Email verification
+
+Password sign-ups must confirm their email address before they can sign in. Existing accounts are grandfathered as verified by migration `000018`.
+
+- `POST /auth/register` creates the user unverified and sends a single-use link (`FRONTEND_URL/verify-email?token=…`); no session token is issued yet.
+- `POST /auth/email/verify` consumes the token; `POST /auth/email/resend` issues a fresh link (always returns `202`, so addresses cannot be enumerated).
+- `POST /auth/login` returns `403` with code `email_not_verified` until the address is confirmed.
+- Tokens are stored only as SHA-256 hashes, expire after `EMAIL_VERIFICATION_TTL_HOURS` (default 24), and can be used once.
+- SMTP is required in production (`APP_ENV=production` refuses to start without `SMTP_HOST`). In development the link is written to the backend log instead of being emailed.
+- Connecting Google marks the account verified because Google has proven inbox ownership.
+
+```bash
+SMTP_HOST=smtp.example.com
+SMTP_PORT=587
+SMTP_USERNAME=...
+SMTP_PASSWORD=...
+SMTP_FROM="Business OS <no-reply@example.com>"
+SMTP_TLS=true
+EMAIL_VERIFICATION_TTL_HOURS=24
+```
 
 ### 6. Reproduce CI locally
 
@@ -274,6 +296,12 @@ mise run db:test:up   # start the test PostgreSQL instance
 | `JWT_SECRET` | development placeholder | JWT signing key; must be set in production |
 | `JWT_EXPIRY_HOURS` | `24` | Token lifetime |
 | `GOOGLE_CLIENT_ID` | empty | Enables Google sign-in when set |
+| `SMTP_HOST` | empty | SMTP relay for verification emails; required in production |
+| `SMTP_PORT` | `587` | SMTP port (STARTTLS) |
+| `SMTP_USERNAME` / `SMTP_PASSWORD` | empty | SMTP credentials (optional for open relays) |
+| `SMTP_FROM` | `Business OS <no-reply@businessos.local>` | Envelope/from address |
+| `SMTP_TLS` | `true` | Whether the relay is expected to offer STARTTLS |
+| `EMAIL_VERIFICATION_TTL_HOURS` | `24` | Verification link lifetime |
 | `AI_PROVIDER` / `AI_MODEL` / `AI_BASE_URL` | Gemini defaults | OpenAI-compatible assistant provider |
 | `AI_API_KEY` | empty | Required for `/assistant/*`; those routes return `500` without it |
 | `AI_OCR_MODEL` | empty | Vision model for receipt OCR; falls back to `AI_MODEL` |

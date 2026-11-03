@@ -6,8 +6,10 @@ import (
 
 	"github.com/businessos/backend/internal/config"
 	"github.com/businessos/backend/internal/modules/business"
+	"github.com/businessos/backend/internal/shared/email"
 	"github.com/businessos/backend/internal/shared/middleware"
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
 
@@ -29,9 +31,14 @@ func (c *businessOwnerCreator) CreateWithOwner(name, phone string, user *User) e
 	})
 }
 
-func RegisterRoutes(rg *gin.RouterGroup, db *gorm.DB, cfg *config.Config) {
+// DeleteWorkspace removes a workspace whose sign-up could not deliver a
+// verification email. Users cascade with the business row.
+func (c *businessOwnerCreator) DeleteWorkspace(businessID uuid.UUID) error {
+	return c.db.Where("id = ?", businessID).Delete(&business.Business{}).Error
+}
+
+func RegisterRoutes(rg *gin.RouterGroup, db *gorm.DB, cfg *config.Config) func(context.Context) {
 	repo := NewRepository(db)
-	businessRepo := business.NewRepository(db)
 
 	googleVerifier, err := NewGoogleTokenVerifier(context.Background(), cfg.GoogleClientID)
 	if err != nil {
@@ -40,7 +47,7 @@ func RegisterRoutes(rg *gin.RouterGroup, db *gorm.DB, cfg *config.Config) {
 		log.Printf("auth: google sign-in disabled: GOOGLE_CLIENT_ID is not set")
 	}
 
-	svc := NewService(repo, cfg, businessRepo, googleVerifier, &businessOwnerCreator{db: db})
+	svc := NewService(repo, cfg, googleVerifier, &businessOwnerCreator{db: db}, email.NewFromConfig(cfg))
 	handler := NewHandler(svc)
 
 	authGroup := rg.Group("/auth")
@@ -48,10 +55,20 @@ func RegisterRoutes(rg *gin.RouterGroup, db *gorm.DB, cfg *config.Config) {
 		authGroup.POST("/register", handler.Register)
 		authGroup.POST("/login", handler.Login)
 		authGroup.POST("/google", handler.Google)
+		authGroup.POST("/email/verify", handler.VerifyEmail)
+		authGroup.POST("/email/resend", handler.ResendVerification)
 	}
 	authGroup.GET("/me", middleware.RequireAuth(cfg), handler.Me)
+	linkGroup := rg.Group("/auth")
+	linkGroup.Use(middleware.RequireAuth(cfg))
+	linkGroup.POST("/google/link", handler.LinkGoogle)
+	linkGroup.POST("/google/unlink", handler.UnlinkGoogle)
 	team := rg.Group("/users")
 	team.Use(middleware.RequireAuth(cfg), middleware.RequireRole("owner"))
 	team.GET("", handler.ListTeam)
 	team.POST("", handler.CreateTeamUser)
+
+	// Returned so the process can drain background verification sends on
+	// shutdown.
+	return svc.WaitBackground
 }

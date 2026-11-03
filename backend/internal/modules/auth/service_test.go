@@ -2,10 +2,13 @@ package auth
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/businessos/backend/internal/config"
+	"github.com/businessos/backend/internal/shared/email"
 	"github.com/google/uuid"
 	"golang.org/x/crypto/bcrypt"
 	"google.golang.org/api/idtoken"
@@ -13,12 +16,15 @@ import (
 )
 
 const (
-	testCredential = "token"
-	testRoleOwner  = "owner"
+	testCredential   = "token"
+	testRoleOwner    = "owner"
+	testBusinessName = "New Store"
+	testOwnerEmail   = "owner@example.com"
 )
 
 type fakeRepository struct {
 	users   []*User
+	tokens  []*EmailVerificationToken
 	created *User
 	setID   uuid.UUID
 	setSub  string
@@ -30,6 +36,17 @@ func (r *fakeRepository) Create(user *User) error {
 	}
 	r.created = user
 	r.users = append(r.users, user)
+	return nil
+}
+
+func (r *fakeRepository) DeleteUser(id uuid.UUID) error {
+	kept := r.users[:0]
+	for _, user := range r.users {
+		if user.ID != id {
+			kept = append(kept, user)
+		}
+	}
+	r.users = kept
 	return nil
 }
 
@@ -83,6 +100,143 @@ func (r *fakeRepository) SetGoogleID(id uuid.UUID, googleID string) error {
 	return gorm.ErrRecordNotFound
 }
 
+func (r *fakeRepository) ClaimUnverifiedAccountForGoogle(id uuid.UUID, googleID string) error {
+	for _, user := range r.users {
+		if user.ID != id {
+			continue
+		}
+		if user.GoogleID != nil || user.EmailVerified {
+			return ErrGoogleIDTaken
+		}
+		sub := googleID
+		user.GoogleID = &sub
+		user.EmailVerified = true
+		user.PasswordHash = nil
+		r.setID = id
+		r.setSub = googleID
+		return nil
+	}
+	return gorm.ErrRecordNotFound
+}
+
+func (r *fakeRepository) ClearGoogleID(id uuid.UUID) error {
+	for _, user := range r.users {
+		if user.ID == id {
+			user.GoogleID = nil
+			return nil
+		}
+	}
+	return gorm.ErrRecordNotFound
+}
+
+func (r *fakeRepository) ClearGoogleIDIfMatches(id uuid.UUID, googleID string) error {
+	for _, user := range r.users {
+		if user.ID == id {
+			if user.GoogleID == nil || *user.GoogleID != googleID {
+				return ErrGoogleLinkChanged
+			}
+			user.GoogleID = nil
+			return nil
+		}
+	}
+	return gorm.ErrRecordNotFound
+}
+
+func (r *fakeRepository) MarkEmailVerified(id uuid.UUID) error {
+	for _, user := range r.users {
+		if user.ID == id {
+			user.EmailVerified = true
+			return nil
+		}
+	}
+	return gorm.ErrRecordNotFound
+}
+
+func (r *fakeRepository) CreateEmailVerificationToken(token *EmailVerificationToken) error {
+	if token.ID == uuid.Nil {
+		token.ID = uuid.New()
+	}
+	if token.CreatedAt.IsZero() {
+		token.CreatedAt = time.Now()
+	}
+	r.tokens = append(r.tokens, token)
+	return nil
+}
+
+func (r *fakeRepository) LatestEmailVerificationTokenCreatedAt(userID uuid.UUID) (time.Time, error) {
+	var latest time.Time
+	found := false
+	for _, token := range r.tokens {
+		if token.UserID != userID {
+			continue
+		}
+		if !found || token.CreatedAt.After(latest) {
+			latest = token.CreatedAt
+			found = true
+		}
+	}
+	if !found {
+		return time.Time{}, gorm.ErrRecordNotFound
+	}
+	return latest, nil
+}
+
+func (r *fakeRepository) FindEmailVerificationTokenByHash(hash string) (*EmailVerificationToken, error) {
+	for _, token := range r.tokens {
+		if token.TokenHash == hash {
+			return token, nil
+		}
+	}
+	return nil, gorm.ErrRecordNotFound
+}
+
+func (r *fakeRepository) ConsumeTokenAndMarkEmailVerified(tokenID, userID uuid.UUID) (bool, error) {
+	for _, token := range r.tokens {
+		if token.ID != tokenID {
+			continue
+		}
+		if token.UsedAt != nil || time.Now().After(token.ExpiresAt) {
+			return false, nil
+		}
+		for _, user := range r.users {
+			if user.ID == userID {
+				now := time.Now()
+				token.UsedAt = &now
+				user.EmailVerified = true
+				return true, nil
+			}
+		}
+		return false, gorm.ErrRecordNotFound
+	}
+	return false, nil
+}
+
+func (r *fakeRepository) DeleteEmailVerificationToken(id uuid.UUID) error {
+	kept := r.tokens[:0]
+	for _, token := range r.tokens {
+		if token.ID != id {
+			kept = append(kept, token)
+		}
+	}
+	r.tokens = kept
+	return nil
+}
+
+func (r *fakeRepository) DeleteEmailVerificationTokensForUser(userID uuid.UUID) error {
+	return r.DeleteEmailVerificationTokensForUserExcept(userID, uuid.Nil)
+}
+
+func (r *fakeRepository) DeleteEmailVerificationTokensForUserExcept(userID, keepID uuid.UUID) error {
+	kept := r.tokens[:0]
+	for _, token := range r.tokens {
+		if token.UserID != userID || token.ID == keepID {
+			kept = append(kept, token)
+		}
+	}
+	r.tokens = kept
+	return nil
+}
+
 type fakeVerifier struct {
 	identity *GoogleIdentity
 	err      error
@@ -92,18 +246,10 @@ func (v *fakeVerifier) Verify(context.Context, string) (*GoogleIdentity, error) 
 	return v.identity, v.err
 }
 
-type fakeBusinessChecker struct {
-	exists bool
-	err    error
-}
-
-func (c *fakeBusinessChecker) Exists(uuid.UUID) (bool, error) {
-	return c.exists, c.err
-}
-
 type fakeBusinessCreator struct {
 	repo       *fakeRepository
 	businessID uuid.UUID
+	deleted    uuid.UUID
 	err        error
 	calls      int
 	name       string
@@ -129,13 +275,27 @@ func (c *fakeBusinessCreator) CreateWithOwner(name, phone string, user *User) er
 	return nil
 }
 
+func (c *fakeBusinessCreator) DeleteWorkspace(businessID uuid.UUID) error {
+	c.deleted = businessID
+	if c.repo != nil {
+		kept := c.repo.users[:0]
+		for _, user := range c.repo.users {
+			if user.BusinessID != businessID {
+				kept = append(kept, user)
+			}
+		}
+		c.repo.users = kept
+	}
+	return nil
+}
+
 func testService(repo Repository, google GoogleTokenVerifier, creator BusinessCreator) Service {
 	return NewService(
 		repo,
 		&config.Config{JWTSecret: "test-secret", JWTExpiryHours: 1, GoogleClientID: "client-id"},
-		&fakeBusinessChecker{exists: true},
 		google,
 		creator,
+		nil,
 	)
 }
 
@@ -167,7 +327,7 @@ func TestGoogleLoginExistingUser(t *testing.T) {
 
 func TestGoogleLoginRejectsLinkingPasswordAccount(t *testing.T) {
 	hash := "existing-hash"
-	user := &User{ID: uuid.New(), BusinessID: uuid.New(), Name: "Password User", Email: "link@example.com", PasswordHash: &hash, Role: testRoleOwner, Active: true}
+	user := &User{ID: uuid.New(), BusinessID: uuid.New(), Name: "Password User", Email: "link@example.com", PasswordHash: &hash, Role: testRoleOwner, Active: true, EmailVerified: true}
 	repo := &fakeRepository{users: []*User{user}}
 	svc := testService(repo, &fakeVerifier{identity: googleIdentity("google-sub-2", user.Email, true)}, nil)
 
@@ -227,13 +387,13 @@ func TestGoogleLoginCreatesWorkspaceForNewUser(t *testing.T) {
 
 	result, err := svc.GoogleLogin(context.Background(), GoogleLoginInput{
 		Credential:    "token",
-		BusinessName:  "New Store",
+		BusinessName:  testBusinessName,
 		BusinessPhone: "0700",
 	})
 	if err != nil {
 		t.Fatalf("GoogleLogin failed: %v", err)
 	}
-	if creator.calls != 1 || creator.name != "New Store" || creator.phone != "0700" {
+	if creator.calls != 1 || creator.name != testBusinessName || creator.phone != "0700" {
 		t.Fatalf("creator called %d times with name=%q phone=%q", creator.calls, creator.name, creator.phone)
 	}
 	if result.User.BusinessID != creator.businessID {
@@ -275,7 +435,7 @@ func TestGoogleLoginRejectsInvalidToken(t *testing.T) {
 }
 
 func TestGoogleLoginUnavailableWhenNotConfigured(t *testing.T) {
-	svc := NewService(&fakeRepository{}, &config.Config{JWTSecret: "test-secret", JWTExpiryHours: 1}, &fakeBusinessChecker{}, nil, nil)
+	svc := NewService(&fakeRepository{}, &config.Config{JWTSecret: "test-secret", JWTExpiryHours: 1}, nil, nil, nil)
 	if _, err := svc.GoogleLogin(context.Background(), GoogleLoginInput{Credential: testCredential}); err != ErrGoogleAuthUnavailable {
 		t.Fatalf("error = %v, want %v", err, ErrGoogleAuthUnavailable)
 	}
@@ -298,7 +458,7 @@ func TestLoginStillAcceptsPasswordAccount(t *testing.T) {
 		t.Fatalf("hash password: %v", err)
 	}
 	hashStr := string(hash)
-	user := &User{ID: uuid.New(), BusinessID: uuid.New(), Email: "password@example.com", PasswordHash: &hashStr, Role: testRoleOwner, Active: true}
+	user := &User{ID: uuid.New(), BusinessID: uuid.New(), Email: "password@example.com", PasswordHash: &hashStr, Role: testRoleOwner, Active: true, EmailVerified: true}
 	svc := testService(&fakeRepository{users: []*User{user}}, nil, nil)
 
 	result, err := svc.Login(LoginInput{Email: user.Email, Password: "password123"})
@@ -377,14 +537,15 @@ func TestGoogleTokenVerifierRejectsUnexpectedIssuer(t *testing.T) {
 
 func TestRegisterNormalizesEmail(t *testing.T) {
 	repo := &fakeRepository{}
-	svc := NewService(repo, &config.Config{JWTSecret: "test-secret", JWTExpiryHours: 1}, &fakeBusinessChecker{exists: true}, nil, nil)
+	creator := &fakeBusinessCreator{repo: repo}
+	svc := testServiceWithMailer(repo, nil, creator, &fakeMailer{})
 
-	result, err := svc.Register(RegisterInput{BusinessID: uuid.New(), Name: "John", Email: " John@Example.COM ", Password: "secret"})
+	result, err := svc.Register(RegisterInput{BusinessName: testBusinessName, Name: "John", Email: " John@Example.COM ", Password: "secret"})
 	if err != nil {
 		t.Fatalf("Register failed: %v", err)
 	}
-	if result.User.Email != "john@example.com" {
-		t.Fatalf("email = %q, want %q", result.User.Email, "john@example.com")
+	if result.Email != "john@example.com" {
+		t.Fatalf("email = %q, want %q", result.Email, "john@example.com")
 	}
 	if repo.created == nil || repo.created.Email != "john@example.com" {
 		t.Fatalf("stored email was not normalized: %+v", repo.created)
@@ -405,5 +566,281 @@ func TestGoogleLoginMatchesMixedCaseEmail(t *testing.T) {
 	}
 	if repo.setID != user.ID || repo.setSub != "google-sub-case" {
 		t.Fatalf("expected the google id to be linked to the existing user, got id=%v sub=%q", repo.setID, repo.setSub)
+	}
+}
+
+type fakeMailer struct {
+	sent []email.Message
+	err  error
+}
+
+func (m *fakeMailer) Send(_ context.Context, msg email.Message) error {
+	if m.err != nil {
+		return m.err
+	}
+	m.sent = append(m.sent, msg)
+	return nil
+}
+
+func testServiceWithMailer(repo Repository, google GoogleTokenVerifier, creator BusinessCreator, mailer email.Sender) Service {
+	return NewService(
+		repo,
+		&config.Config{JWTSecret: "test-secret", JWTExpiryHours: 1, GoogleClientID: "client-id", EmailVerificationTTLHours: 24, FrontendURL: "http://localhost:3000"},
+		google,
+		creator,
+		mailer,
+	)
+}
+
+func TestRegisterCreatesUnverifiedUserAndSendsEmail(t *testing.T) {
+	repo := &fakeRepository{}
+	creator := &fakeBusinessCreator{repo: repo}
+	mailer := &fakeMailer{}
+	svc := testServiceWithMailer(repo, nil, creator, mailer)
+
+	user, err := svc.Register(RegisterInput{BusinessName: testBusinessName, Name: "John", Email: "john@example.com", Password: "secret123"})
+	if err != nil {
+		t.Fatalf("Register failed: %v", err)
+	}
+	if user.EmailVerified {
+		t.Fatal("new accounts must start unverified")
+	}
+	if len(repo.tokens) != 1 {
+		t.Fatalf("verification tokens = %d, want 1", len(repo.tokens))
+	}
+	if len(mailer.sent) != 1 || mailer.sent[0].To != "john@example.com" {
+		t.Fatalf("expected one verification email, got %+v", mailer.sent)
+	}
+}
+
+func TestLoginRejectsUnverifiedAccount(t *testing.T) {
+	hash, err := bcrypt.GenerateFromPassword([]byte("password123"), bcrypt.MinCost)
+	if err != nil {
+		t.Fatalf("hash password: %v", err)
+	}
+	hashStr := string(hash)
+	user := &User{ID: uuid.New(), BusinessID: uuid.New(), Email: "pending@example.com", PasswordHash: &hashStr, Active: true, EmailVerified: false}
+	svc := testService(&fakeRepository{users: []*User{user}}, nil, nil)
+
+	if _, err := svc.Login(LoginInput{Email: user.Email, Password: "password123"}); err != ErrEmailNotVerified {
+		t.Fatalf("error = %v, want %v", err, ErrEmailNotVerified)
+	}
+}
+
+func TestVerifyEmailConsumesSingleUseToken(t *testing.T) {
+	user := &User{ID: uuid.New(), BusinessID: uuid.New(), Email: "verify@example.com", Active: true, EmailVerified: false}
+	raw := "one-time-token"
+	repo := &fakeRepository{
+		users: []*User{user},
+		tokens: []*EmailVerificationToken{{
+			ID:        uuid.New(),
+			UserID:    user.ID,
+			TokenHash: hashToken(raw),
+			ExpiresAt: time.Now().Add(time.Hour),
+		}},
+	}
+	svc := testService(repo, nil, nil)
+
+	if err := svc.VerifyEmail(raw); err != nil {
+		t.Fatalf("VerifyEmail failed: %v", err)
+	}
+	if !user.EmailVerified {
+		t.Fatal("expected the account to be verified")
+	}
+	if err := svc.VerifyEmail(raw); err != ErrInvalidVerificationToken {
+		t.Fatalf("replay error = %v, want %v", err, ErrInvalidVerificationToken)
+	}
+}
+
+func TestVerifyEmailRejectsExpiredToken(t *testing.T) {
+	user := &User{ID: uuid.New(), BusinessID: uuid.New(), Email: "expired@example.com", Active: true}
+	raw := "expired-token"
+	repo := &fakeRepository{
+		users: []*User{user},
+		tokens: []*EmailVerificationToken{{
+			ID:        uuid.New(),
+			UserID:    user.ID,
+			TokenHash: hashToken(raw),
+			ExpiresAt: time.Now().Add(-time.Minute),
+		}},
+	}
+	svc := testService(repo, nil, nil)
+
+	if err := svc.VerifyEmail(raw); err != ErrExpiredVerificationToken {
+		t.Fatalf("error = %v, want %v", err, ErrExpiredVerificationToken)
+	}
+}
+
+func TestResendVerificationIsGeneric(t *testing.T) {
+	svc := testService(&fakeRepository{}, nil, nil)
+	if err := svc.ResendVerification("missing@example.com"); err != nil {
+		t.Fatalf("ResendVerification should not reveal missing accounts: %v", err)
+	}
+}
+
+func TestGoogleLoginClaimsUnverifiedAccountAndClearsPassword(t *testing.T) {
+	hash := "attacker-hash"
+	user := &User{ID: uuid.New(), BusinessID: uuid.New(), Name: "Pre-registered", Email: "victim@example.com", PasswordHash: &hash, Active: true, EmailVerified: false}
+	repo := &fakeRepository{users: []*User{user}}
+	svc := testService(repo, &fakeVerifier{identity: googleIdentity("google-sub-claim", user.Email, true)}, nil)
+
+	result, err := svc.GoogleLogin(context.Background(), GoogleLoginInput{Credential: testCredential})
+	if err != nil {
+		t.Fatalf("GoogleLogin failed: %v", err)
+	}
+	if !result.User.EmailVerified {
+		t.Fatal("claimed account should be verified")
+	}
+	if result.User.PasswordHash != nil {
+		t.Fatal("the untrusted password must be cleared on claim")
+	}
+	if result.User.GoogleID == nil || *result.User.GoogleID != "google-sub-claim" {
+		t.Fatal("expected the google subject to be linked")
+	}
+}
+
+func TestGoogleLoginVerifiedPasswordAccountRequiresLink(t *testing.T) {
+	hash := "existing-hash"
+	user := &User{ID: uuid.New(), BusinessID: uuid.New(), Email: "verified@example.com", PasswordHash: &hash, Active: true, EmailVerified: true}
+	repo := &fakeRepository{users: []*User{user}}
+	svc := testService(repo, &fakeVerifier{identity: googleIdentity("google-sub-v", user.Email, true)}, nil)
+
+	if _, err := svc.GoogleLogin(context.Background(), GoogleLoginInput{Credential: testCredential}); err != ErrGoogleLinkRequiresPassword {
+		t.Fatalf("error = %v, want %v", err, ErrGoogleLinkRequiresPassword)
+	}
+}
+
+func TestLinkGoogleRequiresMatchingEmail(t *testing.T) {
+	user := &User{ID: uuid.New(), BusinessID: uuid.New(), Email: testOwnerEmail, Active: true, EmailVerified: true}
+	repo := &fakeRepository{users: []*User{user}}
+	svc := testService(repo, &fakeVerifier{identity: googleIdentity("google-sub-x", "other@example.com", true)}, nil)
+
+	if _, err := svc.LinkGoogle(context.Background(), user.ID, testCredential); err != ErrGoogleEmailMismatch {
+		t.Fatalf("error = %v, want %v", err, ErrGoogleEmailMismatch)
+	}
+	if user.GoogleID != nil {
+		t.Fatal("google id must not be linked on email mismatch")
+	}
+}
+
+func TestLinkGoogleSuccess(t *testing.T) {
+	user := &User{ID: uuid.New(), BusinessID: uuid.New(), Email: testOwnerEmail, Active: true, EmailVerified: true}
+	repo := &fakeRepository{users: []*User{user}}
+	svc := testService(repo, &fakeVerifier{identity: googleIdentity("google-sub-ok", user.Email, true)}, nil)
+
+	linked, err := svc.LinkGoogle(context.Background(), user.ID, testCredential)
+	if err != nil {
+		t.Fatalf("LinkGoogle failed: %v", err)
+	}
+	if linked.GoogleID == nil || *linked.GoogleID != "google-sub-ok" {
+		t.Fatal("expected the google subject to be linked")
+	}
+}
+
+func TestUnlinkGoogleRefusesOnlyLogin(t *testing.T) {
+	sub := "google-sub-only"
+	user := &User{ID: uuid.New(), BusinessID: uuid.New(), Email: "googleonly2@example.com", GoogleID: &sub, Active: true, EmailVerified: true}
+	svc := testService(&fakeRepository{users: []*User{user}}, nil, nil)
+
+	if _, err := svc.UnlinkGoogle(user.ID); err != ErrCannotUnlinkGoogleOnly {
+		t.Fatalf("error = %v, want %v", err, ErrCannotUnlinkGoogleOnly)
+	}
+}
+
+func TestUnlinkGoogleWithPassword(t *testing.T) {
+	hash := "hash"
+	sub := "google-sub-linked"
+	user := &User{ID: uuid.New(), BusinessID: uuid.New(), Email: "both@example.com", PasswordHash: &hash, GoogleID: &sub, Active: true, EmailVerified: true}
+	svc := testService(&fakeRepository{users: []*User{user}}, nil, nil)
+
+	updated, err := svc.UnlinkGoogle(user.ID)
+	if err != nil {
+		t.Fatalf("UnlinkGoogle failed: %v", err)
+	}
+	if updated.GoogleID != nil {
+		t.Fatal("expected google id to be cleared")
+	}
+}
+
+func TestRegisterCreatesWorkspaceInOneRequest(t *testing.T) {
+	repo := &fakeRepository{}
+	creator := &fakeBusinessCreator{repo: repo}
+	mailer := &fakeMailer{}
+	svc := testServiceWithMailer(repo, nil, creator, mailer)
+
+	user, err := svc.Register(RegisterInput{
+		BusinessName:  testBusinessName,
+		BusinessPhone: "0700",
+		Name:          "Owner",
+		Email:         testOwnerEmail,
+		Password:      "secret123",
+	})
+	if err != nil {
+		t.Fatalf("Register failed: %v", err)
+	}
+	if creator.calls != 1 || creator.name != testBusinessName || creator.phone != "0700" {
+		t.Fatalf("creator called %d times name=%q phone=%q", creator.calls, creator.name, creator.phone)
+	}
+	if user.BusinessID != creator.businessID {
+		t.Fatal("expected the user to be attached to the created business")
+	}
+	if user.EmailVerified {
+		t.Fatal("new sign-ups must stay unverified until the email is confirmed")
+	}
+	if len(mailer.sent) != 1 {
+		t.Fatalf("verification emails = %d, want 1", len(mailer.sent))
+	}
+}
+
+func TestRegisterRollsBackWorkspaceWhenVerificationEmailFails(t *testing.T) {
+	repo := &fakeRepository{}
+	creator := &fakeBusinessCreator{repo: repo}
+	mailer := &fakeMailer{err: errors.New("smtp unavailable")}
+	svc := testServiceWithMailer(repo, nil, creator, mailer)
+
+	_, err := svc.Register(RegisterInput{
+		BusinessName: testBusinessName,
+		Name:         "Owner",
+		Email:        testOwnerEmail,
+		Password:     "secret123",
+	})
+	if !errors.Is(err, ErrVerificationEmailFailed) {
+		t.Fatalf("error = %v, want %v", err, ErrVerificationEmailFailed)
+	}
+	if len(repo.users) != 0 {
+		t.Fatalf("users = %d, want the unverifiable account rolled back", len(repo.users))
+	}
+	if creator.deleted != creator.businessID {
+		t.Fatalf("deleted workspace = %v, want %v", creator.deleted, creator.businessID)
+	}
+	if len(repo.tokens) != 0 {
+		t.Fatalf("tokens = %d, want the undelivered token removed", len(repo.tokens))
+	}
+}
+
+func TestResendVerificationSendsOncePerCooldown(t *testing.T) {
+	user := &User{ID: uuid.New(), BusinessID: uuid.New(), Name: "Owner", Email: testOwnerEmail, Active: true, EmailVerified: false}
+	repo := &fakeRepository{users: []*User{user}}
+	mailer := &fakeMailer{}
+	svc := testServiceWithMailer(repo, nil, nil, mailer)
+	impl, ok := svc.(*service)
+	if !ok {
+		t.Fatal("expected the concrete service type")
+	}
+
+	if err := svc.ResendVerification(user.Email); err != nil {
+		t.Fatalf("ResendVerification failed: %v", err)
+	}
+	impl.waitForBackground()
+	if len(mailer.sent) != 1 {
+		t.Fatalf("verification emails = %d, want 1", len(mailer.sent))
+	}
+
+	if err := svc.ResendVerification(user.Email); err != nil {
+		t.Fatalf("second ResendVerification failed: %v", err)
+	}
+	impl.waitForBackground()
+	if len(mailer.sent) != 1 {
+		t.Fatalf("verification emails after cooldown = %d, want 1", len(mailer.sent))
 	}
 }

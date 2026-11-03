@@ -33,12 +33,16 @@ vi.mock("@/components/theme-toggle", () => ({ ThemeToggle: () => null }));
 
 import { AppShell } from "@/components/app-shell";
 
-function renderShell() {
-  return render(
+function shell() {
+  return (
     <AppShell>
       <div>Dashboard content</div>
-    </AppShell>,
+    </AppShell>
   );
+}
+
+function renderShell() {
+  return render(shell());
 }
 
 function groupButton(name: string) {
@@ -106,6 +110,36 @@ describe("grouped navigation", () => {
     );
     expect(groupButton("People").getAttribute("aria-expanded")).toBe("false");
   });
+
+  it("keeps a saved collapse preference when revealing the active group", async () => {
+    const token = `header.${Buffer.from(
+      JSON.stringify({ user_id: "user-1" }),
+    ).toString("base64url")}.signature`;
+    window.localStorage.setItem("token", token);
+    window.localStorage.setItem(navStateKey("user-1"), JSON.stringify(["finance"]));
+    const view = renderShell();
+
+    await waitFor(() =>
+      expect(groupButton("Finance").getAttribute("aria-expanded")).toBe("false"),
+    );
+
+    mocks.pathname = "/dashboard/finance";
+    view.rerender(shell());
+
+    await waitFor(() =>
+      expect(groupButton("Finance").getAttribute("aria-expanded")).toBe("true"),
+    );
+    expect(JSON.parse(window.localStorage.getItem(navStateKey("user-1")) ?? "[]")).toEqual([
+      "finance",
+    ]);
+
+    mocks.pathname = "/dashboard";
+    view.rerender(shell());
+
+    await waitFor(() =>
+      expect(groupButton("Finance").getAttribute("aria-expanded")).toBe("false"),
+    );
+  });
 });
 
 describe("mobile drawer accessibility", () => {
@@ -120,6 +154,30 @@ describe("mobile drawer accessibility", () => {
     fireEvent.keyDown(window, { key: "Escape" });
 
     expect(openButton.getAttribute("aria-expanded")).toBe("false");
+    expect(document.activeElement).toBe(openButton);
+  });
+
+  it("moves focus back to the menu button when the close button is used", () => {
+    window.innerWidth = 500;
+    renderShell();
+    const openButton = screen.getByRole("button", { name: "Open navigation" });
+
+    fireEvent.click(openButton);
+    const closeButton = screen.getByRole("button", { name: "Close navigation" });
+    closeButton.focus();
+    fireEvent.click(closeButton);
+
+    expect(document.activeElement).toBe(openButton);
+  });
+
+  it("moves focus back to the menu button when the overlay is used", () => {
+    window.innerWidth = 500;
+    renderShell();
+    const openButton = screen.getByRole("button", { name: "Open navigation" });
+
+    fireEvent.click(openButton);
+    fireEvent.click(screen.getByRole("button", { name: "Close navigation overlay" }));
+
     expect(document.activeElement).toBe(openButton);
   });
 

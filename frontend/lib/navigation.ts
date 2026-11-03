@@ -84,6 +84,7 @@ export function isActiveRoute(href: string, pathname: string): boolean {
   return pathname === href || pathname.startsWith(`${href}/`);
 }
 
+/** Returns the group that owns the current path, if any. */
 export function findActiveGroupId(
   groups: NavGroup[],
   pathname: string,
@@ -96,6 +97,7 @@ export function findActiveGroupId(
 
 export const NAV_STATE_PREFIX = "nav-collapsed:";
 
+/** Builds the storage key that keeps each user's collapse preference separate. */
 export function navStateKey(userId: string): string {
   return `${NAV_STATE_PREFIX}${userId}`;
 }
@@ -139,10 +141,12 @@ export function parseCollapsedGroups(
   }
 }
 
+/** Serializes collapsed group ids for localStorage, removing duplicates. */
 export function serializeCollapsedGroups(collapsed: Iterable<string>): string {
   return JSON.stringify([...new Set(collapsed)]);
 }
 
+/** Adds or removes a group from the collapsed set without mutating the input. */
 export function toggleGroupCollapsed(
   collapsed: string[],
   groupId: string,

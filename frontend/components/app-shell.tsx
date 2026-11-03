@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { ChevronDown, ChevronRight, LogOut, Menu, X } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "@/lib/api";
 import { ThemeToggle } from "@/components/theme-toggle";
 import {
@@ -14,7 +14,6 @@ import {
   navStateKey,
   parseCollapsedGroups,
   serializeCollapsedGroups,
-  toggleGroupCollapsed,
 } from "@/lib/navigation";
 
 const GROUP_BUTTON_CLASS =
@@ -39,6 +38,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname(); const router = useRouter(); const [open, setOpen] = useState(false);
   const [unread, setUnread] = useState(0);
   const [collapsed, setCollapsed] = useState<string[]>([]);
+  const [revealedGroupId, setRevealedGroupId] = useState<string | null>(null);
   const [storageKey, setStorageKey] = useState<string | null>(null);
   const [hydrated, setHydrated] = useState(false);
   const isBelowMd = useIsBelowMd();
@@ -83,10 +83,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     if (lastPathname.current === pathname) return;
     lastPathname.current = pathname;
-    if (!activeGroupId) return;
-    setCollapsed((prev) =>
-      prev.includes(activeGroupId) ? prev.filter((id) => id !== activeGroupId) : prev,
-    );
+    setRevealedGroupId(activeGroupId);
   }, [activeGroupId, pathname]);
 
   useEffect(() => {
@@ -96,21 +93,29 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     else aside.removeAttribute("inert");
   }, [isBelowMd, open]);
 
+  const closeNavigation = useCallback((restoreFocus = true) => {
+    setOpen(false);
+    if (restoreFocus) openButtonRef.current?.focus();
+  }, []);
+
   useEffect(() => {
     if (!open) return;
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        setOpen(false);
-        openButtonRef.current?.focus();
-      }
+      if (event.key === "Escape") closeNavigation();
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [open]);
+  }, [closeNavigation, open]);
 
   function logout() { localStorage.removeItem("token"); router.push("/login"); }
   function toggleGroup(groupId: string) {
-    setCollapsed((prev) => toggleGroupCollapsed(prev, groupId));
+    const isExpanded = !collapsed.includes(groupId) || revealedGroupId === groupId;
+    setCollapsed((prev) =>
+      isExpanded
+        ? (prev.includes(groupId) ? prev : [...prev, groupId])
+        : prev.filter((id) => id !== groupId),
+    );
+    setRevealedGroupId((current) => (current === groupId ? null : current));
   }
   return <div className="min-h-dvh bg-background">
     <header className="sticky top-0 z-30 flex h-16 items-center justify-between border-b border-border bg-card/95 px-4 backdrop-blur md:hidden">
@@ -118,10 +123,10 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       <Link href="/dashboard" className="font-bold tracking-tight">Business <span className="text-primary">OS</span></Link><ThemeToggle />
     </header>
     <aside ref={asideRef} id="workspace-navigation" className={`fixed inset-y-0 left-0 z-40 flex w-64 flex-col border-r border-border bg-card px-4 py-5 transition-transform md:translate-x-0 ${open ? "translate-x-0" : "-translate-x-full"}`}>
-      <div className="mb-8 flex items-center justify-between px-2"><Link href="/dashboard" className="text-lg font-bold tracking-tight">Business <span className="text-primary">OS</span></Link><button className="p-1 md:hidden" onClick={() => setOpen(false)} aria-label="Close navigation"><X size={19}/></button></div>
+      <div className="mb-8 flex items-center justify-between px-2"><Link href="/dashboard" className="text-lg font-bold tracking-tight">Business <span className="text-primary">OS</span></Link><button className="p-1 md:hidden" onClick={() => closeNavigation()} aria-label="Close navigation"><X size={19}/></button></div>
       <nav aria-label="Workspace" className="min-h-0 flex-1 space-y-3 overflow-y-auto pr-1">
         {NAV_GROUPS.map((group) => {
-          const expanded = !collapsed.includes(group.id);
+          const expanded = !collapsed.includes(group.id) || revealedGroupId === group.id;
           const panelId = `nav-group-${group.id}`;
           return <div key={group.id}>
             <button type="button" onClick={() => toggleGroup(group.id)} aria-expanded={expanded} aria-controls={panelId} className={GROUP_BUTTON_CLASS}>
@@ -134,7 +139,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                   const active = isActiveRoute(href, pathname);
                   const isNotifications = href === "/dashboard/notifications";
                   return <li key={href}>
-                    <Link href={href} onClick={() => setOpen(false)} aria-current={active ? "page" : undefined} className={`${NAV_LINK_CLASS} ${active ? "bg-primary-soft text-primary-hover" : "text-muted hover:bg-hover hover:text-foreground"}`}>
+                    <Link href={href} onClick={() => closeNavigation(false)} aria-current={active ? "page" : undefined} className={`${NAV_LINK_CLASS} ${active ? "bg-primary-soft text-primary-hover" : "text-muted hover:bg-hover hover:text-foreground"}`}>
                       <Icon size={17} aria-hidden />
                       <span>{label}</span>
                       {isNotifications && unread > 0 && <span className="ml-auto rounded-full bg-primary-solid px-1.5 py-0.5 text-[10px] font-bold text-white">{unread > 99 ? "99+" : unread}</span>}
@@ -149,7 +154,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       </nav>
       <div className="mt-auto space-y-1 border-t border-border-subtle pt-4"><div className="mb-2 px-1"><ThemeToggle className="w-full justify-center" /></div><button onClick={logout} className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-sm text-muted hover:bg-hover"><LogOut size={17}/> Sign out</button></div>
     </aside><div className="md:pl-64"><main className="mx-auto min-h-[calc(100dvh-4rem)] max-w-[1480px] p-4 sm:p-6 md:min-h-dvh lg:p-8">{children}</main></div>
-    {open && <button aria-label="Close navigation overlay" className="fixed inset-0 z-30 bg-black/20 md:hidden" onClick={() => setOpen(false)}/>} 
+    {open && <button aria-label="Close navigation overlay" className="fixed inset-0 z-30 bg-black/20 md:hidden" onClick={() => closeNavigation()}/>} 
   </div>;
 }
 

@@ -35,6 +35,26 @@ describe("navigation groups", () => {
     const hrefs = NAV_GROUPS.flatMap((group) => group.items.map((item) => item.href));
     expect(new Set(hrefs).size).toBe(hrefs.length);
   });
+
+  it("routes every item to its module page", () => {
+    const hrefs = NAV_GROUPS.flatMap((group) => group.items.map((item) => item.href));
+    expect(hrefs).toEqual([
+      "/dashboard",
+      "/dashboard/sales",
+      "/dashboard/purchases",
+      "/dashboard/products",
+      "/dashboard/inventory",
+      "/dashboard/receipts",
+      "/dashboard/finance",
+      "/dashboard/reports",
+      "/dashboard/analytics",
+      "/dashboard/customers",
+      "/dashboard/suppliers",
+      "/dashboard/notifications",
+      "/dashboard/assistant",
+      "/dashboard/settings",
+    ]);
+  });
 });
 
 describe("active routes", () => {

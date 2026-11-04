@@ -53,6 +53,7 @@ const SALE_TYPE_LABEL: Record<SaleType, string> = {
   quotation: "Quotation",
 };
 
+/** Sales entry workspace for roles that can record sales. */
 export default function SalesPage() {
   const { can } = usePermissions();
   const canCreate = can(PERMISSIONS.salesCreate);
@@ -113,6 +114,7 @@ export default function SalesPage() {
 
   const selectedCustomer = customers.find((c) => c.id === customerId) || null;
 
+  /** Adds a product to the sale or increments its quantity. */
   function addProduct(productId: string) {
     setItems((prev) => {
       const existing = prev.find((i) => i.productId === productId);
@@ -124,6 +126,7 @@ export default function SalesPage() {
     setQuery("");
   }
 
+  /** Updates a line quantity, removing the line at zero. */
   function setQuantity(productId: string, quantity: number) {
     if (quantity <= 0) {
       setItems((prev) => prev.filter((i) => i.productId !== productId));
@@ -132,6 +135,7 @@ export default function SalesPage() {
     setItems((prev) => prev.map((i) => (i.productId === productId ? { ...i, quantity } : i)));
   }
 
+  /** Removes a product from the current sale. */
   function removeItem(productId: string) {
     setItems((prev) => prev.filter((i) => i.productId !== productId));
   }
@@ -142,6 +146,7 @@ export default function SalesPage() {
     return sum + product.price * item.quantity;
   }, 0);
 
+  /** Submits the sale, credit sale, or quotation. */
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setFormError("");
@@ -368,6 +373,7 @@ export default function SalesPage() {
   );
 }
 
+/** Printable receipt shown after a sale is recorded. */
 function ReceiptView({
   receipt,
   business,

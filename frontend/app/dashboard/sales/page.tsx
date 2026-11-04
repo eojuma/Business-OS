@@ -3,6 +3,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { api } from "@/lib/api";
 import { PageHeader, formatMoney } from "@/components/app-shell";
+import { usePermissions } from "@/hooks/usePermissions";
+import { PERMISSIONS } from "@/lib/permissions";
 import { QRCodeSVG } from "qrcode.react";
 import { Check, Minus, Plus, Printer, Search, Trash2 } from "lucide-react";
 
@@ -52,6 +54,8 @@ const SALE_TYPE_LABEL: Record<SaleType, string> = {
 };
 
 export default function SalesPage() {
+  const { can } = usePermissions();
+  const canCreate = can(PERMISSIONS.salesCreate);
   const [products, setProducts] = useState<Product[]>([]);
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [business, setBusiness] = useState<Business | null>(null);
@@ -72,6 +76,10 @@ export default function SalesPage() {
   const [receiptCustomer, setReceiptCustomer] = useState<Customer | null>(null);
 
   useEffect(() => {
+    if (!canCreate) {
+      setLoading(false);
+      return;
+    }
     async function load() {
       try {
         const [productsRes, customersRes, businessRes] = await Promise.all([
@@ -89,7 +97,7 @@ export default function SalesPage() {
       }
     }
     load();
-  }, []);
+  }, [canCreate]);
 
   const filteredProducts = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -183,6 +191,7 @@ export default function SalesPage() {
     }
   }
 
+  if (!canCreate) return <div className="panel p-6 text-sm text-muted">Your role does not have access to record sales.</div>;
   if (loading) return <main className="p-8">Loading...</main>;
   if (error) return <main className="p-8 text-danger">{error}</main>;
 

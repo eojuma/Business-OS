@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
   pathname: "/dashboard",
   push: vi.fn(),
   get: vi.fn(),
+  can: vi.fn(),
 }));
 
 vi.mock("next/navigation", () => ({
@@ -30,6 +31,9 @@ vi.mock("next/link", () => ({
 
 vi.mock("@/lib/api", () => ({ api: { get: mocks.get } }));
 vi.mock("@/components/theme-toggle", () => ({ ThemeToggle: () => null }));
+vi.mock("@/hooks/usePermissions", () => ({
+  usePermissions: () => ({ role: "owner", loading: false, can: mocks.can }),
+}));
 
 import { AppShell } from "@/components/app-shell";
 
@@ -58,6 +62,7 @@ beforeEach(() => {
   mocks.pathname = "/dashboard";
   mocks.push.mockReset();
   mocks.get.mockReset().mockResolvedValue({ data: { data: { unread: 0 } } });
+  mocks.can.mockReset().mockReturnValue(true);
   window.localStorage.clear();
   window.innerWidth = 1024;
 });
@@ -65,6 +70,14 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe("grouped navigation", () => {
+  it("hides items the current role cannot access", () => {
+    mocks.can.mockImplementation((permission: string) => permission !== "finance:read");
+    renderShell();
+
+    expect(screen.queryByRole("link", { name: "Finance" })).toBeNull();
+    expect(screen.getByRole("link", { name: "Sales" })).not.toBeNull();
+  });
+
   it("collapses and expands a group through its ARIA control", () => {
     renderShell();
     const button = groupButton("Finance");

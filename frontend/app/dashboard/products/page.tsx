@@ -18,6 +18,7 @@ function formatMoney(cents: number): string {
   return (cents / 100).toFixed(2);
 }
 
+/** Product catalogue with role-gated price and creation controls. */
 export default function ProductsPage() {
   const { can } = usePermissions();
   const canManage = can(PERMISSIONS.productsManage);
@@ -37,6 +38,7 @@ export default function ProductsPage() {
   const [editPrice, setEditPrice] = useState("");
   const [saving, setSaving] = useState(false);
 
+  /** Saves a price change for product managers. */
   async function savePrice(id: string) {
     const cents = Math.round(parseFloat(editPrice) * 100);
     if (isNaN(cents) || cents < 0) {
@@ -56,6 +58,7 @@ export default function ProductsPage() {
     }
   }
 
+  /** Loads the product catalogue. */
   async function loadProducts() {
     try {
       const res = await api.get("/products");
@@ -71,6 +74,7 @@ export default function ProductsPage() {
     loadProducts();
   }, []);
 
+  /** Creates a product from the add form. */
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setFormError("");

@@ -140,7 +140,6 @@ const MATRIX: Record<Role, readonly Permission[]> = {
     PERMISSIONS.notificationsRead,
     PERMISSIONS.notificationsWrite,
     PERMISSIONS.assistantUse,
-    PERMISSIONS.receiptsUse,
   ],
 };
 

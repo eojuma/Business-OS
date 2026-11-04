@@ -17,6 +17,7 @@ import (
 
 	"github.com/businessos/backend/internal/config"
 	"github.com/businessos/backend/internal/shared/email"
+	"github.com/businessos/backend/internal/shared/permissions"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 	"golang.org/x/crypto/bcrypt"
@@ -28,7 +29,8 @@ var (
 	ErrEmailTaken                 = errors.New("email already registered")
 	ErrBusinessRequired           = errors.New("a business name is required")
 	ErrBusinessNotFound           = errors.New("business does not exist")
-	ErrInvalidRole                = errors.New("role must be owner, manager, or cashier")
+	ErrInvalidRole                = errors.New("role must be owner, admin, manager, cashier, accountant, or warehouse")
+	ErrTeamMemberNotFound         = errors.New("team member not found")
 	ErrGoogleAuthUnavailable      = errors.New("google sign-in is not configured")
 	ErrInvalidGoogleToken         = errors.New("invalid google credential")
 	ErrUnverifiedGoogleEmail      = errors.New("google account email is not verified")
@@ -113,13 +115,14 @@ type Service interface {
 	LinkGoogle(ctx context.Context, userID uuid.UUID, credential string) (*User, error)
 	UnlinkGoogle(userID uuid.UUID) (*User, error)
 	CreateTeamUser(input RegisterInput) (*User, error)
+	UpdateTeamMemberRole(businessID, userID uuid.UUID, role string) (*User, error)
 	ListTeam(businessID uuid.UUID) ([]User, error)
 	GetByID(id uuid.UUID) (*User, error)
 	// WaitBackground blocks until pending verification sends finish or ctx ends.
 	WaitBackground(ctx context.Context)
 }
 
-func validRole(role string) bool { return role == "owner" || role == "manager" || role == "cashier" }
+func validRole(role string) bool { return permissions.ValidRole(role) }
 
 // normalizeEmail trims and lowercases an address so storage and lookups are
 // case-insensitive, matching the normalization used by identity providers
@@ -151,6 +154,23 @@ func (s *service) CreateTeamUser(input RegisterInput) (*User, error) {
 }
 func (s *service) ListTeam(businessID uuid.UUID) ([]User, error) {
 	return s.repo.ListByBusiness(businessID)
+}
+
+// UpdateTeamMemberRole changes a member's role inside the caller's workspace.
+// RequireAuth reloads the role from the database on each request, so the change
+// applies to that member's very next API call.
+func (s *service) UpdateTeamMemberRole(businessID, userID uuid.UUID, role string) (*User, error) {
+	if !validRole(role) {
+		return nil, ErrInvalidRole
+	}
+	updated, err := s.repo.UpdateRoleInBusiness(businessID, userID, role)
+	if err != nil {
+		return nil, err
+	}
+	if !updated {
+		return nil, ErrTeamMemberNotFound
+	}
+	return s.repo.FindByID(userID)
 }
 
 func (s *service) GetByID(id uuid.UUID) (*User, error) {

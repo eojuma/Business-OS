@@ -17,6 +17,7 @@ import (
 	"github.com/businessos/backend/internal/modules/business"
 	"github.com/businessos/backend/internal/shared/database"
 	"github.com/businessos/backend/internal/shared/migrations"
+	"github.com/businessos/backend/internal/shared/permissions"
 )
 
 func setupAuthTestDB(t *testing.T) (*gorm.DB, uuid.UUID) {
@@ -308,5 +309,33 @@ func TestRepositoryEmailVerificationTokenLifecycle(t *testing.T) {
 	}
 	if _, err := repo.FindEmailVerificationTokenByHash(hashToken(raw)); !errors.Is(err, gorm.ErrRecordNotFound) {
 		t.Fatalf("token should be gone, got %v", err)
+	}
+}
+
+func TestUpdateRoleInBusinessKeepsWorkspaceAdmin(t *testing.T) {
+	db, businessID := setupAuthTestDB(t)
+	repo := NewRepository(db)
+
+	owner := &User{BusinessID: businessID, Name: "Owner", Email: "owner-role@example.com", Role: permissions.RoleOwner, Active: true}
+	admin := &User{BusinessID: businessID, Name: "Admin", Email: "admin-role@example.com", Role: permissions.RoleAdmin, Active: true}
+	for _, user := range []*User{owner, admin} {
+		if err := repo.Create(user); err != nil {
+			t.Fatalf("create user: %v", err)
+		}
+	}
+
+	if updated, err := repo.UpdateRoleInBusiness(businessID, owner.ID, permissions.RoleManager); err != nil || !updated {
+		t.Fatalf("demote owner with admin present: updated=%t err=%v", updated, err)
+	}
+
+	if _, err := repo.UpdateRoleInBusiness(businessID, admin.ID, permissions.RoleCashier); !errors.Is(err, ErrLastAdminRole) {
+		t.Fatalf("demote last admin error = %v, want %v", err, ErrLastAdminRole)
+	}
+	var stored User
+	if err := db.First(&stored, "id = ?", admin.ID).Error; err != nil {
+		t.Fatalf("find admin: %v", err)
+	}
+	if stored.Role != permissions.RoleAdmin {
+		t.Fatalf("last admin role = %q, want %q", stored.Role, permissions.RoleAdmin)
 	}
 }

@@ -7,11 +7,13 @@ import { PERMISSIONS } from "@/lib/permissions";
 import { ArrowUpRight, CircleDollarSign, Plus, Receipt, Wallet } from "lucide-react";
 type Summary = { revenue: number; cost_of_goods: number; gross_profit: number; expenses: number; net_profit: number; purchase_payments: number; cash_flow: number };
 type Expense = { id: string; category: string; description: string; amount: number; incurred_at: string };
+/** Finance summary and expense ledger with role-gated writes. */
 export default function FinancePage() {
   const { can } = usePermissions();
   const canView = can(PERMISSIONS.financeRead);
   const canManage = can(PERMISSIONS.financeManage);
   const [d, setD] = useState<Summary | null>(null), [expenses, setExpenses] = useState<Expense[]>([]), [show, setShow] = useState(false), [category, setCategory] = useState("Operations"), [description, setDescription] = useState(""), [amount, setAmount] = useState(""), [error, setError] = useState("");
+  /** Loads finance summary and recent expenses. */
   async function load() {
     try {
       const [s, e] = await Promise.all([api.get("/finance/summary"), api.get("/finance/expenses")]);
@@ -24,6 +26,7 @@ export default function FinancePage() {
   useEffect(() => {
     if (canView) load();
   }, [canView]);
+  /** Saves a new expense for roles that can manage finance. */
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     const cents = Math.round(Number(amount) * 100);

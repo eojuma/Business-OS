@@ -31,6 +31,7 @@ var (
 	ErrBusinessNotFound           = errors.New("business does not exist")
 	ErrInvalidRole                = errors.New("role must be owner, admin, manager, cashier, accountant, or warehouse")
 	ErrTeamMemberNotFound         = errors.New("team member not found")
+	ErrLastAdminRole              = errors.New("at least one owner or admin must remain")
 	ErrGoogleAuthUnavailable      = errors.New("google sign-in is not configured")
 	ErrInvalidGoogleToken         = errors.New("invalid google credential")
 	ErrUnverifiedGoogleEmail      = errors.New("google account email is not verified")
@@ -122,7 +123,13 @@ type Service interface {
 	WaitBackground(ctx context.Context)
 }
 
+// validRole reports whether the role is part of the supported RBAC model.
 func validRole(role string) bool { return permissions.ValidRole(role) }
+
+// isWorkspaceAdmin reports whether a role can administer the workspace.
+func isWorkspaceAdmin(role string) bool {
+	return role == permissions.RoleOwner || role == permissions.RoleAdmin
+}
 
 // normalizeEmail trims and lowercases an address so storage and lookups are
 // case-insensitive, matching the normalization used by identity providers
@@ -158,7 +165,8 @@ func (s *service) ListTeam(businessID uuid.UUID) ([]User, error) {
 
 // UpdateTeamMemberRole changes a member's role inside the caller's workspace.
 // RequireAuth reloads the role from the database on each request, so the change
-// applies to that member's very next API call.
+// applies to that member's very next API call. The repository refuses to demote
+// the last remaining owner or admin.
 func (s *service) UpdateTeamMemberRole(businessID, userID uuid.UUID, role string) (*User, error) {
 	if !validRole(role) {
 		return nil, ErrInvalidRole

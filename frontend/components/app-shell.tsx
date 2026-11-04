@@ -6,6 +6,7 @@ import { ChevronDown, ChevronRight, LogOut, Menu, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "@/lib/api";
 import { ThemeToggle } from "@/components/theme-toggle";
+import { usePermissions } from "@/hooks/usePermissions";
 import {
   NAV_GROUPS,
   decodeUserId,
@@ -42,6 +43,11 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const [storageKey, setStorageKey] = useState<string | null>(null);
   const [hydrated, setHydrated] = useState(false);
   const isBelowMd = useIsBelowMd();
+  const { can } = usePermissions();
+  const visibleGroups = NAV_GROUPS.map((group) => ({
+    ...group,
+    items: group.items.filter((item) => can(item.permission)),
+  })).filter((group) => group.items.length > 0);
   const openButtonRef = useRef<HTMLButtonElement>(null);
   const asideRef = useRef<HTMLElement>(null);
 
@@ -125,7 +131,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     <aside ref={asideRef} id="workspace-navigation" className={`fixed inset-y-0 left-0 z-40 flex w-64 flex-col border-r border-border bg-card px-4 py-5 transition-transform md:translate-x-0 ${open ? "translate-x-0" : "-translate-x-full"}`}>
       <div className="mb-8 flex items-center justify-between px-2"><Link href="/dashboard" className="text-lg font-bold tracking-tight">Business <span className="text-primary">OS</span></Link><button className="p-1 md:hidden" onClick={() => closeNavigation()} aria-label="Close navigation"><X size={19}/></button></div>
       <nav aria-label="Workspace" className="min-h-0 flex-1 space-y-3 overflow-y-auto pr-1">
-        {NAV_GROUPS.map((group) => {
+        {visibleGroups.map((group) => {
           const expanded = !collapsed.includes(group.id) || revealedGroupId === group.id;
           const panelId = `nav-group-${group.id}`;
           return <div key={group.id}>

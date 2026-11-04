@@ -60,7 +60,7 @@ func (r *repository) UpdateRoleInBusiness(businessID, userID uuid.UUID, role str
 		// cannot both observe two admins and then each remove one.
 		var admins []User
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
-			Where("business_id = ? AND role IN ?", businessID, []string{permissions.RoleOwner, permissions.RoleAdmin}).
+			Where("business_id = ? AND active = ? AND role IN ?", businessID, true, []string{permissions.RoleOwner, permissions.RoleAdmin}).
 			Find(&admins).Error; err != nil {
 			return err
 		}
@@ -88,7 +88,7 @@ func (r *repository) UpdateRoleInBusiness(businessID, userID uuid.UUID, role str
 			return nil
 		}
 
-		if isWorkspaceAdmin(target.Role) && !isWorkspaceAdmin(role) && len(admins) <= 1 {
+		if target.Active && isWorkspaceAdmin(target.Role) && !isWorkspaceAdmin(role) && len(admins) <= 1 {
 			return ErrLastAdminRole
 		}
 

@@ -92,6 +92,10 @@ func (h *Handler) UpdateTeamMemberRole(c *gin.Context) {
 		response.Error(c, http.StatusNotFound, err.Error())
 		return
 	}
+	if errors.Is(err, ErrLastAdminRole) {
+		response.Error(c, http.StatusConflict, err.Error())
+		return
+	}
 	if err != nil {
 		response.Error(c, http.StatusInternalServerError, "failed to update role")
 		return

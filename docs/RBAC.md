@@ -56,7 +56,7 @@ for the token to expire.
 | `notifications:read` | Yes | Yes | Yes | Yes | Yes |
 | `notifications:write` | Yes | Yes | Yes | Yes | Yes |
 | `assistant:use` | Yes | Yes | Yes | Yes | Yes |
-| `receipts:use` | Yes | Yes | Yes |  | Yes |
+| `receipts:use` | Yes | Yes | Yes |  |  |
 
 ## Enforcement
 
@@ -65,8 +65,15 @@ for the token to expire.
 - Protected routes pass through `RequireAuth` and `RequireRoutePermission`.
   Unmapped protected routes fail closed with `500`, and a role without the
   required permission receives `403 insufficient permissions`.
-- Team management (`GET/POST /api/v1/users`, `PATCH /api/v1/users/:id/role`) is
-  limited to owner/admin through `team:read` and `team:manage`.
+- Listing team members (`GET /api/v1/users`) requires `team:read`, which owner,
+  admin, manager, and accountant hold.
+- Creating members (`POST /api/v1/users`) and changing roles
+  (`PATCH /api/v1/users/:id/role`) require `team:manage`, which only owner and
+  admin hold. A role change that would remove the last owner/admin is rejected
+  with `409` so the workspace cannot be left without an administrator.
+- Receipt commits also require the matching record permission: `purchases:create`
+  for a purchase and `sales:create` for a sale, even when the caller has
+  `receipts:use`.
 - The dashboard hides navigation items and action controls the current role
   cannot use, and short-circuits pages that require a missing read permission.
 

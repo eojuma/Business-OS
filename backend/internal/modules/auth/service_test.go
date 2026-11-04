@@ -87,6 +87,16 @@ func (r *fakeRepository) ListByBusiness(businessID uuid.UUID) ([]User, error) {
 	return users, nil
 }
 
+func (r *fakeRepository) UpdateRoleInBusiness(businessID, userID uuid.UUID, role string) (bool, error) {
+	for _, user := range r.users {
+		if user.ID == userID && user.BusinessID == businessID {
+			user.Role = role
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 func (r *fakeRepository) SetGoogleID(id uuid.UUID, googleID string) error {
 	for _, user := range r.users {
 		if user.ID == id {

@@ -23,11 +23,12 @@ const (
 )
 
 type fakeRepository struct {
-	users   []*User
-	tokens  []*EmailVerificationToken
-	created *User
-	setID   uuid.UUID
-	setSub  string
+	users     []*User
+	tokens    []*EmailVerificationToken
+	created   *User
+	setID     uuid.UUID
+	setSub    string
+	updateErr error
 }
 
 func (r *fakeRepository) Create(user *User) error {
@@ -88,6 +89,9 @@ func (r *fakeRepository) ListByBusiness(businessID uuid.UUID) ([]User, error) {
 }
 
 func (r *fakeRepository) UpdateRoleInBusiness(businessID, userID uuid.UUID, role string) (bool, error) {
+	if r.updateErr != nil {
+		return false, r.updateErr
+	}
 	for _, user := range r.users {
 		if user.ID == userID && user.BusinessID == businessID {
 			user.Role = role

@@ -3,6 +3,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "@/lib/api";
 import { PageHeader, formatMoney } from "@/components/app-shell";
+import { usePermissions } from "@/hooks/usePermissions";
+import { PERMISSIONS } from "@/lib/permissions";
 import { AlertTriangle, Check, Plus, ScanLine, Trash2, Upload } from "lucide-react";
 
 interface Product {
@@ -60,6 +62,8 @@ function inputToCents(value: string): number {
 }
 
 export default function ReceiptsPage() {
+  const { can } = usePermissions();
+  const canUse = can(PERMISSIONS.receiptsUse);
   const [products, setProducts] = useState<Product[]>([]);
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [customers, setCustomers] = useState<Customer[]>([]);
@@ -211,6 +215,10 @@ export default function ReceiptsPage() {
     } finally {
       setCommitting(false);
     }
+  }
+
+  if (!canUse) {
+    return <div className="panel p-6 text-sm text-muted">Your role does not have access to receipt scanning.</div>;
   }
 
   return (

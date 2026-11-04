@@ -61,6 +61,7 @@ function inputToCents(value: string): number {
   return Math.round(Number(value || 0) * 100);
 }
 
+/** Receipt scanning and commit flow for permitted roles. */
 export default function ReceiptsPage() {
   const { can } = usePermissions();
   const canUse = can(PERMISSIONS.receiptsUse);
@@ -92,21 +93,31 @@ export default function ReceiptsPage() {
   const scanRequestRef = useRef(0);
 
   useEffect(() => {
+    let active = true;
     async function load() {
       try {
-        const [productsRes, suppliersRes, customersRes] = await Promise.all([
+        const [productsRes, suppliersRes] = await Promise.all([
           api.get("/products"),
           api.get("/suppliers"),
-          api.get("/customers"),
         ]);
+        if (!active) return;
         setProducts(productsRes.data.data || []);
         setSuppliers(suppliersRes.data.data || []);
-        setCustomers(customersRes.data.data || []);
       } catch (err: any) {
-        setLoadError(err.response?.data?.error || "Failed to load products, suppliers and customers");
+        if (active) setLoadError(err.response?.data?.error || "Failed to load products and suppliers");
+        return;
+      }
+      try {
+        const customersRes = await api.get("/customers");
+        if (active) setCustomers(customersRes.data.data || []);
+      } catch {
+        if (active) setCustomers([]);
       }
     }
     load();
+    return () => {
+      active = false;
+    };
   }, []);
 
   useEffect(() => {
@@ -119,6 +130,7 @@ export default function ReceiptsPage() {
     return () => URL.revokeObjectURL(url);
   }, [file]);
 
+  /** Resets review state when the selected receipt changes. */
   function pickFile(next: File | null) {
     scanRequestRef.current += 1;
     setFile(next);
@@ -129,6 +141,7 @@ export default function ReceiptsPage() {
     setSaved(null);
   }
 
+  /** Uploads the selected image and loads the OCR review result. */
   async function handleScan() {
     if (!file) return;
     const requestId = scanRequestRef.current;
@@ -183,6 +196,7 @@ export default function ReceiptsPage() {
     lines.every((line) => line.productId !== "" && Number(line.quantity) > 0) &&
     (recordType === "sale" || supplierId !== "");
 
+  /** Saves the reviewed receipt as a purchase or sale. */
   async function handleCommit() {
     setCommitting(true);
     setCommitError("");

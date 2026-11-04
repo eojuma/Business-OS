@@ -17,6 +17,7 @@ interface StockLevel {
   low_stock_threshold: number;
 }
 
+/** Stock levels with role-gated movement recording. */
 export default function InventoryPage() {
   const { can } = usePermissions();
   const canAdjust = can(PERMISSIONS.inventoryAdjust);
@@ -34,6 +35,7 @@ export default function InventoryPage() {
   const [submitting, setSubmitting] = useState(false);
   const [formError, setFormError] = useState("");
 
+  /** Loads products and their current stock levels. */
   async function loadInventory() {
     setLoading(true);
     try {
@@ -70,6 +72,7 @@ export default function InventoryPage() {
     loadInventory();
   }, []);
 
+  /** Records a stock movement for inventory managers. */
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setFormError("");

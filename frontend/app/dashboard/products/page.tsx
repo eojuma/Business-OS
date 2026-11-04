@@ -2,6 +2,8 @@
 
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
+import { usePermissions } from "@/hooks/usePermissions";
+import { PERMISSIONS } from "@/lib/permissions";
 
 interface Product {
   id: string;
@@ -17,6 +19,8 @@ function formatMoney(cents: number): string {
 }
 
 export default function ProductsPage() {
+  const { can } = usePermissions();
+  const canManage = can(PERMISSIONS.productsManage);
   const [products, setProducts] = useState<Product[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -104,6 +108,7 @@ export default function ProductsPage() {
     <main className="min-h-screen p-8">
       <h1 className="mb-6 text-2xl font-semibold">Products</h1>
 
+      {canManage && (
       <form
         onSubmit={handleSubmit}
         className="mb-8 grid max-w-2xl gap-3 rounded-lg border border-border-subtle p-4 sm:grid-cols-2"
@@ -150,6 +155,7 @@ export default function ProductsPage() {
           {submitting ? "Adding..." : "Add product"}
         </button>
       </form>
+      )}
 
       {loading ? (
         <p>Loading products...</p>
@@ -165,7 +171,7 @@ export default function ProductsPage() {
               <th className="py-2">Category</th>
               <th className="py-2">Unit</th>
               <th className="py-2 text-right">Price</th>
-              <th className="py-2 text-right">Adjust</th>
+              {canManage && <th className="py-2 text-right">Adjust</th>}
             </tr>
           </thead>
           <tbody>
@@ -175,7 +181,7 @@ export default function ProductsPage() {
                 <td className="py-2">{p.category || "—"}</td>
                 <td className="py-2">{p.unit}</td>
                 <td className="py-2 text-right">KSh {formatMoney(p.price)}</td>
-                <td className="py-2 text-right">
+                {canManage && <td className="py-2 text-right">
                   {editingId === p.id ? (
                     <span className="inline-flex items-center gap-2">
                       <input
@@ -213,7 +219,7 @@ export default function ProductsPage() {
                       Adjust price
                     </button>
                   )}
-                </td>
+                </td>}
               </tr>
             ))}
           </tbody>

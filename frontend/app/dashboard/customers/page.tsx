@@ -18,6 +18,7 @@ function formatMoney(cents: number): string {
   return (cents / 100).toFixed(2);
 }
 
+/** Customer list with role-gated creation and payment controls. */
 export default function CustomersPage() {
   const { can } = usePermissions();
   const canRead = can(PERMISSIONS.customersRead);
@@ -35,6 +36,7 @@ export default function CustomersPage() {
   const [paying, setPaying] = useState<string | null>(null);
   const [paymentAmount, setPaymentAmount] = useState("");
 
+  /** Loads the customer list for the signed-in workspace. */
   async function loadCustomers() {
     try {
       const res = await api.get("/customers");
@@ -46,6 +48,7 @@ export default function CustomersPage() {
     }
   }
 
+  /** Records a customer payment when the role allows it. */
   async function recordPayment(customerId: string) {
     const amount = Math.round(Number(paymentAmount) * 100);
     if (!amount || amount <= 0) { setFormError("Enter a valid payment amount"); return; }
@@ -59,6 +62,7 @@ export default function CustomersPage() {
     loadCustomers();
   }, []);
 
+  /** Creates a customer from the add form. */
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setFormError("");

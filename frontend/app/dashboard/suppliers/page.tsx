@@ -103,6 +103,7 @@ export default function SuppliersPage() {
   return <Suspense fallback={<p role="status" className="text-muted">Loading suppliers…</p>}><SuppliersContent /></Suspense>;
 }
 
+/** Supplier directory with role-gated creation and payment controls. */
 function SuppliersContent() {
   const { can } = usePermissions();
   const canManage = can(PERMISSIONS.suppliersManage);
@@ -317,6 +318,7 @@ function SuppliersContent() {
     opener?.focus();
   }, [paymentSupplier]);
 
+  /** Creates a supplier for roles that can manage suppliers. */
   async function createSupplier(event: React.FormEvent) {
     event.preventDefault();
     const supplierName = name.trim();
@@ -348,6 +350,7 @@ function SuppliersContent() {
     }
   }
 
+  /** Loads payment history for the selected supplier. */
   const loadPayments = useCallback((supplier: Supplier) => {
     setHistoryLoading(true);
     setHistoryError("");
@@ -372,6 +375,7 @@ function SuppliersContent() {
       });
   }, []);
 
+  /** Opens a supplier payment history and action panel. */
   function openPayments(supplier: Supplier) {
     paymentDialogRef.current += 1;
     paymentOpenerRef.current =
@@ -386,6 +390,7 @@ function SuppliersContent() {
     loadPayments(supplier);
   }
 
+  /** Records a supplier payment for roles that can pay suppliers. */
   async function submitPayment(event: React.FormEvent) {
     event.preventDefault();
     if (!paymentSupplier || savingPayment) return;

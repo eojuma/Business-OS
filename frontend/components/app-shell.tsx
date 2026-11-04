@@ -113,7 +113,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [closeNavigation, open]);
 
+  /** Clears the session and returns to the sign-in screen. */
   function logout() { localStorage.removeItem("token"); router.push("/login"); }
+  /** Toggles a group while keeping the persisted collapse preference intact. */
   function toggleGroup(groupId: string) {
     const isExpanded = !collapsed.includes(groupId) || revealedGroupId === groupId;
     setCollapsed((prev) =>

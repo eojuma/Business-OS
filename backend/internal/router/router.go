@@ -44,7 +44,7 @@ func New(db *gorm.DB, cfg *config.Config) (*gin.Engine, func(context.Context)) {
 	business.RegisterRoutes(v1, db, cfg)
 
 	protected := v1.Group("")
-	protected.Use(middleware.RequireAuth(cfg))
+	protected.Use(middleware.RequireAuth(cfg, middleware.RoleFromDB(db)), middleware.RequireRoutePermission())
 	{
 		inventory.RegisterRoutes(protected, db, cfg)
 		products.RegisterRoutes(protected, db, cfg)

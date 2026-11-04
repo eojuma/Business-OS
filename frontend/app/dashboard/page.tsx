@@ -29,6 +29,7 @@ function DashboardContent() {
       setLoading(false);
       return;
     }
+    setLoading(true);
     Promise.all([api.get("/analytics/overview"), api.get("/notifications")])
       .then(([a, n]) => {
         setData(a.data.data);

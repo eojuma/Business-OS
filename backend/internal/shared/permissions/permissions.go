@@ -136,10 +136,11 @@ var matrix = map[string]map[Permission]bool{
 		InventoryRead, InventoryAdjust,
 		SupplierRead,
 		NotificationRead, NotificationWrite,
-		AssistantUse, ReceiptUse,
+		AssistantUse,
 	}),
 }
 
+// grant converts a permission slice into the lookup used by Allows.
 func grant(permissions []Permission) map[Permission]bool {
 	granted := make(map[Permission]bool, len(permissions))
 	for _, permission := range permissions {

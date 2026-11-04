@@ -121,6 +121,7 @@ Business-OS/
 │   └── Dockerfile
 ├── docs/
 │   ├── PRODUCT.md                   Product scope and module plan
+│   ├── RBAC.md                      Role and permission matrix
 │   └── OCR.md                       Receipt OCR flow
 ├── docker-compose.yml               Postgres, Redis, API, web
 ├── Makefile                         Common local tasks

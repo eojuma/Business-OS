@@ -1,0 +1,71 @@
+package permissions
+
+// routePermissions is the single source of truth for route-level role checks.
+// The middleware resolves the current request's matched route here, so adding a
+// protected route without a mapping fails closed.
+var routePermissions = map[string]Permission{
+	"GET /api/v1/auth/me":                        AccountSelf,
+	"POST /api/v1/auth/google/link":              AccountSelf,
+	"POST /api/v1/auth/google/unlink":            AccountSelf,
+	"GET /api/v1/users":                          TeamRead,
+	"POST /api/v1/users":                         TeamManage,
+	"PATCH /api/v1/users/:id/role":               TeamManage,
+	"GET /api/v1/business":                       BusinessRead,
+	"PATCH /api/v1/business":                     BusinessManage,
+	"GET /api/v1/analytics/overview":             AnalyticsRead,
+	"GET /api/v1/analytics/top-products":         AnalyticsRead,
+	"GET /api/v1/analytics/slow-moving":          AnalyticsRead,
+	"POST /api/v1/assistant/interpret":           AssistantUse,
+	"POST /api/v1/assistant/confirm":             AssistantUse,
+	"POST /api/v1/customers":                     CustomerManage,
+	"GET /api/v1/customers":                      CustomerRead,
+	"GET /api/v1/customers/above-balance":        CustomerRead,
+	"GET /api/v1/customers/:id":                  CustomerRead,
+	"PATCH /api/v1/customers/:id":                CustomerManage,
+	"POST /api/v1/customers/:id/payments":        CustomerPayment,
+	"GET /api/v1/customers/:id/payments":         CustomerRead,
+	"POST /api/v1/finance/expenses":              FinanceManage,
+	"GET /api/v1/finance/expenses":               FinanceRead,
+	"DELETE /api/v1/finance/expenses/:id":        FinanceDelete,
+	"GET /api/v1/finance/summary":                FinanceRead,
+	"POST /api/v1/inventory/movements":           InventoryAdjust,
+	"GET /api/v1/inventory/movements/:productId": InventoryRead,
+	"GET /api/v1/inventory/levels/:productId":    InventoryRead,
+	"GET /api/v1/inventory/low-stock":            InventoryRead,
+	"GET /api/v1/notifications":                  NotificationRead,
+	"GET /api/v1/notifications/unread-count":     NotificationRead,
+	"POST /api/v1/notifications/read-all":        NotificationWrite,
+	"POST /api/v1/notifications/:id/read":        NotificationWrite,
+	"POST /api/v1/products":                      ProductManage,
+	"GET /api/v1/products":                       ProductRead,
+	"GET /api/v1/products/:id":                   ProductRead,
+	"PATCH /api/v1/products/:id":                 ProductManage,
+	"DELETE /api/v1/products/:id":                ProductDelete,
+	"POST /api/v1/purchases":                     PurchaseCreate,
+	"GET /api/v1/purchases":                      PurchaseRead,
+	"GET /api/v1/purchases/:id":                  PurchaseRead,
+	"PATCH /api/v1/purchases/:id":                PurchaseCreate,
+	"DELETE /api/v1/purchases/:id":               PurchaseDelete,
+	"POST /api/v1/purchases/:id/receive":         PurchaseReceive,
+	"POST /api/v1/receipts/scan":                 ReceiptUse,
+	"POST /api/v1/receipts/commit":               ReceiptUse,
+	"GET /api/v1/reports/daily-sales":            ReportRead,
+	"POST /api/v1/sales":                         SalesCreate,
+	"GET /api/v1/sales":                          SalesRead,
+	"GET /api/v1/sales/:id":                      SalesRead,
+	"POST /api/v1/suppliers":                     SupplierManage,
+	"GET /api/v1/suppliers":                      SupplierRead,
+	"GET /api/v1/suppliers/aging":                SupplierRead,
+	"GET /api/v1/suppliers/:id":                  SupplierRead,
+	"PATCH /api/v1/suppliers/:id":                SupplierManage,
+	"DELETE /api/v1/suppliers/:id":               SupplierDelete,
+	"POST /api/v1/suppliers/:id/restore":         SupplierManage,
+	"POST /api/v1/suppliers/:id/payments":        SupplierPayment,
+	"GET /api/v1/suppliers/:id/payments":         SupplierRead,
+}
+
+// ForRoute returns the permission required by a matched route.
+func ForRoute(method, fullPath string) (Permission, bool) {
+	permission, ok := routePermissions[method+" "+fullPath]
+	return permission, ok
+}

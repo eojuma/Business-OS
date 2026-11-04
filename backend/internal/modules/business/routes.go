@@ -20,7 +20,7 @@ func RegisterRoutes(rg *gin.RouterGroup, db *gorm.DB, cfg *config.Config) {
 		group.POST("", handler.Create)
 
 		protected := group.Group("")
-		protected.Use(middleware.RequireAuth(cfg))
+		protected.Use(middleware.RequireAuth(cfg, middleware.RoleFromDB(db)), middleware.RequireRoutePermission())
 		{
 			protected.GET("", handler.Get)
 			protected.PATCH("", handler.Update)

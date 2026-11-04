@@ -2,6 +2,8 @@
 
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
+import { usePermissions } from "@/hooks/usePermissions";
+import { PERMISSIONS } from "@/lib/permissions";
 
 interface DailySummary {
   date: string;
@@ -21,12 +23,19 @@ function formatDate(iso: string): string {
   });
 }
 
+/** Daily sales report for roles with reporting access. */
 export default function ReportsPage() {
+  const { can } = usePermissions();
+  const canView = can(PERMISSIONS.reportsRead);
   const [summaries, setSummaries] = useState<DailySummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
   useEffect(() => {
+    if (!canView) {
+      setLoading(false);
+      return;
+    }
     async function load() {
       try {
         const res = await api.get("/reports/daily-sales");
@@ -38,11 +47,12 @@ export default function ReportsPage() {
       }
     }
     load();
-  }, []);
+  }, [canView]);
 
   const totalRevenue = summaries.reduce((sum, s) => sum + s.total_revenue, 0);
   const totalSales = summaries.reduce((sum, s) => sum + s.sale_count, 0);
 
+  if (!canView) return <div className="panel p-6 text-sm text-muted">Your role does not have access to reports.</div>;
   if (loading) return <main className="p-8">Loading report...</main>;
   if (error) return <main className="p-8 text-danger">{error}</main>;
 

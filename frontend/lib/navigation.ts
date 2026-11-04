@@ -15,11 +15,14 @@ import {
   Users,
   type LucideIcon,
 } from "lucide-react";
+import type { Permission } from "@/lib/permissions";
+import { PERMISSIONS, can } from "@/lib/permissions";
 
 export type NavItem = {
   href: string;
   label: string;
   icon: LucideIcon;
+  permission: Permission;
 };
 
 export type NavGroup = {
@@ -33,44 +36,44 @@ export const NAV_GROUPS: NavGroup[] = [
     id: "sales",
     label: "Sales",
     items: [
-      { href: "/dashboard", label: "Overview", icon: LayoutDashboard },
-      { href: "/dashboard/sales", label: "Sales", icon: ShoppingCart },
-      { href: "/dashboard/purchases", label: "Purchases", icon: ClipboardList },
+      { href: "/dashboard", label: "Overview", icon: LayoutDashboard, permission: PERMISSIONS.analyticsRead },
+      { href: "/dashboard/sales", label: "Sales", icon: ShoppingCart, permission: PERMISSIONS.salesCreate },
+      { href: "/dashboard/purchases", label: "Purchases", icon: ClipboardList, permission: PERMISSIONS.purchasesRead },
     ],
   },
   {
     id: "inventory",
     label: "Inventory",
     items: [
-      { href: "/dashboard/products", label: "Products", icon: Package },
-      { href: "/dashboard/inventory", label: "Inventory", icon: Boxes },
-      { href: "/dashboard/receipts", label: "Receipt OCR", icon: ScanLine },
+      { href: "/dashboard/products", label: "Products", icon: Package, permission: PERMISSIONS.productsRead },
+      { href: "/dashboard/inventory", label: "Inventory", icon: Boxes, permission: PERMISSIONS.inventoryRead },
+      { href: "/dashboard/receipts", label: "Receipt OCR", icon: ScanLine, permission: PERMISSIONS.receiptsUse },
     ],
   },
   {
     id: "finance",
     label: "Finance",
     items: [
-      { href: "/dashboard/finance", label: "Finance", icon: CircleDollarSign },
-      { href: "/dashboard/reports", label: "Reports", icon: Contact },
-      { href: "/dashboard/analytics", label: "Analytics", icon: BarChart3 },
+      { href: "/dashboard/finance", label: "Finance", icon: CircleDollarSign, permission: PERMISSIONS.financeRead },
+      { href: "/dashboard/reports", label: "Reports", icon: Contact, permission: PERMISSIONS.reportsRead },
+      { href: "/dashboard/analytics", label: "Analytics", icon: BarChart3, permission: PERMISSIONS.analyticsRead },
     ],
   },
   {
     id: "people",
     label: "People",
     items: [
-      { href: "/dashboard/customers", label: "Customers", icon: Users },
-      { href: "/dashboard/suppliers", label: "Suppliers", icon: Truck },
+      { href: "/dashboard/customers", label: "Customers", icon: Users, permission: PERMISSIONS.customersRead },
+      { href: "/dashboard/suppliers", label: "Suppliers", icon: Truck, permission: PERMISSIONS.suppliersRead },
     ],
   },
   {
     id: "system",
     label: "System",
     items: [
-      { href: "/dashboard/notifications", label: "Notifications", icon: Bell },
-      { href: "/dashboard/assistant", label: "AI assistant", icon: Brain },
-      { href: "/dashboard/settings", label: "Settings", icon: Settings },
+      { href: "/dashboard/notifications", label: "Notifications", icon: Bell, permission: PERMISSIONS.notificationsRead },
+      { href: "/dashboard/assistant", label: "AI assistant", icon: Brain, permission: PERMISSIONS.assistantUse },
+      { href: "/dashboard/settings", label: "Settings", icon: Settings, permission: PERMISSIONS.accountSelf },
     ],
   },
 ];
@@ -93,6 +96,16 @@ export function findActiveGroupId(
     candidate.items.some((item) => isActiveRoute(item.href, pathname)),
   );
   return group?.id ?? null;
+}
+
+/** Returns the first dashboard page the role can open. */
+export function firstPermittedPath(role: string | null | undefined): string | null {
+  for (const group of NAV_GROUPS) {
+    for (const item of group.items) {
+      if (can(role, item.permission)) return item.href;
+    }
+  }
+  return null;
 }
 
 export const NAV_STATE_PREFIX = "nav-collapsed:";

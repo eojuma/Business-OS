@@ -19,6 +19,7 @@ type User = {
   google_linked: boolean;
 };
 
+/** Account linking and role-gated team management. */
 export default function SettingsPage() {
   const { can } = usePermissions();
   const canReadTeam = can(PERMISSIONS.teamRead);
@@ -33,8 +34,9 @@ export default function SettingsPage() {
   const [teamError, setTeamError] = useState("");
   const [accountNotice, setAccountNotice] = useState("");
   const [unlinking, setUnlinking] = useState(false);
-  const [updatingRole, setUpdatingRole] = useState<string | null>(null);
+  const [updatingRoleIds, setUpdatingRoleIds] = useState<Set<string>>(new Set());
 
+  /** Loads the signed-in account details. */
   async function loadMe() {
     try {
       const res = await api.get("/auth/me");
@@ -44,6 +46,7 @@ export default function SettingsPage() {
     }
   }
 
+  /** Loads workspace members for team viewers. */
   async function loadTeam() {
     try {
       const res = await api.get("/users");
@@ -59,6 +62,7 @@ export default function SettingsPage() {
     if (canReadTeam) loadTeam();
   }, [canReadTeam]);
 
+  /** Creates a team member with the selected role. */
   async function add(e: React.FormEvent) {
     e.preventDefault();
     try {
@@ -72,8 +76,9 @@ export default function SettingsPage() {
     }
   }
 
+  /** Changes a member role and tracks that member independently. */
   async function updateRole(userId: string, nextRole: string) {
-    setUpdatingRole(userId);
+    setUpdatingRoleIds((current) => new Set(current).add(userId));
     setTeamError("");
     try {
       const res = await api.patch(`/users/${userId}/role`, { role: nextRole });
@@ -81,10 +86,15 @@ export default function SettingsPage() {
     } catch (e: any) {
       setTeamError(e.response?.data?.error || "Failed to update role");
     } finally {
-      setUpdatingRole(null);
+      setUpdatingRoleIds((current) => {
+        const next = new Set(current);
+        next.delete(userId);
+        return next;
+      });
     }
   }
 
+  /** Detaches the linked Google identity. */
   async function unlinkGoogle() {
     setUnlinking(true);
     setAccountNotice("");
@@ -184,9 +194,6 @@ export default function SettingsPage() {
             <p className="eyebrow">Team access</p>
             <h2 className="mt-1 text-lg font-bold">Add a team member</h2>
           </div>
-          {teamError && (
-            <p className="rounded-lg bg-danger-soft p-3 text-sm text-danger">{teamError}</p>
-          )}
           <input
             className="field"
             placeholder="Full name"
@@ -226,6 +233,9 @@ export default function SettingsPage() {
             <p className="eyebrow">Access list</p>
             <h2 className="mt-1 text-lg font-bold">Workspace members</h2>
           </div>
+          {teamError && (
+            <p className="mx-5 mt-5 rounded-lg bg-danger-soft p-3 text-sm text-danger">{teamError}</p>
+          )}
           {users.length === 0 ? (
             <div className="p-8 text-center text-sm text-muted">
               <Users className="mx-auto mb-2" />
@@ -249,7 +259,7 @@ export default function SettingsPage() {
                     <select
                       className="field w-40 py-1.5 text-xs capitalize"
                       value={user.role}
-                      disabled={updatingRole === user.id}
+                      disabled={updatingRoleIds.has(user.id)}
                       onChange={(e) => updateRole(user.id, e.target.value)}
                       aria-label={`Role for ${user.name}`}
                     >

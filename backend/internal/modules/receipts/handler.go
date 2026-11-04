@@ -9,6 +9,7 @@ import (
 	"github.com/businessos/backend/internal/modules/purchases"
 	"github.com/businessos/backend/internal/modules/sales"
 	"github.com/businessos/backend/internal/shared/middleware"
+	"github.com/businessos/backend/internal/shared/permissions"
 	"github.com/businessos/backend/internal/shared/response"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -109,6 +110,17 @@ func (h *Handler) Commit(c *gin.Context) {
 	var req commitRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		response.Error(c, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	role, _ := c.Get(middleware.ContextRoleKey)
+	roleStr, _ := role.(string)
+	required := permissions.PurchaseCreate
+	if req.RecordType == RecordTypeSale {
+		required = permissions.SalesCreate
+	}
+	if !permissions.Allows(roleStr, required) {
+		response.Error(c, http.StatusForbidden, "insufficient permissions")
 		return
 	}
 

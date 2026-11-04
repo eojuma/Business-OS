@@ -3,7 +3,9 @@ import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import { AlertTriangle, ArrowUpRight, CircleDollarSign, CreditCard, Package, ShoppingCart, TrendingUp } from "lucide-react";
 import { PageHeader, StatCard, formatMoney } from "@/components/app-shell";
-import { AuthProvider, useAuth } from "@/hooks/useAuth";
+import { useAuth } from "@/hooks/useAuth";
+import { usePermissions } from "@/hooks/usePermissions";
+import { PERMISSIONS } from "@/lib/permissions";
 import { getGreeting } from "@/lib/utils";
 
 type Overview = { revenue:number; profit:number; sale_count:number; average_sale:number; units_sold:number; customer_credit:number; supplier_debt:number; low_stock_count:number };
@@ -11,12 +13,18 @@ type Notification = { id:string; type:string; severity:string; entity_name:strin
 
 function DashboardContent() {
   const { user, loading: userLoading } = useAuth();
+  const { can } = usePermissions();
+  const canView = can(PERMISSIONS.analyticsRead);
   const [data, setData] = useState<Overview | null>(null);
   const [alerts, setAlerts] = useState<Notification[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
   useEffect(() => {
+    if (!canView) {
+      setLoading(false);
+      return;
+    }
     Promise.all([api.get("/analytics/overview"), api.get("/notifications")])
       .then(([a, n]) => {
         setData(a.data.data);
@@ -24,7 +32,11 @@ function DashboardContent() {
       })
       .catch((e) => setError(e.response?.data?.error || "Unable to load your overview"))
       .finally(() => setLoading(false));
-  }, []);
+  }, [canView]);
+
+  if (!canView) {
+    return <div className="panel p-6 text-sm text-muted">Your role does not have access to the business overview.</div>;
+  }
 
   if (userLoading) {
     return (
@@ -75,9 +87,5 @@ function DashboardContent() {
 }
 
 export default function DashboardPage() {
-  return (
-    <AuthProvider>
-      <DashboardContent />
-    </AuthProvider>
-  );
+  return <DashboardContent />;
 }

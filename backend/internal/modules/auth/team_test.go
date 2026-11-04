@@ -3,6 +3,7 @@ package auth
 import (
 	"testing"
 
+	"github.com/businessos/backend/internal/shared/permissions"
 	"github.com/google/uuid"
 )
 
@@ -48,5 +49,16 @@ func TestUpdateTeamMemberRoleIsScopedToBusiness(t *testing.T) {
 	}
 	if user.Role != testRoleCashier {
 		t.Fatalf("cross-business update changed role to %q", user.Role)
+	}
+}
+
+func TestUpdateTeamMemberRolePropagatesLastAdminGuard(t *testing.T) {
+	businessID := uuid.New()
+	user := &User{ID: uuid.New(), BusinessID: businessID, Role: permissions.RoleOwner}
+	repo := &fakeRepository{users: []*User{user}, updateErr: ErrLastAdminRole}
+	svc := testService(repo, nil, nil)
+
+	if _, err := svc.UpdateTeamMemberRole(businessID, user.ID, permissions.RoleManager); err != ErrLastAdminRole {
+		t.Fatalf("error = %v, want %v", err, ErrLastAdminRole)
 	}
 }

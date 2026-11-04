@@ -1,19 +1,23 @@
 "use client";
 import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import { api } from "@/lib/api";
 import { AlertTriangle, ArrowUpRight, CircleDollarSign, CreditCard, Package, ShoppingCart, TrendingUp } from "lucide-react";
 import { PageHeader, StatCard, formatMoney } from "@/components/app-shell";
 import { useAuth } from "@/hooks/useAuth";
 import { usePermissions } from "@/hooks/usePermissions";
 import { PERMISSIONS } from "@/lib/permissions";
+import { firstPermittedPath } from "@/lib/navigation";
 import { getGreeting } from "@/lib/utils";
 
 type Overview = { revenue:number; profit:number; sale_count:number; average_sale:number; units_sold:number; customer_credit:number; supplier_debt:number; low_stock_count:number };
 type Notification = { id:string; type:string; severity:string; entity_name:string; title:string; message:string; read:boolean };
 
+/** Renders the business overview for roles that can read analytics. */
 function DashboardContent() {
   const { user, loading: userLoading } = useAuth();
-  const { can } = usePermissions();
+  const { role, can, loading: permissionsLoading } = usePermissions();
+  const router = useRouter();
   const canView = can(PERMISSIONS.analyticsRead);
   const [data, setData] = useState<Overview | null>(null);
   const [alerts, setAlerts] = useState<Notification[]>([]);
@@ -34,8 +38,14 @@ function DashboardContent() {
       .finally(() => setLoading(false));
   }, [canView]);
 
+  useEffect(() => {
+    if (permissionsLoading || canView) return;
+    const target = firstPermittedPath(role);
+    if (target && target !== "/dashboard") router.replace(target);
+  }, [canView, permissionsLoading, role, router]);
+
   if (!canView) {
-    return <div className="panel p-6 text-sm text-muted">Your role does not have access to the business overview.</div>;
+    return <div className="panel p-6 text-sm text-muted">Redirecting to your workspace...</div>;
   }
 
   if (userLoading) {
@@ -86,6 +96,7 @@ function DashboardContent() {
               <h2 className="mt-1 text-lg font-bold">The numbers that need your attention</h2></div><ArrowUpRight size={19} className="text-primary"/></div><div className="grid gap-3 sm:grid-cols-3"><div className="rounded-lg bg-background p-4"><p className="text-xs text-muted">Average sale</p><p className="mt-2 text-xl font-bold">{formatMoney(d.average_sale)}</p></div><div className="rounded-lg bg-background p-4"><p className="text-xs text-muted">Supplier debt</p><p className="mt-2 text-xl font-bold">{formatMoney(d.supplier_debt)}</p></div><div className="rounded-lg bg-background p-4"><p className="text-xs text-muted">Units moved</p><p className="mt-2 text-xl font-bold">{d.units_sold.toLocaleString()}</p></div></div><div className="mt-5 rounded-lg border border-dashed border-border p-4"><p className="text-sm font-semibold">Your next best action</p><p className="mt-1 text-sm text-muted">{alerts.length?`Review ${alerts.length} alert${alerts.length===1?"":"s"} that need${alerts.length===1?"s":""} attention.`:"Nothing needs your attention right now. Keep recording activity as it happens."}</p></div></section><section className="panel p-5"><div className="mb-4 flex items-center justify-between"><div><p className="eyebrow">Alerts</p><h2 className="mt-1 text-lg font-bold">Needs attention</h2></div><AlertTriangle size={19} className="text-warning"/></div>{alerts.length===0?<p className="py-8 text-sm text-muted">No active alerts. You are all caught up.</p>:<div className="space-y-3">{alerts.slice(0,4).map((a,i)=><div key={a.id||i} className="flex gap-3 rounded-lg bg-warning-soft p-3"><AlertTriangle size={16} className="mt-0.5 shrink-0 text-warning"/><div><p className="text-sm font-semibold">{a.entity_name||a.title}</p><p className="mt-0.5 text-xs text-warning-strong">{a.message}</p></div></div>)}</div>}</section></div></> );
 }
 
+/** Dashboard landing page; redirects users without analytics access. */
 export default function DashboardPage() {
   return <DashboardContent />;
 }

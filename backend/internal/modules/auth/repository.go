@@ -4,8 +4,10 @@ import (
 	"errors"
 	"time"
 
+	"github.com/businessos/backend/internal/shared/permissions"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // ErrGoogleIDTaken is returned when a Google subject is already linked to a
@@ -48,16 +50,61 @@ func (r *repository) ListByBusiness(businessID uuid.UUID) ([]User, error) {
 	return users, err
 }
 
-// UpdateRoleInBusiness only changes a user inside the caller's workspace and
-// reports whether a row matched.
+// UpdateRoleInBusiness changes a user inside the caller's workspace and reports
+// whether a row matched. It counts and updates workspace admins in one
+// transaction so two concurrent demotions cannot remove the last admin.
 func (r *repository) UpdateRoleInBusiness(businessID, userID uuid.UUID, role string) (bool, error) {
-	result := r.db.Model(&User{}).
-		Where("id = ? AND business_id = ?", userID, businessID).
-		Update("role", role)
-	if result.Error != nil {
-		return false, result.Error
+	updated := false
+	err := r.db.Transaction(func(tx *gorm.DB) error {
+		// Lock the admin rows first, in one query, so concurrent demotions
+		// cannot both observe two admins and then each remove one.
+		var admins []User
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("business_id = ? AND role IN ?", businessID, []string{permissions.RoleOwner, permissions.RoleAdmin}).
+			Find(&admins).Error; err != nil {
+			return err
+		}
+
+		var target *User
+		for i := range admins {
+			if admins[i].ID == userID {
+				target = &admins[i]
+				break
+			}
+		}
+		if target == nil {
+			var user User
+			err := tx.Where("id = ? AND business_id = ?", userID, businessID).First(&user).Error
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return nil
+			}
+			if err != nil {
+				return err
+			}
+			target = &user
+		}
+		if target.Role == role {
+			updated = true
+			return nil
+		}
+
+		if isWorkspaceAdmin(target.Role) && !isWorkspaceAdmin(role) && len(admins) <= 1 {
+			return ErrLastAdminRole
+		}
+
+		result := tx.Model(&User{}).
+			Where("id = ? AND business_id = ?", userID, businessID).
+			Update("role", role)
+		if result.Error != nil {
+			return result.Error
+		}
+		updated = result.RowsAffected > 0
+		return nil
+	})
+	if err != nil {
+		return false, err
 	}
-	return result.RowsAffected > 0, nil
+	return updated, nil
 }
 
 type repository struct {

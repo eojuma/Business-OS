@@ -23,6 +23,7 @@ function formatDate(iso: string): string {
   });
 }
 
+/** Daily sales report for roles with reporting access. */
 export default function ReportsPage() {
   const { can } = usePermissions();
   const canView = can(PERMISSIONS.reportsRead);

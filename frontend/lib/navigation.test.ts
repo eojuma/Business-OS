@@ -36,6 +36,12 @@ describe("navigation groups", () => {
     expect(new Set(hrefs).size).toBe(hrefs.length);
   });
 
+  it("gives every item a permission", () => {
+    for (const item of NAV_GROUPS.flatMap((group) => group.items)) {
+      expect(item.permission).toBeTruthy();
+    }
+  });
+
   it("routes every item to its module page", () => {
     const hrefs = NAV_GROUPS.flatMap((group) => group.items.map((item) => item.href));
     expect(hrefs).toEqual([

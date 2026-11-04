@@ -41,6 +41,8 @@ describe("frontend permission matrix", () => {
     expect(can("warehouse", PERMISSIONS.purchasesReceive)).toBe(true);
     expect(can("warehouse", PERMISSIONS.purchasesCreate)).toBe(false);
     expect(can("warehouse", PERMISSIONS.salesCreate)).toBe(false);
+    expect(can("warehouse", PERMISSIONS.receiptsUse)).toBe(false);
+    expect(can("cashier", PERMISSIONS.receiptsUse)).toBe(true);
 
     expect(can("manager", PERMISSIONS.teamRead)).toBe(true);
     expect(can("manager", PERMISSIONS.teamManage)).toBe(false);

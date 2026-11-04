@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { AppShell } from "@/components/app-shell";
 import { AuthProvider, useAuth } from "@/hooks/useAuth";
 
+/** Waits for the user session before the permission-aware shell renders. */
 function DashboardFrame({ children }: { children: React.ReactNode }) {
   const { loading } = useAuth();
 
@@ -22,6 +23,7 @@ function DashboardFrame({ children }: { children: React.ReactNode }) {
   return <AppShell>{children}</AppShell>;
 }
 
+/** Guards the dashboard routes behind a stored session token. */
 export default function DashboardLayout({
   children,
 }: {

@@ -345,11 +345,16 @@ func TestUpdateRoleInBusinessIgnoresInactiveAdmins(t *testing.T) {
 	repo := NewRepository(db)
 
 	owner := &User{BusinessID: businessID, Name: "Active Owner", Email: "active-owner-role@example.com", Role: permissions.RoleOwner, Active: true}
-	inactiveAdmin := &User{BusinessID: businessID, Name: "Inactive Admin", Email: "inactive-admin-role@example.com", Role: permissions.RoleAdmin, Active: false}
+	inactiveAdmin := &User{BusinessID: businessID, Name: "Inactive Admin", Email: "inactive-admin-role@example.com", Role: permissions.RoleAdmin, Active: true}
 	for _, user := range []*User{owner, inactiveAdmin} {
 		if err := repo.Create(user); err != nil {
 			t.Fatalf("create user: %v", err)
 		}
+	}
+	// The Active column has a database default of true, so set the offline
+	// admin explicitly after insert.
+	if err := db.Model(&User{}).Where("id = ?", inactiveAdmin.ID).Update("active", false).Error; err != nil {
+		t.Fatalf("deactivate admin: %v", err)
 	}
 
 	if _, err := repo.UpdateRoleInBusiness(businessID, owner.ID, permissions.RoleManager); !errors.Is(err, ErrLastAdminRole) {

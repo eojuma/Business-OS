@@ -339,3 +339,20 @@ func TestUpdateRoleInBusinessKeepsWorkspaceAdmin(t *testing.T) {
 		t.Fatalf("last admin role = %q, want %q", stored.Role, permissions.RoleAdmin)
 	}
 }
+
+func TestUpdateRoleInBusinessIgnoresInactiveAdmins(t *testing.T) {
+	db, businessID := setupAuthTestDB(t)
+	repo := NewRepository(db)
+
+	owner := &User{BusinessID: businessID, Name: "Active Owner", Email: "active-owner-role@example.com", Role: permissions.RoleOwner, Active: true}
+	inactiveAdmin := &User{BusinessID: businessID, Name: "Inactive Admin", Email: "inactive-admin-role@example.com", Role: permissions.RoleAdmin, Active: false}
+	for _, user := range []*User{owner, inactiveAdmin} {
+		if err := repo.Create(user); err != nil {
+			t.Fatalf("create user: %v", err)
+		}
+	}
+
+	if _, err := repo.UpdateRoleInBusiness(businessID, owner.ID, permissions.RoleManager); !errors.Is(err, ErrLastAdminRole) {
+		t.Fatalf("demote active owner error = %v, want %v", err, ErrLastAdminRole)
+	}
+}

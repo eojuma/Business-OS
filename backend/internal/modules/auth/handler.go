@@ -61,6 +61,44 @@ func (h *Handler) ListTeam(c *gin.Context) {
 	response.Success(c, http.StatusOK, users)
 }
 
+type updateRoleRequest struct {
+	Role string `json:"role" binding:"required"`
+}
+
+// UpdateTeamMemberRole lets an owner/admin change a member's role. The new role
+// is read from the database by RequireAuth on the member's next request.
+func (h *Handler) UpdateTeamMemberRole(c *gin.Context) {
+	businessID, err := middleware.CurrentBusinessID(c)
+	if err != nil {
+		response.Error(c, http.StatusUnauthorized, err.Error())
+		return
+	}
+	userID, err := uuid.Parse(c.Param("id"))
+	if err != nil {
+		response.Error(c, http.StatusBadRequest, "invalid user id")
+		return
+	}
+	var req updateRoleRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.Error(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	user, err := h.service.UpdateTeamMemberRole(businessID, userID, req.Role)
+	if errors.Is(err, ErrInvalidRole) {
+		response.Error(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	if errors.Is(err, ErrTeamMemberNotFound) {
+		response.Error(c, http.StatusNotFound, err.Error())
+		return
+	}
+	if err != nil {
+		response.Error(c, http.StatusInternalServerError, "failed to update role")
+		return
+	}
+	response.Success(c, http.StatusOK, user)
+}
+
 func NewHandler(service Service) *Handler {
 	return &Handler{service: service}
 }

@@ -12,6 +12,8 @@ import {
 } from "lucide-react";
 import { api } from "@/lib/api";
 import { PageHeader, formatMoney } from "@/components/app-shell";
+import { usePermissions } from "@/hooks/usePermissions";
+import { PERMISSIONS } from "@/lib/permissions";
 
 type Product = { id: string; name: string; unit: string };
 type Supplier = { id: string; name: string; deleted_at?: string | null };
@@ -156,6 +158,11 @@ function useDialogFocus(open: boolean, onClose: () => void) {
 }
 
 export default function PurchasesPage() {
+  const { can } = usePermissions();
+  const canView = can(PERMISSIONS.purchasesRead);
+  const canCreate = can(PERMISSIONS.purchasesCreate);
+  const canReceive = can(PERMISSIONS.purchasesReceive);
+  const canDelete = can(PERMISSIONS.purchasesDelete);
   const [products, setProducts] = useState<Product[]>([]);
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [purchases, setPurchases] = useState<Purchase[]>([]);
@@ -439,17 +446,21 @@ export default function PurchasesPage() {
   const rangeStart = meta && meta.total > 0 ? (meta.page - 1) * meta.limit + 1 : 0;
   const rangeEnd = meta ? Math.min(meta.page * meta.limit, meta.total) : 0;
 
+  if (!canView) {
+    return <div className="panel p-6 text-sm text-muted">Your role does not have access to purchases.</div>;
+  }
+
   return (
     <>
       <PageHeader
         eyebrow="Procurement"
         title="Purchases"
         description="Create purchase orders, edit drafts, and receive goods in as many shipments as the supplier sends."
-        action={
+        action={canCreate ? (
           <button className="btn-primary" onClick={openCreate}>
             <Plus size={16} /> New purchase
           </button>
-        }
+        ) : undefined}
       />
 
       {error && !formOpen && !receiving && (
@@ -600,7 +611,7 @@ export default function PurchasesPage() {
                     </td>
                     <td className="px-5 py-4">
                       <div className="flex flex-wrap items-center justify-end gap-2">
-                        {canEdit(purchase) && (
+                        {canCreate && canEdit(purchase) && (
                           <button
                             type="button"
                             className="btn-secondary py-1.5"
@@ -609,7 +620,8 @@ export default function PurchasesPage() {
                             <Pencil size={14} /> Edit
                           </button>
                         )}
-                        {purchase.status !== "received" &&
+                        {canReceive &&
+                          purchase.status !== "received" &&
                           purchase.items.some((item) => remaining(item) > 0) && (
                             <button
                               type="button"
@@ -619,7 +631,7 @@ export default function PurchasesPage() {
                               <PackageCheck size={14} /> Receive
                             </button>
                           )}
-                        {canEdit(purchase) && (
+                        {canDelete && canEdit(purchase) && (
                           <button
                             type="button"
                             aria-label={`Delete ${purchase.po_number}`}

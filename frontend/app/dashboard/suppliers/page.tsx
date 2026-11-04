@@ -15,6 +15,8 @@ import {
 } from "lucide-react";
 import { api } from "@/lib/api";
 import { PageHeader, formatMoney } from "@/components/app-shell";
+import { usePermissions } from "@/hooks/usePermissions";
+import { PERMISSIONS } from "@/lib/permissions";
 import { SupplierAgingReport } from "@/components/supplier-aging-report";
 
 type Supplier = {
@@ -102,6 +104,9 @@ export default function SuppliersPage() {
 }
 
 function SuppliersContent() {
+  const { can } = usePermissions();
+  const canManage = can(PERMISSIONS.suppliersManage);
+  const canPay = can(PERMISSIONS.suppliersPayment);
   const searchParams = useSearchParams();
   const agingActive = searchParams.get("tab") === "aging";
   const asOfParam = searchParams.get("as_of");
@@ -466,6 +471,7 @@ function SuppliersContent() {
         title="Suppliers"
         description="Manage vendors, purchase history and outstanding payments."
         action={
+          canManage &&
           !agingActive &&
           <button
             className="btn-primary"
@@ -485,7 +491,7 @@ function SuppliersContent() {
       </nav>
       {agingActive && <SupplierAgingReport initialAsOf={searchParams.get("as_of")} />}
       <div hidden={agingActive}>
-      {showCreate && (
+      {canManage && showCreate && (
         <form
           id="add-supplier-form"
           onSubmit={createSupplier}
@@ -607,7 +613,7 @@ function SuppliersContent() {
                 ? `No suppliers match "${search}". Try a different name, phone or email.`
                 : "Add your first supplier to start receiving purchases."}
             </p>
-            {!search && (
+            {!search && canManage && (
               <button className="btn-primary mt-4" onClick={() => setShowCreate(true)}>
                 <Plus size={16} /> Add supplier
               </button>
@@ -676,14 +682,14 @@ function SuppliersContent() {
                           >
                             <History size={14} /> History
                           </button>
-                          <button
+                          {canPay && <button
                             type="button"
                             className="btn-primary px-3 py-1.5 text-xs"
                             disabled={supplier.outstanding_balance <= 0}
                             onClick={() => openPayments(supplier)}
                           >
                             <WalletCards size={14} /> Pay
-                          </button>
+                          </button>}
                         </div>
                       </td>
                     </tr>
@@ -830,7 +836,7 @@ function SuppliersContent() {
               </div>
             </div>
 
-            <form onSubmit={submitPayment} className="mt-5 space-y-3">
+            {canPay && <form onSubmit={submitPayment} className="mt-5 space-y-3">
               <div className="flex items-end gap-2">
                 <label className="flex-1 text-sm font-semibold">
                   Amount (KSh)
@@ -892,7 +898,7 @@ function SuppliersContent() {
                   This supplier has no outstanding balance.
                 </p>
               )}
-            </form>
+            </form>}
 
             <div className="mt-6 border-t border-border-subtle pt-4">
               <div className="flex items-center justify-between">

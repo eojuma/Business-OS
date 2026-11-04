@@ -27,6 +27,7 @@ type Repository interface {
 	FindByGoogleID(googleID string) (*User, error)
 	FindByID(id uuid.UUID) (*User, error)
 	ListByBusiness(businessID uuid.UUID) ([]User, error)
+	UpdateRoleInBusiness(businessID, userID uuid.UUID, role string) (bool, error)
 	SetGoogleID(id uuid.UUID, googleID string) error
 	ClaimUnverifiedAccountForGoogle(id uuid.UUID, googleID string) error
 	ClearGoogleID(id uuid.UUID) error
@@ -45,6 +46,18 @@ func (r *repository) ListByBusiness(businessID uuid.UUID) ([]User, error) {
 	var users []User
 	err := r.db.Where("business_id = ?", businessID).Order("created_at asc").Find(&users).Error
 	return users, err
+}
+
+// UpdateRoleInBusiness only changes a user inside the caller's workspace and
+// reports whether a row matched.
+func (r *repository) UpdateRoleInBusiness(businessID, userID uuid.UUID, role string) (bool, error) {
+	result := r.db.Model(&User{}).
+		Where("id = ? AND business_id = ?", userID, businessID).
+		Update("role", role)
+	if result.Error != nil {
+		return false, result.Error
+	}
+	return result.RowsAffected > 0, nil
 }
 
 type repository struct {

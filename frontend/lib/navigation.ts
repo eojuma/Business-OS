@@ -16,7 +16,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import type { Permission } from "@/lib/permissions";
-import { PERMISSIONS } from "@/lib/permissions";
+import { PERMISSIONS, can } from "@/lib/permissions";
 
 export type NavItem = {
   href: string;
@@ -96,6 +96,16 @@ export function findActiveGroupId(
     candidate.items.some((item) => isActiveRoute(item.href, pathname)),
   );
   return group?.id ?? null;
+}
+
+/** Returns the first dashboard page the role can open. */
+export function firstPermittedPath(role: string | null | undefined): string | null {
+  for (const group of NAV_GROUPS) {
+    for (const item of group.items) {
+      if (can(role, item.permission)) return item.href;
+    }
+  }
+  return null;
 }
 
 export const NAV_STATE_PREFIX = "nav-collapsed:";

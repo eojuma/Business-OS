@@ -57,7 +57,7 @@ func (g *Generator) GenerateLowStock() (int, error) {
 		       sl.quantity,
 		       sl.low_stock_threshold AS threshold,
 		       COALESCE((SELECT u.email FROM users u
-		                 WHERE u.business_id = sl.business_id AND u.role = 'owner'
+		                 WHERE u.business_id = sl.business_id AND u.role IN ('owner', 'admin')
 		                 ORDER BY u.created_at ASC LIMIT 1), '') AS recipient
 		FROM stock_levels sl
 		JOIN products p ON p.id = sl.product_id
@@ -112,7 +112,7 @@ func (g *Generator) GenerateCreditAlerts() (int, error) {
 		       c.balance,
 		       c.credit_limit,
 		       COALESCE((SELECT u.email FROM users u
-		                 WHERE u.business_id = c.business_id AND u.role = 'owner'
+		                 WHERE u.business_id = c.business_id AND u.role IN ('owner', 'admin')
 		                 ORDER BY u.created_at ASC LIMIT 1), '') AS recipient
 		FROM customers c
 		WHERE c.credit_limit > 0 AND c.balance >= (c.credit_limit * 80 / 100)
@@ -170,7 +170,7 @@ func (g *Generator) NotifyProductLowStock(businessID, productID uuid.UUID) error
 		       sl.quantity,
 		       sl.low_stock_threshold AS threshold,
 		       COALESCE((SELECT u.email FROM users u
-		                 WHERE u.business_id = sl.business_id AND u.role = 'owner'
+		                 WHERE u.business_id = sl.business_id AND u.role IN ('owner', 'admin')
 		                 ORDER BY u.created_at ASC LIMIT 1), '') AS recipient
 		FROM stock_levels sl
 		JOIN products p ON p.id = sl.product_id

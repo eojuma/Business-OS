@@ -6,6 +6,7 @@ import {
   CircleDollarSign,
   ClipboardList,
   Contact,
+  FileText,
   LayoutDashboard,
   Package,
   ScanLine,
@@ -35,6 +36,7 @@ export const NAV_GROUPS: NavGroup[] = [
     items: [
       { href: "/dashboard", label: "Overview", icon: LayoutDashboard },
       { href: "/dashboard/sales", label: "Sales", icon: ShoppingCart },
+      { href: "/dashboard/invoices", label: "Invoices", icon: FileText },
       { href: "/dashboard/purchases", label: "Purchases", icon: ClipboardList },
     ],
   },

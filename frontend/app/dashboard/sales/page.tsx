@@ -175,7 +175,7 @@ export default function SalesPage() {
         payload.walk_in = { name: walkInName.trim(), phone: walkInPhone.trim(), email: walkInEmail.trim() };
       }
       if (saleType === "credit" && dueDate) {
-        payload.due_date = new Date(`${dueDate}T00:00:00`).toISOString();
+        payload.due_date = new Date(`${dueDate}T23:59:59.999`).toISOString();
       }
 
       const res = await api.post("/sales", payload);

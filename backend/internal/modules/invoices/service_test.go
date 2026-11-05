@@ -118,3 +118,17 @@ func TestServiceGetMapsMissingInvoice(t *testing.T) {
 		t.Fatalf("error = %v, want %v", err, ErrInvoiceNotFound)
 	}
 }
+
+func TestComputeOverdueAtDueDateBoundary(t *testing.T) {
+	due := time.Date(2026, 11, 30, 23, 59, 59, 999999999, time.UTC)
+	invoice := &Invoice{TotalAmount: 1000, AmountPaid: 0, Status: StatusUnpaid, DueDate: due}
+
+	invoice.Compute(due.Add(-time.Nanosecond))
+	if invoice.IsOverdue {
+		t.Fatal("invoice must not be overdue before its due instant")
+	}
+	invoice.Compute(due.Add(time.Nanosecond))
+	if !invoice.IsOverdue {
+		t.Fatal("invoice must be overdue after its due instant")
+	}
+}

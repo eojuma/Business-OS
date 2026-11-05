@@ -5,6 +5,9 @@ import { UserPlus, Users, Link2, Unlink } from "lucide-react";
 import { api } from "@/lib/api";
 import { PageHeader } from "@/components/app-shell";
 import { GoogleSignIn } from "@/components/google-signin";
+import { usePermissions } from "@/hooks/usePermissions";
+import { PERMISSIONS } from "@/lib/permissions";
+import { ROLES, ROLE_LABELS, roleLabel } from "@/lib/permissions";
 
 type User = {
   id: string;
@@ -16,7 +19,11 @@ type User = {
   google_linked: boolean;
 };
 
+/** Account linking and role-gated team management. */
 export default function SettingsPage() {
+  const { can } = usePermissions();
+  const canReadTeam = can(PERMISSIONS.teamRead);
+  const canManageTeam = can(PERMISSIONS.teamManage);
   const [users, setUsers] = useState<User[]>([]);
   const [me, setMe] = useState<User | null>(null);
   const [name, setName] = useState("");
@@ -27,7 +34,9 @@ export default function SettingsPage() {
   const [teamError, setTeamError] = useState("");
   const [accountNotice, setAccountNotice] = useState("");
   const [unlinking, setUnlinking] = useState(false);
+  const [updatingRoleIds, setUpdatingRoleIds] = useState<Set<string>>(new Set());
 
+  /** Loads the signed-in account details. */
   async function loadMe() {
     try {
       const res = await api.get("/auth/me");
@@ -37,6 +46,7 @@ export default function SettingsPage() {
     }
   }
 
+  /** Loads workspace members for team viewers. */
   async function loadTeam() {
     try {
       const res = await api.get("/users");
@@ -49,9 +59,10 @@ export default function SettingsPage() {
 
   useEffect(() => {
     loadMe();
-    loadTeam();
-  }, []);
+    if (canReadTeam) loadTeam();
+  }, [canReadTeam]);
 
+  /** Creates a team member with the selected role. */
   async function add(e: React.FormEvent) {
     e.preventDefault();
     try {
@@ -65,6 +76,25 @@ export default function SettingsPage() {
     }
   }
 
+  /** Changes a member role and tracks that member independently. */
+  async function updateRole(userId: string, nextRole: string) {
+    setUpdatingRoleIds((current) => new Set(current).add(userId));
+    setTeamError("");
+    try {
+      const res = await api.patch(`/users/${userId}/role`, { role: nextRole });
+      setUsers((current) => current.map((user) => (user.id === userId ? { ...user, ...res.data.data } : user)));
+    } catch (e: any) {
+      setTeamError(e.response?.data?.error || "Failed to update role");
+    } finally {
+      setUpdatingRoleIds((current) => {
+        const next = new Set(current);
+        next.delete(userId);
+        return next;
+      });
+    }
+  }
+
+  /** Detaches the linked Google identity. */
   async function unlinkGoogle() {
     setUnlinking(true);
     setAccountNotice("");
@@ -158,15 +188,12 @@ export default function SettingsPage() {
         </div>
       </section>
 
-      <section className="grid gap-6 xl:grid-cols-[.8fr_1.2fr]">
-        <form onSubmit={add} className="panel space-y-4 p-5">
+      {canReadTeam && <section className="grid gap-6 xl:grid-cols-[.8fr_1.2fr]">
+        {canManageTeam && <form onSubmit={add} className="panel space-y-4 p-5">
           <div>
             <p className="eyebrow">Team access</p>
             <h2 className="mt-1 text-lg font-bold">Add a team member</h2>
           </div>
-          {teamError && (
-            <p className="rounded-lg bg-danger-soft p-3 text-sm text-danger">{teamError}</p>
-          )}
           <input
             className="field"
             placeholder="Full name"
@@ -192,20 +219,23 @@ export default function SettingsPage() {
             required
           />
           <select className="field" value={role} onChange={(e) => setRole(e.target.value)}>
-            <option value="cashier">Cashier</option>
-            <option value="manager">Manager</option>
-            <option value="owner">Owner</option>
+            {ROLES.map((option) => (
+              <option key={option} value={option}>{ROLE_LABELS[option]}</option>
+            ))}
           </select>
           <button className="btn-primary">
             <UserPlus size={16} /> Add member
           </button>
-        </form>
+        </form>}
 
-        <div className="panel overflow-hidden">
+        <div className={`panel overflow-hidden ${canManageTeam ? "" : "xl:col-span-2"}`}>
           <div className="border-b border-border-subtle p-5">
             <p className="eyebrow">Access list</p>
             <h2 className="mt-1 text-lg font-bold">Workspace members</h2>
           </div>
+          {teamError && (
+            <p className="mx-5 mt-5 rounded-lg bg-danger-soft p-3 text-sm text-danger">{teamError}</p>
+          )}
           {users.length === 0 ? (
             <div className="p-8 text-center text-sm text-muted">
               <Users className="mx-auto mb-2" />
@@ -225,15 +255,29 @@ export default function SettingsPage() {
                     <p className="text-sm font-semibold">{user.name}</p>
                     <p className="text-xs text-muted">{user.email}</p>
                   </div>
-                  <span className="rounded-full bg-hover px-2.5 py-1 text-xs font-bold capitalize text-muted">
-                    {user.role}
-                  </span>
+                  {canManageTeam ? (
+                    <select
+                      className="field w-40 py-1.5 text-xs capitalize"
+                      value={user.role}
+                      disabled={updatingRoleIds.has(user.id)}
+                      onChange={(e) => updateRole(user.id, e.target.value)}
+                      aria-label={`Role for ${user.name}`}
+                    >
+                      {ROLES.map((option) => (
+                        <option key={option} value={option}>{ROLE_LABELS[option]}</option>
+                      ))}
+                    </select>
+                  ) : (
+                    <span className="rounded-full bg-hover px-2.5 py-1 text-xs font-bold text-muted">
+                      {roleLabel(user.role)}
+                    </span>
+                  )}
                 </div>
               ))}
             </div>
           )}
         </div>
-      </section>
+      </section>}
     </>
   );
 }

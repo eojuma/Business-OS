@@ -3,6 +3,7 @@ import {
   NAV_GROUPS,
   decodeUserId,
   findActiveGroupId,
+  firstPermittedPath,
   isActiveRoute,
   navStateKey,
   parseCollapsedGroups,
@@ -34,6 +35,12 @@ describe("navigation groups", () => {
   it("gives every item a unique href", () => {
     const hrefs = NAV_GROUPS.flatMap((group) => group.items.map((item) => item.href));
     expect(new Set(hrefs).size).toBe(hrefs.length);
+  });
+
+  it("gives every item a permission", () => {
+    for (const item of NAV_GROUPS.flatMap((group) => group.items)) {
+      expect(item.permission).toBeTruthy();
+    }
   });
 
   it("routes every item to its module page", () => {
@@ -68,6 +75,14 @@ describe("active routes", () => {
     expect(isActiveRoute("/dashboard/sales", "/dashboard/sales")).toBe(true);
     expect(isActiveRoute("/dashboard/suppliers", "/dashboard/suppliers/abc")).toBe(true);
     expect(isActiveRoute("/dashboard/sales", "/dashboard/sales-archive")).toBe(false);
+  });
+
+  it("routes each role to its first permitted page", () => {
+    expect(firstPermittedPath("owner")).toBe("/dashboard");
+    expect(firstPermittedPath("accountant")).toBe("/dashboard");
+    expect(firstPermittedPath("cashier")).toBe("/dashboard/sales");
+    expect(firstPermittedPath("warehouse")).toBe("/dashboard/purchases");
+    expect(firstPermittedPath(null)).toBeNull();
   });
 
   it("finds the group that owns the current path", () => {

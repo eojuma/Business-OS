@@ -3,6 +3,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { api } from "@/lib/api";
 import { PageHeader, formatMoney } from "@/components/app-shell";
+import { usePermissions } from "@/hooks/usePermissions";
+import { PERMISSIONS } from "@/lib/permissions";
 import { QRCodeSVG } from "qrcode.react";
 import { Check, Minus, Plus, Printer, Search, Trash2 } from "lucide-react";
 
@@ -52,7 +54,10 @@ const SALE_TYPE_LABEL: Record<SaleType, string> = {
   quotation: "Quotation",
 };
 
+/** Sales entry workspace for roles that can record sales. */
 export default function SalesPage() {
+  const { can } = usePermissions();
+  const canCreate = can(PERMISSIONS.salesCreate);
   const [products, setProducts] = useState<Product[]>([]);
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [business, setBusiness] = useState<Business | null>(null);
@@ -74,6 +79,10 @@ export default function SalesPage() {
   const [receiptCustomer, setReceiptCustomer] = useState<Customer | null>(null);
 
   useEffect(() => {
+    if (!canCreate) {
+      setLoading(false);
+      return;
+    }
     async function load() {
       try {
         const [productsRes, customersRes, businessRes] = await Promise.all([
@@ -91,7 +100,7 @@ export default function SalesPage() {
       }
     }
     load();
-  }, []);
+  }, [canCreate]);
 
   const filteredProducts = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -107,6 +116,7 @@ export default function SalesPage() {
 
   const selectedCustomer = customers.find((c) => c.id === customerId) || null;
 
+  /** Adds a product to the sale or increments its quantity. */
   function addProduct(productId: string) {
     setItems((prev) => {
       const existing = prev.find((i) => i.productId === productId);
@@ -118,6 +128,7 @@ export default function SalesPage() {
     setQuery("");
   }
 
+  /** Updates a line quantity, removing the line at zero. */
   function setQuantity(productId: string, quantity: number) {
     if (quantity <= 0) {
       setItems((prev) => prev.filter((i) => i.productId !== productId));
@@ -126,6 +137,7 @@ export default function SalesPage() {
     setItems((prev) => prev.map((i) => (i.productId === productId ? { ...i, quantity } : i)));
   }
 
+  /** Removes a product from the current sale. */
   function removeItem(productId: string) {
     setItems((prev) => prev.filter((i) => i.productId !== productId));
   }
@@ -136,6 +148,7 @@ export default function SalesPage() {
     return sum + product.price * item.quantity;
   }, 0);
 
+  /** Submits the sale, credit sale, or quotation. */
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setFormError("");
@@ -189,6 +202,7 @@ export default function SalesPage() {
     }
   }
 
+  if (!canCreate) return <div className="panel p-6 text-sm text-muted">Your role does not have access to record sales.</div>;
   if (loading) return <main className="p-8">Loading...</main>;
   if (error) return <main className="p-8 text-danger">{error}</main>;
 
@@ -376,6 +390,7 @@ export default function SalesPage() {
   );
 }
 
+/** Printable receipt shown after a sale is recorded. */
 function ReceiptView({
   receipt,
   business,

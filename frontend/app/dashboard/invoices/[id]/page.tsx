@@ -6,6 +6,8 @@ import { useParams } from "next/navigation";
 import { ArrowLeft, CheckCircle2, Clock } from "lucide-react";
 import { api } from "@/lib/api";
 import { PageHeader, formatMoney } from "@/components/app-shell";
+import { usePermissions } from "@/hooks/usePermissions";
+import { PERMISSIONS } from "@/lib/permissions";
 import {
   invoiceCustomerName,
   invoiceDate,
@@ -24,6 +26,8 @@ function errorMessage(error: unknown, fallback: string): string {
 export default function InvoiceDetailPage() {
   const params = useParams<{ id: string }>();
   const id = params?.id;
+  const { can } = usePermissions();
+  const canPay = can(PERMISSIONS.invoicesPayment);
   const [invoice, setInvoice] = useState<Invoice | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -161,7 +165,11 @@ export default function InvoiceDetailPage() {
           <h2 className="mt-1 text-lg font-bold">
             {invoice.remaining_balance > 0 ? "Record a payment" : "Invoice settled"}
           </h2>
-          {invoice.remaining_balance > 0 ? (
+          {invoice.remaining_balance > 0 && !canPay ? (
+            <p className="mt-4 rounded-lg bg-warning-soft p-3 text-sm text-warning-strong">
+              Your role cannot record invoice payments.
+            </p>
+          ) : invoice.remaining_balance > 0 ? (
             <form onSubmit={recordPayment} className="mt-4 space-y-3">
               <label className="block text-sm font-semibold">
                 Amount (KSh)

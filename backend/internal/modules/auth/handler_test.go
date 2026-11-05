@@ -26,9 +26,12 @@ func (s *stubService) LinkGoogle(context.Context, uuid.UUID, string) (*User, err
 }
 func (s *stubService) UnlinkGoogle(uuid.UUID) (*User, error)       { return nil, nil }
 func (s *stubService) CreateTeamUser(RegisterInput) (*User, error) { return nil, nil }
-func (s *stubService) ListTeam(uuid.UUID) ([]User, error)          { return nil, nil }
-func (s *stubService) GetByID(uuid.UUID) (*User, error)            { return nil, nil }
-func (s *stubService) WaitBackground(context.Context)              {}
+func (s *stubService) UpdateTeamMemberRole(uuid.UUID, uuid.UUID, string) (*User, error) {
+	return nil, nil
+}
+func (s *stubService) ListTeam(uuid.UUID) ([]User, error) { return nil, nil }
+func (s *stubService) GetByID(uuid.UUID) (*User, error)   { return nil, nil }
+func (s *stubService) WaitBackground(context.Context)     {}
 
 func TestGoogleHandlerReturnsStableErrorCodes(t *testing.T) {
 	gin.SetMode(gin.TestMode)

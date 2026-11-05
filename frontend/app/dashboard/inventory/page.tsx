@@ -2,6 +2,8 @@
 
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
+import { usePermissions } from "@/hooks/usePermissions";
+import { PERMISSIONS } from "@/lib/permissions";
 
 interface Product {
   id: string;
@@ -15,7 +17,10 @@ interface StockLevel {
   low_stock_threshold: number;
 }
 
+/** Stock levels with role-gated movement recording. */
 export default function InventoryPage() {
+  const { can } = usePermissions();
+  const canAdjust = can(PERMISSIONS.inventoryAdjust);
   const [products, setProducts] = useState<Product[]>([]);
   const [levels, setLevels] = useState<Record<string, StockLevel>>({});
   const [loading, setLoading] = useState(true);
@@ -30,6 +35,7 @@ export default function InventoryPage() {
   const [submitting, setSubmitting] = useState(false);
   const [formError, setFormError] = useState("");
 
+  /** Loads products and their current stock levels. */
   async function loadInventory() {
     setLoading(true);
     try {
@@ -66,6 +72,7 @@ export default function InventoryPage() {
     loadInventory();
   }, []);
 
+  /** Records a stock movement for inventory managers. */
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setFormError("");
@@ -106,6 +113,7 @@ export default function InventoryPage() {
     <main className="min-h-screen p-8">
       <h1 className="mb-6 text-2xl font-semibold">Inventory</h1>
 
+      {canAdjust && (
       <form
         onSubmit={handleSubmit}
         className="mb-8 grid max-w-2xl gap-3 rounded-lg border border-border-subtle p-4 sm:grid-cols-2"
@@ -168,6 +176,7 @@ export default function InventoryPage() {
           {submitting ? "Recording..." : "Record movement"}
         </button>
       </form>
+      )}
 
       {loading ? (
         <p>Loading inventory...</p>

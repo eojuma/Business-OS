@@ -12,6 +12,8 @@ import {
 } from "lucide-react";
 import { api } from "@/lib/api";
 import { PageHeader, formatMoney } from "@/components/app-shell";
+import { usePermissions } from "@/hooks/usePermissions";
+import { PERMISSIONS } from "@/lib/permissions";
 
 type Product = { id: string; name: string; unit: string };
 type Supplier = { id: string; name: string; deleted_at?: string | null };
@@ -155,7 +157,13 @@ function useDialogFocus(open: boolean, onClose: () => void) {
   return dialogRef;
 }
 
+/** Purchase orders with role-gated create, receive, and delete actions. */
 export default function PurchasesPage() {
+  const { can } = usePermissions();
+  const canView = can(PERMISSIONS.purchasesRead);
+  const canCreate = can(PERMISSIONS.purchasesCreate);
+  const canReceive = can(PERMISSIONS.purchasesReceive);
+  const canDelete = can(PERMISSIONS.purchasesDelete);
   const [products, setProducts] = useState<Product[]>([]);
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [purchases, setPurchases] = useState<Purchase[]>([]);
@@ -195,6 +203,7 @@ export default function PurchasesPage() {
   // closed or replaced, so a stale response cannot close the new dialog.
   const dialogSession = useRef(0);
   const latestRequest = useRef(0);
+  /** Loads the filtered, paginated purchase list. */
   const loadPurchases = useCallback(async () => {
     const requestId = ++latestRequest.current;
     setLoading(true);
@@ -266,6 +275,7 @@ export default function PurchasesPage() {
     setPage(1);
   }
 
+  /** Opens the create dialog with a clean form. */
   function openCreate() {
     dialogSession.current += 1;
     setSaving(false);
@@ -279,6 +289,7 @@ export default function PurchasesPage() {
     setFormOpen(true);
   }
 
+  /** Opens the edit dialog for an editable draft purchase. */
   function openEdit(purchase: Purchase) {
     dialogSession.current += 1;
     setSaving(false);
@@ -307,6 +318,7 @@ export default function PurchasesPage() {
     setFormRows((rows) => (rows.length === 1 ? rows : rows.filter((_, i) => i !== index)));
   }
 
+  /** Creates or updates a purchase order. */
   async function submitForm(event: React.FormEvent) {
     event.preventDefault();
     const session = dialogSession.current;
@@ -347,6 +359,7 @@ export default function PurchasesPage() {
     }
   }
 
+  /** Opens the partial-receive dialog for a purchase. */
   function openReceive(purchase: Purchase) {
     dialogSession.current += 1;
     setReceivingBusy(false);
@@ -359,6 +372,7 @@ export default function PurchasesPage() {
     setReceiving(purchase);
   }
 
+  /** Records received quantities against a purchase. */
   async function submitReceive(event: React.FormEvent) {
     event.preventDefault();
     if (!receiving) return;
@@ -397,6 +411,7 @@ export default function PurchasesPage() {
     }
   }
 
+  /** Deletes a draft purchase when the role allows it. */
   async function removePurchase(purchase: Purchase) {
     if (!window.confirm(`Delete ${purchase.po_number}? This cannot be undone.`)) return;
     setError("");
@@ -414,10 +429,12 @@ export default function PurchasesPage() {
     }
   }
 
+  /** Drafts with no received stock are the only editable purchases. */
   function canEdit(purchase: Purchase): boolean {
     return purchase.status === "draft" && purchase.items.every((item) => (item.received_qty || 0) === 0);
   }
 
+  /** Renders the purchase status badge. */
   function statusBadge(purchase: Purchase) {
     if (purchase.status === "received") {
       return <span className="rounded-full bg-primary-soft px-2 py-0.5 text-xs font-bold uppercase text-primary">Received</span>;
@@ -429,6 +446,7 @@ export default function PurchasesPage() {
     return <span className="rounded-full bg-surface-muted px-2 py-0.5 text-xs font-bold uppercase text-muted">Draft</span>;
   }
 
+  /** Summarises how much of a purchase has arrived. */
   function receivedProgress(purchase: Purchase): string {
     const ordered = purchase.items.reduce((sum, item) => sum + item.quantity, 0);
     const arrived = purchase.items.reduce((sum, item) => sum + (item.received_qty || 0), 0);
@@ -439,17 +457,21 @@ export default function PurchasesPage() {
   const rangeStart = meta && meta.total > 0 ? (meta.page - 1) * meta.limit + 1 : 0;
   const rangeEnd = meta ? Math.min(meta.page * meta.limit, meta.total) : 0;
 
+  if (!canView) {
+    return <div className="panel p-6 text-sm text-muted">Your role does not have access to purchases.</div>;
+  }
+
   return (
     <>
       <PageHeader
         eyebrow="Procurement"
         title="Purchases"
         description="Create purchase orders, edit drafts, and receive goods in as many shipments as the supplier sends."
-        action={
+        action={canCreate ? (
           <button className="btn-primary" onClick={openCreate}>
             <Plus size={16} /> New purchase
           </button>
-        }
+        ) : undefined}
       />
 
       {error && !formOpen && !receiving && (
@@ -600,7 +622,7 @@ export default function PurchasesPage() {
                     </td>
                     <td className="px-5 py-4">
                       <div className="flex flex-wrap items-center justify-end gap-2">
-                        {canEdit(purchase) && (
+                        {canCreate && canEdit(purchase) && (
                           <button
                             type="button"
                             className="btn-secondary py-1.5"
@@ -609,7 +631,8 @@ export default function PurchasesPage() {
                             <Pencil size={14} /> Edit
                           </button>
                         )}
-                        {purchase.status !== "received" &&
+                        {canReceive &&
+                          purchase.status !== "received" &&
                           purchase.items.some((item) => remaining(item) > 0) && (
                             <button
                               type="button"
@@ -619,7 +642,7 @@ export default function PurchasesPage() {
                               <PackageCheck size={14} /> Receive
                             </button>
                           )}
-                        {canEdit(purchase) && (
+                        {canDelete && canEdit(purchase) && (
                           <button
                             type="button"
                             aria-label={`Delete ${purchase.po_number}`}

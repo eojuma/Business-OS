@@ -4,8 +4,10 @@ import (
 	"errors"
 	"time"
 
+	"github.com/businessos/backend/internal/shared/permissions"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // ErrGoogleIDTaken is returned when a Google subject is already linked to a
@@ -27,6 +29,7 @@ type Repository interface {
 	FindByGoogleID(googleID string) (*User, error)
 	FindByID(id uuid.UUID) (*User, error)
 	ListByBusiness(businessID uuid.UUID) ([]User, error)
+	UpdateRoleInBusiness(businessID, userID uuid.UUID, role string) (bool, error)
 	SetGoogleID(id uuid.UUID, googleID string) error
 	ClaimUnverifiedAccountForGoogle(id uuid.UUID, googleID string) error
 	ClearGoogleID(id uuid.UUID) error
@@ -45,6 +48,63 @@ func (r *repository) ListByBusiness(businessID uuid.UUID) ([]User, error) {
 	var users []User
 	err := r.db.Where("business_id = ?", businessID).Order("created_at asc").Find(&users).Error
 	return users, err
+}
+
+// UpdateRoleInBusiness changes a user inside the caller's workspace and reports
+// whether a row matched. It counts and updates workspace admins in one
+// transaction so two concurrent demotions cannot remove the last admin.
+func (r *repository) UpdateRoleInBusiness(businessID, userID uuid.UUID, role string) (bool, error) {
+	updated := false
+	err := r.db.Transaction(func(tx *gorm.DB) error {
+		// Lock the admin rows first, in one query, so concurrent demotions
+		// cannot both observe two admins and then each remove one.
+		var admins []User
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("business_id = ? AND active = ? AND role IN ?", businessID, true, []string{permissions.RoleOwner, permissions.RoleAdmin}).
+			Find(&admins).Error; err != nil {
+			return err
+		}
+
+		var target *User
+		for i := range admins {
+			if admins[i].ID == userID {
+				target = &admins[i]
+				break
+			}
+		}
+		if target == nil {
+			var user User
+			err := tx.Where("id = ? AND business_id = ?", userID, businessID).First(&user).Error
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return nil
+			}
+			if err != nil {
+				return err
+			}
+			target = &user
+		}
+		if target.Role == role {
+			updated = true
+			return nil
+		}
+
+		if target.Active && isWorkspaceAdmin(target.Role) && !isWorkspaceAdmin(role) && len(admins) <= 1 {
+			return ErrLastAdminRole
+		}
+
+		result := tx.Model(&User{}).
+			Where("id = ? AND business_id = ?", userID, businessID).
+			Update("role", role)
+		if result.Error != nil {
+			return result.Error
+		}
+		updated = result.RowsAffected > 0
+		return nil
+	})
+	if err != nil {
+		return false, err
+	}
+	return updated, nil
 }
 
 type repository struct {

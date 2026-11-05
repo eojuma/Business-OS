@@ -2,6 +2,8 @@
 
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
+import { usePermissions } from "@/hooks/usePermissions";
+import { PERMISSIONS } from "@/lib/permissions";
 import { WalletCards } from "lucide-react";
 
 interface Customer {
@@ -16,7 +18,12 @@ function formatMoney(cents: number): string {
   return (cents / 100).toFixed(2);
 }
 
+/** Customer list with role-gated creation and payment controls. */
 export default function CustomersPage() {
+  const { can } = usePermissions();
+  const canRead = can(PERMISSIONS.customersRead);
+  const canManage = can(PERMISSIONS.customersManage);
+  const canPay = can(PERMISSIONS.customersPayment);
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -29,6 +36,7 @@ export default function CustomersPage() {
   const [paying, setPaying] = useState<string | null>(null);
   const [paymentAmount, setPaymentAmount] = useState("");
 
+  /** Loads the customer list for the signed-in workspace. */
   async function loadCustomers() {
     try {
       const res = await api.get("/customers");
@@ -40,6 +48,7 @@ export default function CustomersPage() {
     }
   }
 
+  /** Records a customer payment when the role allows it. */
   async function recordPayment(customerId: string) {
     const amount = Math.round(Number(paymentAmount) * 100);
     if (!amount || amount <= 0) { setFormError("Enter a valid payment amount"); return; }
@@ -53,6 +62,7 @@ export default function CustomersPage() {
     loadCustomers();
   }, []);
 
+  /** Creates a customer from the add form. */
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setFormError("");
@@ -81,10 +91,15 @@ export default function CustomersPage() {
     }
   }
 
+  if (!canRead) {
+    return <div className="panel p-6 text-sm text-muted">Your role does not have access to customers.</div>;
+  }
+
   return (
     <main className="min-h-screen p-8">
       <h1 className="mb-6 text-2xl font-semibold">Customers</h1>
 
+      {canManage && (
       <form
         onSubmit={handleSubmit}
         className="mb-8 grid max-w-2xl gap-3 rounded-lg border border-border-subtle p-4 sm:grid-cols-2"
@@ -122,6 +137,7 @@ export default function CustomersPage() {
           {submitting ? "Adding..." : "Add customer"}
         </button>
       </form>
+      )}
 
       {loading ? (
         <p>Loading customers...</p>
@@ -137,7 +153,7 @@ export default function CustomersPage() {
               <th className="py-2">Phone</th>
               <th className="py-2 text-right">Balance owed</th>
               <th className="py-2 text-right">Credit limit</th>
-              <th className="py-2 text-right">Action</th>
+              {canPay && <th className="py-2 text-right">Action</th>}
             </tr>
           </thead>
           <tbody>
@@ -153,9 +169,9 @@ export default function CustomersPage() {
                 <td className="py-2 text-right text-subtle">
                   KSh {formatMoney(c.credit_limit)}
                 </td>
-                <td className="py-2 text-right">
+                {canPay && <td className="py-2 text-right">
                   {paying === c.id ? <span className="inline-flex gap-2"><input className="field w-28 py-1.5" type="number" min="0.01" step="0.01" placeholder="KSh" value={paymentAmount} onChange={(e) => setPaymentAmount(e.target.value)} /><button className="btn-primary py-1.5" onClick={() => recordPayment(c.id)}>Pay</button></span> : <button className="btn-secondary py-1.5" disabled={c.balance <= 0} onClick={() => setPaying(c.id)}><WalletCards size={15}/> Payment</button>}
-                </td>
+                </td>}
               </tr>
             ))}
           </tbody>

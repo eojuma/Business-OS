@@ -58,15 +58,16 @@ func RegisterRoutes(rg *gin.RouterGroup, db *gorm.DB, cfg *config.Config) func(c
 		authGroup.POST("/email/verify", handler.VerifyEmail)
 		authGroup.POST("/email/resend", handler.ResendVerification)
 	}
-	authGroup.GET("/me", middleware.RequireAuth(cfg), handler.Me)
+	authGroup.GET("/me", middleware.RequireAuth(cfg, middleware.RoleFromDB(db)), middleware.RequireRoutePermission(), handler.Me)
 	linkGroup := rg.Group("/auth")
-	linkGroup.Use(middleware.RequireAuth(cfg))
+	linkGroup.Use(middleware.RequireAuth(cfg, middleware.RoleFromDB(db)), middleware.RequireRoutePermission())
 	linkGroup.POST("/google/link", handler.LinkGoogle)
 	linkGroup.POST("/google/unlink", handler.UnlinkGoogle)
 	team := rg.Group("/users")
-	team.Use(middleware.RequireAuth(cfg), middleware.RequireRole("owner"))
+	team.Use(middleware.RequireAuth(cfg, middleware.RoleFromDB(db)), middleware.RequireRoutePermission())
 	team.GET("", handler.ListTeam)
 	team.POST("", handler.CreateTeamUser)
+	team.PATCH("/:id/role", handler.UpdateTeamMemberRole)
 
 	// Returned so the process can drain background verification sends on
 	// shutdown.

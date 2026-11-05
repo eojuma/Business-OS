@@ -3,6 +3,7 @@ package sales
 import (
 	"time"
 
+	"github.com/businessos/backend/internal/modules/invoices"
 	"github.com/google/uuid"
 )
 
@@ -27,6 +28,13 @@ type Sale struct {
 	Discount    int64      `gorm:"not null;default:0" json:"discount"` // cents
 	Note        string     `json:"note,omitempty"`
 	CreatedAt   time.Time  `json:"created_at"`
+
+	// InvoiceDueDate is supplied by the caller and only used to create the
+	// matching invoice; it is not stored on the sale itself.
+	InvoiceDueDate *time.Time `gorm:"-" json:"-"`
+	// Invoice is the receivable document created with the sale, when the sale
+	// is a completed cash or credit sale rather than a quotation.
+	Invoice *invoices.Invoice `gorm:"-" json:"invoice,omitempty"`
 
 	LineItems []SaleLineItem `gorm:"foreignKey:SaleID" json:"line_items,omitempty"`
 }

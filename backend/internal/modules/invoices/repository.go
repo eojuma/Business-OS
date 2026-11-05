@@ -196,7 +196,14 @@ func (r *repository) RecordPayment(id, businessID uuid.UUID, payment *InvoicePay
 		if payment.Amount <= 0 {
 			return ErrInvalidPayment
 		}
-		remaining := invoice.TotalAmount - invoice.AmountPaid
+		var paid int64
+		if err := tx.Model(&InvoicePayment{}).
+			Where("invoice_id = ?", invoice.ID).
+			Select("COALESCE(SUM(amount), 0)").
+			Scan(&paid).Error; err != nil {
+			return err
+		}
+		remaining := invoice.TotalAmount - paid
 		if remaining <= 0 {
 			return ErrInvoiceAlreadyPaid
 		}
@@ -214,7 +221,7 @@ func (r *repository) RecordPayment(id, businessID uuid.UUID, payment *InvoicePay
 			return err
 		}
 
-		invoice.AmountPaid += payment.Amount
+		invoice.AmountPaid = paid + payment.Amount
 		invoice.Status = StatusFor(invoice.TotalAmount, invoice.AmountPaid)
 		if err := tx.Model(&Invoice{}).
 			Where("id = ?", invoice.ID).

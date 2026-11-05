@@ -6,7 +6,7 @@ Business OS is a multi-tenant operations platform for hardware retailers. It rep
 
 **Current release:** [v0.1.0 — Initial release](https://github.com/eojuma/Business-OS/releases/tag/v0.1.0) · [Changelog](CHANGELOG.md)
 
-The backend is a Go modular monolith (Gin + GORM + PostgreSQL + Redis). The frontend is a Next.js 14 App Router application. Data is scoped per business, money is stored in integer minor units, and every cross-module write runs in one database transaction.
+The backend is a Go modular monolith (Gin + GORM + PostgreSQL + Redis). The frontend is a Next.js 14 App Router application. Data is scoped per business,  money is stored in integer minor units, and every cross-module write runs in one database transaction.
 
 ---
 

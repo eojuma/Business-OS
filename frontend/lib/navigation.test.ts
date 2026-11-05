@@ -23,7 +23,7 @@ describe("navigation groups", () => {
     }));
 
     expect(shape).toEqual([
-      { label: "Sales", items: ["Overview", "Sales", "Purchases"] },
+      { label: "Sales", items: ["Overview", "Sales", "Invoices", "Purchases"] },
       { label: "Inventory", items: ["Products", "Inventory", "Receipt OCR"] },
       { label: "Finance", items: ["Finance", "Reports", "Analytics"] },
       { label: "People", items: ["Customers", "Suppliers"] },
@@ -41,6 +41,7 @@ describe("navigation groups", () => {
     expect(hrefs).toEqual([
       "/dashboard",
       "/dashboard/sales",
+      "/dashboard/invoices",
       "/dashboard/purchases",
       "/dashboard/products",
       "/dashboard/inventory",

@@ -35,6 +35,8 @@ describe("frontend permission matrix", () => {
     expect(can("cashier", PERMISSIONS.financeRead)).toBe(false);
     expect(can("cashier", PERMISSIONS.teamManage)).toBe(false);
 
+    expect(can("accountant", PERMISSIONS.invoicesRead)).toBe(true);
+    expect(can("accountant", PERMISSIONS.invoicesPayment)).toBe(true);
     expect(can("accountant", PERMISSIONS.financeManage)).toBe(true);
     expect(can("accountant", PERMISSIONS.financeDelete)).toBe(false);
     expect(can("accountant", PERMISSIONS.teamManage)).toBe(false);

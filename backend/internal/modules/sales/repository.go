@@ -1,6 +1,9 @@
 package sales
 
 import (
+	"time"
+
+	"github.com/businessos/backend/internal/modules/invoices"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
@@ -63,6 +66,34 @@ func (r *repository) CreateSale(sale *Sale, lineItems []SaleLineItem, inventory 
 			if err := customers.ChargeCreditTx(tx, sale.BusinessID, *sale.CustomerID, sale.TotalAmount); err != nil {
 				return err
 			}
+		}
+
+		if sale.SaleType != SaleTypeQuotation {
+			issueDate := sale.CreatedAt
+			if issueDate.IsZero() {
+				issueDate = time.Now()
+			}
+			dueDate := issueDate
+			if sale.InvoiceDueDate != nil {
+				dueDate = *sale.InvoiceDueDate
+			} else if sale.SaleType == SaleTypeCredit {
+				dueDate = issueDate.AddDate(0, 0, 30)
+			}
+			invoice, err := invoices.CreateForSaleTx(tx, invoices.CreateForSaleInput{
+				BusinessID: sale.BusinessID,
+				SaleID:     sale.ID,
+				CustomerID: sale.CustomerID,
+				SaleType:   string(sale.SaleType),
+				IssueDate:  issueDate,
+				DueDate:    dueDate,
+				Subtotal:   sale.TotalAmount + sale.Discount,
+				Discount:   sale.Discount,
+				Total:      sale.TotalAmount,
+			})
+			if err != nil {
+				return err
+			}
+			sale.Invoice = invoice
 		}
 
 		return nil

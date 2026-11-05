@@ -28,6 +28,8 @@ func TestPermissionMatrix(t *testing.T) {
 		{"cashier records invoice payments", RoleCashier, InvoicePayment, true},
 		{"cashier cannot read finance", RoleCashier, FinanceRead, false},
 		{"cashier records customer payment", RoleCashier, CustomerPayment, true},
+		{"accountant reads invoices", RoleAccountant, InvoiceRead, true},
+		{"accountant records invoice payments", RoleAccountant, InvoicePayment, true},
 		{"accountant reads finance", RoleAccountant, FinanceRead, true},
 		{"accountant manages expenses", RoleAccountant, FinanceManage, true},
 		{"accountant cannot delete finance", RoleAccountant, FinanceDelete, false},

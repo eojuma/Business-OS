@@ -1,6 +1,12 @@
 package suppliers
 
 import (
+	"context"
+	"encoding/json"
+	"errors"
+	"math"
+	"sort"
+	"strings"
 	"testing"
 	"time"
 
@@ -11,6 +17,106 @@ import (
 type testRepository struct {
 	suppliers map[uuid.UUID]*Supplier
 	payments  map[uuid.UUID][]Payment
+	getAging  func(uuid.UUID, time.Time) ([]AgingSupplier, error)
+}
+
+func (r *testRepository) GetAging(_ context.Context, businessID uuid.UUID, asOf time.Time) ([]AgingSupplier, error) {
+	if r.getAging != nil {
+		return r.getAging(businessID, asOf)
+	}
+	return nil, nil
+}
+
+func TestGetAgingGroupsSuppliersAndTotals(t *testing.T) {
+	businessID := uuid.New()
+	asOf := time.Date(2026, time.October, 30, 3, 0, 0, 0, time.FixedZone("EAT", 3*60*60))
+	dueDate := asOf.AddDate(0, 0, -1)
+	buckets := []AgingBucket{AgingCurrent, AgingDays1To30, AgingDays31To60, AgingDays61To90, AgingDays90Plus}
+	rows := make([]AgingSupplier, 0, len(buckets)+1)
+	for _, bucket := range buckets {
+		rows = append(rows, AgingSupplier{ID: uuid.New(), Name: string(bucket), OutstandingBalance: 100, Bucket: bucket})
+	}
+	rows = append(rows, AgingSupplier{ID: uuid.New(), Name: "Second overdue supplier", OutstandingBalance: 250, DueDate: &dueDate, DaysOverdue: 1, Bucket: AgingDays1To30})
+	repo := newTestRepository()
+	repo.getAging = func(gotID uuid.UUID, gotAsOf time.Time) ([]AgingSupplier, error) {
+		if gotID != businessID || !gotAsOf.Equal(asOf) || gotAsOf.Location() != time.UTC {
+			t.Fatalf("aging query = %s, %v; want %s, %v in UTC", gotID, gotAsOf, businessID, asOf)
+		}
+		return rows, nil
+	}
+	report, err := NewService(repo).GetAging(context.Background(), businessID, asOf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !report.AsOf.Equal(asOf) {
+		t.Fatalf("as_of = %v, want %v", report.AsOf, asOf)
+	}
+	groups := map[AgingBucket][]AgingSupplier{
+		AgingCurrent: report.Current, AgingDays1To30: report.Days1To30,
+		AgingDays31To60: report.Days31To60, AgingDays61To90: report.Days61To90, AgingDays90Plus: report.Days90Plus,
+	}
+	for _, bucket := range buckets {
+		wantCount, wantTotal := 1, int64(100)
+		if bucket == AgingDays1To30 {
+			wantCount, wantTotal = 2, 350
+		}
+		if len(groups[bucket]) != wantCount || report.Totals[bucket] != wantTotal {
+			t.Fatalf("bucket %s = %d suppliers, %d total; want %d, %d", bucket, len(groups[bucket]), report.Totals[bucket], wantCount, wantTotal)
+		}
+	}
+	got := report.Days1To30[1]
+	if got.ID != rows[5].ID || got.Name != rows[5].Name || got.DaysOverdue != 1 || got.DueDate == nil || !got.DueDate.Equal(dueDate) {
+		t.Fatalf("supplier details were lost: %+v", got)
+	}
+}
+
+func TestGetAgingEmptyReportJSON(t *testing.T) {
+	report, err := NewService(newTestRepository()).GetAging(context.Background(), uuid.New(), time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := json.Marshal(report)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var data map[string]json.RawMessage
+	if err := json.Unmarshal(encoded, &data); err != nil {
+		t.Fatal(err)
+	}
+	for _, bucket := range []AgingBucket{AgingCurrent, AgingDays1To30, AgingDays31To60, AgingDays61To90, AgingDays90Plus} {
+		if string(data[string(bucket)]) != "[]" {
+			t.Fatalf("empty bucket %s = %s, want []", bucket, data[string(bucket)])
+		}
+		if total, ok := report.Totals[bucket]; !ok || total != 0 {
+			t.Fatalf("empty total %s = %d, present %v", bucket, total, ok)
+		}
+	}
+}
+
+func TestGetAgingErrors(t *testing.T) {
+	queryError := errors.New("query failed")
+	for _, tc := range []struct {
+		name string
+		rows []AgingSupplier
+		err  error
+		want error
+	}{
+		{name: "repository failure", err: queryError, want: queryError},
+		{name: "total overflow", rows: []AgingSupplier{
+			{Bucket: AgingCurrent, OutstandingBalance: math.MaxInt64},
+			{Bucket: AgingCurrent, OutstandingBalance: 1},
+		}, want: ErrAgingTotalOverflow},
+		{name: "unknown bucket", rows: []AgingSupplier{{Bucket: "invalid", OutstandingBalance: 100}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			repo := newTestRepository()
+			repo.getAging = func(uuid.UUID, time.Time) ([]AgingSupplier, error) { return tc.rows, tc.err }
+			report, err := NewService(repo).GetAging(context.Background(), uuid.New(), time.Now())
+			if report != nil || err == nil || (tc.want != nil && !errors.Is(err, tc.want)) {
+				t.Fatalf("GetAging = %+v, %v; want nil report and %v", report, err, tc.want)
+			}
+		})
+	}
 }
 
 func newTestRepository() *testRepository {
@@ -48,6 +154,35 @@ func (r *testRepository) List(businessID uuid.UUID, includeArchived bool) ([]Sup
 		result = append(result, *s)
 	}
 	return result, nil
+}
+
+func (r *testRepository) ListPaginated(businessID uuid.UUID, page, limit int, search string, includeArchived bool) ([]Supplier, int64, error) {
+	term := strings.ToLower(strings.TrimSpace(search))
+	var result []Supplier
+	for _, s := range r.suppliers {
+		if s.BusinessID != businessID {
+			continue
+		}
+		if s.DeletedAt.Valid && !includeArchived {
+			continue
+		}
+		if term != "" && !strings.Contains(strings.ToLower(s.Name+" "+s.Phone+" "+s.Email), term) {
+			continue
+		}
+		result = append(result, *s)
+	}
+	sort.Slice(result, func(i, j int) bool { return result[i].Name < result[j].Name })
+
+	total := int64(len(result))
+	start := (page - 1) * limit
+	if start > len(result) {
+		start = len(result)
+	}
+	end := start + limit
+	if end > len(result) {
+		end = len(result)
+	}
+	return result[start:end], total, nil
 }
 
 func (r *testRepository) Update(s *Supplier) error {
@@ -99,53 +234,6 @@ func (r *testRepository) ListPayments(id, businessID uuid.UUID) ([]Payment, erro
 		return nil, gorm.ErrRecordNotFound
 	}
 	return r.payments[id], nil
-}
-
-func (r *testRepository) GetAging(businessID uuid.UUID, asOf time.Time) (*AgingReport, error) {
-	// Simple implementation for testing - filter suppliers from the map
-	var suppliers []*Supplier
-	for _, s := range r.suppliers {
-		if s.BusinessID == businessID && !s.DeletedAt.Valid && s.OutstandingBalance > 0 {
-			suppliers = append(suppliers, s)
-		}
-	}
-
-	report := &AgingReport{}
-	for _, s := range suppliers {
-		ds := *s // dereference pointer
-		daysOverdue := 0
-		if ds.DueDate != nil && ds.DueDate.Before(asOf) {
-			daysOverdue = daysPastDue(*ds.DueDate, asOf)
-		}
-
-		entry := AgingSupplier{
-			ID:          ds.ID,
-			Name:        ds.Name,
-			Outstanding: ds.OutstandingBalance,
-			DueDate:     ds.DueDate,
-			DaysOverdue: daysOverdue,
-		}
-
-		switch {
-		case daysOverdue <= 0:
-			report.Current = append(report.Current, entry)
-			report.Totals.Current += s.OutstandingBalance
-		case daysOverdue <= 30:
-			report.Days1_30 = append(report.Days1_30, entry)
-			report.Totals.Days1_30 += s.OutstandingBalance
-		case daysOverdue <= 60:
-			report.Days31_60 = append(report.Days31_60, entry)
-			report.Totals.Days31_60 += s.OutstandingBalance
-		case daysOverdue <= 90:
-			report.Days61_90 = append(report.Days61_90, entry)
-			report.Totals.Days61_90 += s.OutstandingBalance
-		default:
-			report.Days90Plus = append(report.Days90Plus, entry)
-			report.Totals.Days90Plus += s.OutstandingBalance
-		}
-		report.Totals.Total += s.OutstandingBalance
-	}
-	return report, nil
 }
 
 func (r *testRepository) AddOutstandingTx(tx *gorm.DB, id, businessID uuid.UUID, amount int64) error {
@@ -259,6 +347,50 @@ func TestListSuppliers(t *testing.T) {
 	}
 	if len(all) != 3 {
 		t.Fatalf("len = %d, want 3 including archived", len(all))
+	}
+}
+
+func TestListSuppliersPaginated(t *testing.T) {
+	repo := newTestRepository()
+	svc := NewService(repo)
+
+	businessID := uuid.New()
+	repo.suppliers[uuid.New()] = &Supplier{BusinessID: businessID, Name: "Alpha", Phone: "0700", Email: "alpha@example.com"}
+	repo.suppliers[uuid.New()] = &Supplier{BusinessID: businessID, Name: "Bravo", Phone: "0711", Email: "bravo@example.com"}
+	repo.suppliers[uuid.New()] = &Supplier{BusinessID: businessID, Name: "Charlie", Phone: "0722", Email: "charlie@example.com"}
+	repo.suppliers[uuid.New()] = &Supplier{BusinessID: businessID, Name: "Archived", DeletedAt: gorm.DeletedAt{Time: time.Now(), Valid: true}}
+	repo.suppliers[uuid.New()] = &Supplier{BusinessID: uuid.New(), Name: "Other"}
+
+	items, total, err := svc.ListPaginated(businessID, 1, 2, "", false)
+	if err != nil {
+		t.Fatalf("ListPaginated failed: %v", err)
+	}
+	if total != 3 || len(items) != 2 || items[0].Name != "Alpha" || items[1].Name != "Bravo" {
+		t.Fatalf("page 1 total = %d, len = %d", total, len(items))
+	}
+
+	items, total, err = svc.ListPaginated(businessID, 2, 2, "", false)
+	if err != nil {
+		t.Fatalf("ListPaginated page 2 failed: %v", err)
+	}
+	if total != 3 || len(items) != 1 || items[0].Name != "Charlie" {
+		t.Fatalf("page 2 total = %d, len = %d", total, len(items))
+	}
+
+	items, total, err = svc.ListPaginated(businessID, 1, 10, "  bravo  ", false)
+	if err != nil {
+		t.Fatalf("ListPaginated search failed: %v", err)
+	}
+	if total != 1 || len(items) != 1 || items[0].Name != "Bravo" {
+		t.Fatalf("search total = %d, len = %d", total, len(items))
+	}
+
+	_, total, err = svc.ListPaginated(businessID, 1, 10, "", true)
+	if err != nil {
+		t.Fatalf("ListPaginated including archived failed: %v", err)
+	}
+	if total != 4 {
+		t.Fatalf("total including archived = %d, want 4", total)
 	}
 }
 
@@ -582,102 +714,5 @@ func TestSetPaymentDueDateSupplierNotFound(t *testing.T) {
 	_, err := repo.SetPaymentDueDateTx(nil, uuid.New(), uuid.New(), time.Now())
 	if err != ErrSupplierNotFound {
 		t.Fatalf("expected ErrSupplierNotFound, got %v", err)
-	}
-}
-
-func TestGetAging(t *testing.T) {
-	db, businessID := setupTestDB(t)
-	repo := NewRepository(db)
-	svc := NewService(repo)
-
-	now := time.Date(2026, time.January, 15, 0, 0, 0, 0, time.UTC)
-	insert := func(s *Supplier) {
-		t.Helper()
-		if err := db.Create(s).Error; err != nil {
-			t.Fatalf("failed to create supplier: %v", err)
-		}
-	}
-
-	// Supplier 1: current (not overdue)
-	s1 := &Supplier{ID: uuid.New(), BusinessID: businessID, Name: "Current Supplier", OutstandingBalance: 5000, DueDate: func() *time.Time { t := now.AddDate(0, 0, 5); return &t }()}
-	insert(s1)
-
-	// Supplier 2: 1-30 days overdue
-	s2 := &Supplier{ID: uuid.New(), BusinessID: businessID, Name: "Overdue 1-30", OutstandingBalance: 10000, DueDate: func() *time.Time { t := now.AddDate(0, 0, -10); return &t }()}
-	insert(s2)
-
-	// Supplier 3: 31-60 days overdue
-	s3 := &Supplier{ID: uuid.New(), BusinessID: businessID, Name: "Overdue 31-60", OutstandingBalance: 15000, DueDate: func() *time.Time { t := now.AddDate(0, 0, -45); return &t }()}
-	insert(s3)
-
-	// Supplier 4: 61-90 days overdue
-	s4 := &Supplier{ID: uuid.New(), BusinessID: businessID, Name: "Overdue 61-90", OutstandingBalance: 20000, DueDate: func() *time.Time { t := now.AddDate(0, 0, -75); return &t }()}
-	insert(s4)
-
-	// Supplier 5: 90+ days overdue
-	s5 := &Supplier{ID: uuid.New(), BusinessID: businessID, Name: "Overdue 90+", OutstandingBalance: 25000, DueDate: func() *time.Time { t := now.AddDate(0, 0, -120); return &t }()}
-	insert(s5)
-
-	// Supplier 6: no due date (should be current)
-	s6 := &Supplier{ID: uuid.New(), BusinessID: businessID, Name: "No Due Date", OutstandingBalance: 5000, DueDate: nil}
-	insert(s6)
-
-	// Supplier with zero balance (should not appear)
-	s7 := &Supplier{ID: uuid.New(), BusinessID: businessID, Name: "Zero Balance", OutstandingBalance: 0, DueDate: func() *time.Time { t := now.AddDate(0, 0, -10); return &t }()}
-	insert(s7)
-
-	// Supplier 8: archived (deleted_at set) - should not appear
-	s8 := &Supplier{ID: uuid.New(), BusinessID: businessID, Name: "Archived", OutstandingBalance: 10000, DueDate: func() *time.Time { t := now.AddDate(0, 0, -10); return &t }(), DeletedAt: gorm.DeletedAt{Time: time.Now(), Valid: true}}
-	insert(s8)
-
-	// Supplier 9: overdue by less than 24 hours - still belongs in 1-30
-	s9 := &Supplier{ID: uuid.New(), BusinessID: businessID, Name: "Overdue Today", OutstandingBalance: 7000, DueDate: func() *time.Time { t := now.Add(-12 * time.Hour); return &t }()}
-	insert(s9)
-
-	asOf := now
-	report, err := svc.GetAging(businessID, asOf)
-	if err != nil {
-		t.Fatalf("GetAging failed: %v", err)
-	}
-
-	if len(report.Current) != 2 {
-		t.Errorf("Current = %d, want 2 (current + no due date)", len(report.Current))
-	}
-	if len(report.Days1_30) != 2 {
-		t.Errorf("Days1_30 = %d, want 2", len(report.Days1_30))
-	}
-	for _, entry := range report.Days1_30 {
-		if entry.ID == s9.ID && entry.DaysOverdue != 1 {
-			t.Errorf("DaysOverdue for sub-day overdue supplier = %d, want 1", entry.DaysOverdue)
-		}
-	}
-	if len(report.Days31_60) != 1 {
-		t.Errorf("Days31_60 = %d, want 1", len(report.Days31_60))
-	}
-	if len(report.Days61_90) != 1 {
-		t.Errorf("Days61_90 = %d, want 1", len(report.Days61_90))
-	}
-	if len(report.Days90Plus) != 1 {
-		t.Errorf("Days90Plus = %d, want 1", len(report.Days90Plus))
-	}
-
-	// Check totals
-	if report.Totals.Current != 10000 {
-		t.Errorf("Totals.Current = %d, want 10000", report.Totals.Current)
-	}
-	if report.Totals.Days1_30 != 17000 {
-		t.Errorf("Totals.Days1_30 = %d, want 17000", report.Totals.Days1_30)
-	}
-	if report.Totals.Days31_60 != 15000 {
-		t.Errorf("Totals.Days31_60 = %d, want 15000", report.Totals.Days31_60)
-	}
-	if report.Totals.Days61_90 != 20000 {
-		t.Errorf("Totals.Days61_90 = %d, want 20000", report.Totals.Days61_90)
-	}
-	if report.Totals.Days90Plus != 25000 {
-		t.Errorf("Totals.Days90Plus = %d, want 25000", report.Totals.Days90Plus)
-	}
-	if report.Totals.Total != 87000 {
-		t.Errorf("Totals.Total = %d, want 87000", report.Totals.Total)
 	}
 }

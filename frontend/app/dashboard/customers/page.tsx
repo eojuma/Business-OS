@@ -2,6 +2,8 @@
 
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
+import { usePermissions } from "@/hooks/usePermissions";
+import { PERMISSIONS } from "@/lib/permissions";
 import { WalletCards } from "lucide-react";
 
 interface Customer {
@@ -16,7 +18,12 @@ function formatMoney(cents: number): string {
   return (cents / 100).toFixed(2);
 }
 
+/** Customer list with role-gated creation and payment controls. */
 export default function CustomersPage() {
+  const { can } = usePermissions();
+  const canRead = can(PERMISSIONS.customersRead);
+  const canManage = can(PERMISSIONS.customersManage);
+  const canPay = can(PERMISSIONS.customersPayment);
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -29,6 +36,7 @@ export default function CustomersPage() {
   const [paying, setPaying] = useState<string | null>(null);
   const [paymentAmount, setPaymentAmount] = useState("");
 
+  /** Loads the customer list for the signed-in workspace. */
   async function loadCustomers() {
     try {
       const res = await api.get("/customers");
@@ -40,6 +48,7 @@ export default function CustomersPage() {
     }
   }
 
+  /** Records a customer payment when the role allows it. */
   async function recordPayment(customerId: string) {
     const amount = Math.round(Number(paymentAmount) * 100);
     if (!amount || amount <= 0) { setFormError("Enter a valid payment amount"); return; }
@@ -53,6 +62,7 @@ export default function CustomersPage() {
     loadCustomers();
   }, []);
 
+  /** Creates a customer from the add form. */
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setFormError("");
@@ -81,23 +91,28 @@ export default function CustomersPage() {
     }
   }
 
+  if (!canRead) {
+    return <div className="panel p-6 text-sm text-muted">Your role does not have access to customers.</div>;
+  }
+
   return (
     <main className="min-h-screen p-8">
       <h1 className="mb-6 text-2xl font-semibold">Customers</h1>
 
+      {canManage && (
       <form
         onSubmit={handleSubmit}
-        className="mb-8 grid max-w-2xl gap-3 rounded-lg border border-gray-200 p-4 sm:grid-cols-2"
+        className="mb-8 grid max-w-2xl gap-3 rounded-lg border border-border-subtle p-4 sm:grid-cols-2"
       >
         {formError && (
-          <p className="text-sm text-red-600 sm:col-span-2">{formError}</p>
+          <p className="text-sm text-danger sm:col-span-2">{formError}</p>
         )}
         <input
           type="text"
           placeholder="Name"
           value={name}
           onChange={(e) => setName(e.target.value)}
-          className="rounded border border-gray-300 px-3 py-2"
+          className="rounded border border-border px-3 py-2"
           required
         />
         <input
@@ -105,14 +120,14 @@ export default function CustomersPage() {
           placeholder="Phone"
           value={phone}
           onChange={(e) => setPhone(e.target.value)}
-          className="rounded border border-gray-300 px-3 py-2"
+          className="rounded border border-border px-3 py-2"
         />
         <input
           type="text"
           placeholder="Credit limit (KSh, e.g. 20000 — leave blank for no credit)"
           value={creditLimitInput}
           onChange={(e) => setCreditLimitInput(e.target.value)}
-          className="rounded border border-gray-300 px-3 py-2 sm:col-span-2"
+          className="rounded border border-border px-3 py-2 sm:col-span-2"
         />
         <button
           type="submit"
@@ -122,40 +137,41 @@ export default function CustomersPage() {
           {submitting ? "Adding..." : "Add customer"}
         </button>
       </form>
+      )}
 
       {loading ? (
         <p>Loading customers...</p>
       ) : error ? (
-        <p className="text-red-600">{error}</p>
+        <p className="text-danger">{error}</p>
       ) : customers.length === 0 ? (
-        <p className="text-gray-500">No customers yet — add your first one above.</p>
+        <p className="text-muted">No customers yet — add your first one above.</p>
       ) : (
         <table className="w-full max-w-2xl border-collapse text-left">
           <thead>
-            <tr className="border-b border-gray-200 text-sm text-gray-500">
+            <tr className="border-b border-border-subtle text-sm text-muted">
               <th className="py-2">Name</th>
               <th className="py-2">Phone</th>
               <th className="py-2 text-right">Balance owed</th>
               <th className="py-2 text-right">Credit limit</th>
-              <th className="py-2 text-right">Action</th>
+              {canPay && <th className="py-2 text-right">Action</th>}
             </tr>
           </thead>
           <tbody>
             {customers.map((c) => (
-              <tr key={c.id} className="border-b border-gray-100">
+              <tr key={c.id} className="border-b border-border-subtle">
                 <td className="py-2">{c.name}</td>
                 <td className="py-2">{c.phone || "—"}</td>
                 <td className="py-2 text-right">
-                  <span className={c.balance > 0 ? "text-orange-600" : "text-gray-400"}>
+                  <span className={c.balance > 0 ? "text-warning-strong" : "text-subtle"}>
                     KSh {formatMoney(c.balance)}
                   </span>
                 </td>
-                <td className="py-2 text-right text-gray-400">
+                <td className="py-2 text-right text-subtle">
                   KSh {formatMoney(c.credit_limit)}
                 </td>
-                <td className="py-2 text-right">
+                {canPay && <td className="py-2 text-right">
                   {paying === c.id ? <span className="inline-flex gap-2"><input className="field w-28 py-1.5" type="number" min="0.01" step="0.01" placeholder="KSh" value={paymentAmount} onChange={(e) => setPaymentAmount(e.target.value)} /><button className="btn-primary py-1.5" onClick={() => recordPayment(c.id)}>Pay</button></span> : <button className="btn-secondary py-1.5" disabled={c.balance <= 0} onClick={() => setPaying(c.id)}><WalletCards size={15}/> Payment</button>}
-                </td>
+                </td>}
               </tr>
             ))}
           </tbody>

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/businessos/backend/internal/shared/middleware"
@@ -87,12 +88,88 @@ func (h *Handler) List(c *gin.Context) {
 		}
 		includeArchived = parsed
 	}
-	items, err := h.service.List(businessID, includeArchived)
+	search := strings.TrimSpace(c.Query("search"))
+	rawPage := c.Query("page")
+	rawLimit := c.Query("limit")
+
+	// Preserve the existing unpaginated response for callers that only need
+	// the full list (for example, the purchase form's supplier picker).
+	if rawPage == "" && rawLimit == "" && search == "" {
+		items, err := h.service.List(businessID, includeArchived)
+		if err != nil {
+			response.Error(c, http.StatusInternalServerError, "failed to list suppliers")
+			return
+		}
+		response.Success(c, http.StatusOK, items)
+		return
+	}
+
+	page := 1
+	if rawPage != "" {
+		parsed, err := strconv.Atoi(rawPage)
+		if err != nil || parsed < 1 {
+			response.Error(c, http.StatusBadRequest, "invalid page")
+			return
+		}
+		page = parsed
+	}
+
+	limit := 20
+	if rawLimit != "" {
+		parsed, err := strconv.Atoi(rawLimit)
+		if err != nil || parsed < 1 {
+			response.Error(c, http.StatusBadRequest, "invalid limit")
+			return
+		}
+		if parsed > 100 {
+			parsed = 100
+		}
+		limit = parsed
+	}
+
+	items, total, err := h.service.ListPaginated(businessID, page, limit, search, includeArchived)
 	if err != nil {
 		response.Error(c, http.StatusInternalServerError, "failed to list suppliers")
 		return
 	}
-	response.Success(c, http.StatusOK, items)
+
+	totalPages := int64(0)
+	if total > 0 {
+		totalPages = (total + int64(limit) - 1) / int64(limit)
+	}
+
+	response.Success(c, http.StatusOK, gin.H{
+		"data": items,
+		"meta": gin.H{
+			"page":       page,
+			"limit":      limit,
+			"total":      total,
+			"totalPages": totalPages,
+		},
+	})
+}
+
+func (h *Handler) GetAging(c *gin.Context) {
+	businessID, err := middleware.CurrentBusinessID(c)
+	if err != nil {
+		response.Error(c, http.StatusUnauthorized, err.Error())
+		return
+	}
+	asOf := time.Now().UTC()
+	if raw, provided := c.GetQuery("as_of"); provided {
+		asOf, err = time.Parse(time.RFC3339, raw)
+		asOf = asOf.UTC()
+		if err != nil || asOf.Year() < 1 || asOf.Year() > 9999 {
+			response.Error(c, http.StatusBadRequest, "as_of must be an RFC3339 timestamp")
+			return
+		}
+	}
+	report, err := h.service.GetAging(c.Request.Context(), businessID, asOf)
+	if err != nil {
+		response.Error(c, http.StatusInternalServerError, "failed to load supplier aging report")
+		return
+	}
+	response.Success(c, http.StatusOK, report)
 }
 
 func (h *Handler) Get(c *gin.Context) {
@@ -219,28 +296,4 @@ func (h *Handler) ListPayments(c *gin.Context) {
 		return
 	}
 	response.Success(c, http.StatusOK, items)
-}
-
-// Aging returns the supplier aging report with balances bucketed by overdue days.
-func (h *Handler) Aging(c *gin.Context) {
-	businessID, err := middleware.CurrentBusinessID(c)
-	if err != nil {
-		response.Error(c, http.StatusUnauthorized, err.Error())
-		return
-	}
-	asOf := time.Now()
-	if raw := c.Query("as_of"); raw != "" {
-		if parsed, err := time.Parse(time.RFC3339, raw); err == nil {
-			asOf = parsed
-		} else {
-			response.Error(c, http.StatusBadRequest, "invalid as_of format, use RFC3339")
-			return
-		}
-	}
-	report, err := h.service.GetAging(businessID, asOf)
-	if err != nil {
-		response.Error(c, http.StatusInternalServerError, "failed to generate aging report")
-		return
-	}
-	response.Success(c, http.StatusOK, report)
 }

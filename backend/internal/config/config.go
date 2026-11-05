@@ -3,6 +3,7 @@ package config
 
 import (
 	"fmt"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -12,9 +13,12 @@ import (
 
 // Config holds all application configuration.
 type Config struct {
-	AppEnv         string
-	AppPort        string
-	FrontendURL    string
+	AppEnv      string
+	AppPort     string
+	FrontendURL string
+	// FrontendURLSet reports whether FRONTEND_URL was provided explicitly (as
+	// opposed to the development default).
+	FrontendURLSet bool
 	AllowedOrigins []string
 
 	DBHost     string
@@ -31,6 +35,22 @@ type Config struct {
 	JWTSecret      string
 	JWTExpiryHours int
 
+	// GoogleClientID is the OAuth 2.0 Web client ID used to verify Google
+	// Identity Services ID tokens. When empty, /auth/google returns 503.
+	GoogleClientID string
+
+	// SMTP settings deliver email-verification messages. When SMTPHost is empty
+	// the sender falls back to logging links (development only).
+	SMTPHost     string
+	SMTPPort     string
+	SMTPUsername string
+	SMTPPassword string
+	SMTPFrom     string
+	SMTPTLS      bool
+
+	// EmailVerificationTTLHours bounds how long a verification link is valid.
+	EmailVerificationTTLHours int
+
 	AIProvider string
 	AIAPIKey   string
 	AIModel    string
@@ -44,12 +64,22 @@ type Config struct {
 // Load loads configuration from environment variables.
 func Load() *Config {
 	_ = godotenv.Load()
+	appEnv := normalizeEnv(getEnv("APP_ENV", "development"))
+	redisHost, redisPort, redisPassword := parseRedisURL(getEnv("REDIS_URL", "redis://localhost:6379"))
+
+	frontendRaw, frontendOK := os.LookupEnv("FRONTEND_URL")
+	frontendURL := strings.TrimSpace(frontendRaw)
+	frontendSet := frontendOK && frontendURL != ""
+	if !frontendSet {
+		frontendURL = "http://localhost:3000"
+	}
 
 	return &Config{
-		AppEnv:         getEnv("APP_ENV", "development"),
+		AppEnv:         appEnv,
 		AppPort:        getEnv("APP_PORT", "8080"),
-		FrontendURL:    getEnv("FRONTEND_URL", "http://localhost:3000"),
-		AllowedOrigins: parseOrigins(getEnv("FRONTEND_URL", "http://localhost:3000")),
+		FrontendURL:    frontendURL,
+		FrontendURLSet: frontendSet,
+		AllowedOrigins: parseOrigins(frontendURL, appEnv == "production"),
 
 		DBHost:     getEnv("DB_HOST", "localhost"),
 		DBPort:     getEnv("DB_PORT", "5432"),
@@ -58,12 +88,23 @@ func Load() *Config {
 		DBName:     getEnv("DB_NAME", "businessos"),
 		DBSSLMode:  getEnv("DB_SSLMODE", "disable"),
 
-		RedisHost:     getEnv("REDIS_HOST", "localhost"),
-		RedisPort:     getEnv("REDIS_PORT", "6379"),
-		RedisPassword: getEnv("REDIS_PASSWORD", ""),
+		RedisHost:     redisHost,
+		RedisPort:     redisPort,
+		RedisPassword: redisPassword,
 
 		JWTSecret:      getEnv("JWT_SECRET", "dev_secret_change_me"),
 		JWTExpiryHours: getEnvInt("JWT_EXPIRY_HOURS", 24),
+
+		GoogleClientID: getEnv("GOOGLE_CLIENT_ID", ""),
+
+		SMTPHost:     getEnv("SMTP_HOST", ""),
+		SMTPPort:     getEnv("SMTP_PORT", "587"),
+		SMTPUsername: getEnv("SMTP_USERNAME", ""),
+		SMTPPassword: getEnv("SMTP_PASSWORD", ""),
+		SMTPFrom:     getEnv("SMTP_FROM", "Business OS <no-reply@businessos.local>"),
+		SMTPTLS:      getEnvBool("SMTP_TLS", true),
+
+		EmailVerificationTTLHours: getEnvInt("EMAIL_VERIFICATION_TTL_HOURS", 24),
 
 		AIProvider: getEnv("AI_PROVIDER", "gemini"),
 		AIAPIKey:   getEnv("AI_API_KEY", ""),
@@ -73,14 +114,36 @@ func Load() *Config {
 	}
 }
 
-// IsProduction returns true if the application is running in production mode.
+// IsProduction reports whether the application runs in production mode.
+// The comparison is normalized so values such as "Production" cannot
+// silently disable production safeguards.
 func (c *Config) IsProduction() bool {
-	return c.AppEnv == "production"
+	return normalizeEnv(c.AppEnv) == "production"
 }
 
-// Validate validates the configuration for production readiness.
+// normalizeEnv canonicalizes APP_ENV values (case and surrounding spaces).
+func normalizeEnv(value string) string {
+	return strings.ToLower(strings.TrimSpace(value))
+}
+
+// validEnv reports whether APP_ENV is a supported environment name.
+func validEnv(env string) bool {
+	switch env {
+	case "development", "test", "staging", "production":
+		return true
+	default:
+		return false
+	}
+}
+
+// Validate validates the configuration for production readiness. Unknown
+// APP_ENV values are rejected so a typo cannot skip the checks below.
 func (c *Config) Validate() error {
-	if !c.IsProduction() {
+	env := normalizeEnv(c.AppEnv)
+	if !validEnv(env) {
+		return fmt.Errorf("APP_ENV must be one of development, test, staging, production (got %q)", c.AppEnv)
+	}
+	if env != "production" {
 		return nil
 	}
 	if c.JWTSecret == "dev_secret_change_me" || c.JWTSecret == "change_me_in_production" || len(c.JWTSecret) < 32 {
@@ -92,12 +155,60 @@ func (c *Config) Validate() error {
 	if c.DBSSLMode == "disable" {
 		return fmt.Errorf("DB_SSLMODE must enable TLS in production")
 	}
+	// Email/password sign-ups verify their address; without SMTP the message
+	// cannot be delivered, so fail fast instead of silently breaking sign-up.
+	if c.SMTPHost == "" {
+		return fmt.Errorf("SMTP_HOST must be configured in production so verification emails can be delivered")
+	}
+	if c.SMTPFrom == "" {
+		return fmt.Errorf("SMTP_FROM must be configured in production")
+	}
+	// Verification links and CORS use FRONTEND_URL, so production must point at
+	// the deployed origin rather than silently keeping the localhost default.
+	if !c.FrontendURLSet {
+		return fmt.Errorf("FRONTEND_URL must be set in production to the deployed frontend origin")
+	}
+	// Every entry must be a usable absolute HTTP(S) origin: the verification
+	// link is built from the first one.
+	for _, part := range strings.Split(c.FrontendURL, ",") {
+		origin := strings.TrimSpace(part)
+		parsed, err := url.Parse(origin)
+		if origin == "" || err != nil || !parsed.IsAbs() ||
+			(!strings.EqualFold(parsed.Scheme, "http") && !strings.EqualFold(parsed.Scheme, "https")) ||
+			parsed.Host == "" {
+			return fmt.Errorf("FRONTEND_URL must contain valid HTTP(S) origins in production")
+		}
+	}
+	if containsLoopbackOrigin(c.FrontendURL) {
+		return fmt.Errorf("FRONTEND_URL must be the deployed frontend origin, not a localhost address, in production")
+	}
 	return nil
 }
 
-// parseOrigins splits a comma-separated FRONTEND_URL into an allowlist and
-// always includes the local development origins so `npm run dev` keeps working.
-func parseOrigins(raw string) []string {
+// containsLoopbackOrigin reports whether any comma-separated FRONTEND_URL
+// entry points at a loopback/local development host.
+func containsLoopbackOrigin(raw string) bool {
+	for _, part := range strings.Split(raw, ",") {
+		origin := strings.TrimSpace(part)
+		if origin == "" {
+			continue
+		}
+		parsed, err := url.Parse(origin)
+		if err != nil {
+			continue
+		}
+		switch strings.ToLower(parsed.Hostname()) {
+		case "localhost", "127.0.0.1", "::1", "0.0.0.0":
+			return true
+		}
+	}
+	return false
+}
+
+// parseOrigins splits a comma-separated FRONTEND_URL into an allowlist.
+// Outside production it also allows the local development origins so
+// `npm run dev` keeps working; production trusts only configured origins.
+func parseOrigins(raw string, production bool) []string {
 	seen := make(map[string]bool)
 	origins := make([]string, 0)
 	add := func(origin string) {
@@ -111,8 +222,10 @@ func parseOrigins(raw string) []string {
 	for _, origin := range strings.Split(raw, ",") {
 		add(origin)
 	}
-	add("http://localhost:3000")
-	add("http://127.0.0.1:3000")
+	if !production {
+		add("http://localhost:3000")
+		add("http://127.0.0.1:3000")
+	}
 
 	return origins
 }
@@ -131,4 +244,29 @@ func getEnvInt(key string, fallback int) int {
 		}
 	}
 	return fallback
+}
+
+func getEnvBool(key string, fallback bool) bool {
+	if v, ok := os.LookupEnv(key); ok && v != "" {
+		if b, err := strconv.ParseBool(v); err == nil {
+			return b
+		}
+	}
+	return fallback
+}
+
+func parseRedisURL(raw string) (host, port, password string) {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return "localhost", "6379", ""
+	}
+	host = u.Hostname()
+	port = u.Port()
+	if port == "" {
+		port = "6379"
+	}
+	if u.User != nil {
+		password, _ = u.User.Password()
+	}
+	return
 }

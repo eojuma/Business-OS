@@ -1,22 +1,35 @@
 "use client";
 import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import { api } from "@/lib/api";
 import { AlertTriangle, ArrowUpRight, CircleDollarSign, CreditCard, Package, ShoppingCart, TrendingUp } from "lucide-react";
 import { PageHeader, StatCard, formatMoney } from "@/components/app-shell";
-import { AuthProvider, useAuth } from "@/hooks/useAuth";
+import { useAuth } from "@/hooks/useAuth";
+import { usePermissions } from "@/hooks/usePermissions";
+import { PERMISSIONS } from "@/lib/permissions";
+import { firstPermittedPath } from "@/lib/navigation";
 import { getGreeting } from "@/lib/utils";
 
 type Overview = { revenue:number; profit:number; sale_count:number; average_sale:number; units_sold:number; customer_credit:number; supplier_debt:number; low_stock_count:number };
 type Notification = { id:string; type:string; severity:string; entity_name:string; title:string; message:string; read:boolean };
 
+/** Renders the business overview for roles that can read analytics. */
 function DashboardContent() {
   const { user, loading: userLoading } = useAuth();
+  const { role, can, loading: permissionsLoading } = usePermissions();
+  const router = useRouter();
+  const canView = can(PERMISSIONS.analyticsRead);
   const [data, setData] = useState<Overview | null>(null);
   const [alerts, setAlerts] = useState<Notification[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
   useEffect(() => {
+    if (!canView) {
+      setLoading(false);
+      return;
+    }
+    setLoading(true);
     Promise.all([api.get("/analytics/overview"), api.get("/notifications")])
       .then(([a, n]) => {
         setData(a.data.data);
@@ -24,15 +37,25 @@ function DashboardContent() {
       })
       .catch((e) => setError(e.response?.data?.error || "Unable to load your overview"))
       .finally(() => setLoading(false));
-  }, []);
+  }, [canView]);
+
+  useEffect(() => {
+    if (permissionsLoading || canView) return;
+    const target = firstPermittedPath(role);
+    if (target && target !== "/dashboard") router.replace(target);
+  }, [canView, permissionsLoading, role, router]);
+
+  if (!canView) {
+    return <div className="panel p-6 text-sm text-muted">Redirecting to your workspace...</div>;
+  }
 
   if (userLoading) {
     return (
       <div className="space-y-6">
-        <div className="h-10 w-52 animate-pulse rounded bg-[#e5e9e4]" />
+        <div className="h-10 w-52 animate-pulse rounded bg-border" />
         <div className="grid gap-4 md:grid-cols-4">
           {[1, 2, 3, 4].map((i) => (
-            <div key={i} className="h-32 animate-pulse rounded-xl bg-white" />
+            <div key={i} className="h-32 animate-pulse rounded-xl bg-card" />
           ))}
         </div>
       </div>
@@ -42,24 +65,24 @@ function DashboardContent() {
   if (loading) {
     return (
       <div className="space-y-6">
-        <div className="h-10 w-52 animate-pulse rounded bg-[#e5e9e4]" />
+        <div className="h-10 w-52 animate-pulse rounded bg-border" />
         <div className="grid gap-4 md:grid-cols-4">
           {[1, 2, 3, 4].map((i) => (
-            <div key={i} className="h-32 animate-pulse rounded-xl bg-white" />
+            <div key={i} className="h-32 animate-pulse rounded-xl bg-card" />
           ))}
         </div>
       </div>
     );
   }
 
-  if (error) return <div className="panel p-6 text-sm text-red-700">{error}</div>;
+  if (error) return <div className="panel p-6 text-sm text-danger">{error}</div>;
 
   const d = data || { revenue: 0, profit: 0, sale_count: 0, average_sale: 0, units_sold: 0, customer_credit: 0, supplier_debt: 0, low_stock_count: 0 };
   const greeting = `${getGreeting()}, ${user?.name || "entrepreneur"}`;
 
   return (
     <>
-      <PageHeader eyebrow="Overview" title={greeting} description="Here is how your business is moving today." action={<span className="hidden text-sm text-[#718078] sm:block">Live business snapshot</span>} />
+      <PageHeader eyebrow="Overview" title={greeting} description="Here is how your business is moving today." action={<span className="hidden text-sm text-muted sm:block">Live business snapshot</span>} />
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <StatCard label="Revenue (30 days)" value={formatMoney(d.revenue)} note={`${d.sale_count} transactions`} icon={CircleDollarSign} />
         <StatCard label="Net profit" value={formatMoney(d.profit)} note="After product costs" icon={TrendingUp} />
@@ -71,13 +94,10 @@ function DashboardContent() {
           <div className="mb-5 flex items-center justify-between">
             <div>
               <p className="eyebrow">Business pulse</p>
-              <h2 className="mt-1 text-lg font-bold">The numbers that need your attention</h2></div><ArrowUpRight size={19} className="text-[#16794c]"/></div><div className="grid gap-3 sm:grid-cols-3"><div className="rounded-lg bg-[#f7f9f6] p-4"><p className="text-xs text-[#718078]">Average sale</p><p className="mt-2 text-xl font-bold">{formatMoney(d.average_sale)}</p></div><div className="rounded-lg bg-[#f7f9f6] p-4"><p className="text-xs text-[#718078]">Supplier debt</p><p className="mt-2 text-xl font-bold">{formatMoney(d.supplier_debt)}</p></div><div className="rounded-lg bg-[#f7f9f6] p-4"><p className="text-xs text-[#718078]">Units moved</p><p className="mt-2 text-xl font-bold">{d.units_sold.toLocaleString()}</p></div></div><div className="mt-5 rounded-lg border border-dashed border-[#cfd8d0] p-4"><p className="text-sm font-semibold">Your next best action</p><p className="mt-1 text-sm text-[#718078]">{alerts.length?`Review ${alerts.length} alert${alerts.length===1?"":"s"} that need${alerts.length===1?"s":""} attention.`:"Nothing needs your attention right now. Keep recording activity as it happens."}</p></div></section><section className="panel p-5"><div className="mb-4 flex items-center justify-between"><div><p className="eyebrow">Alerts</p><h2 className="mt-1 text-lg font-bold">Needs attention</h2></div><AlertTriangle size={19} className="text-[#c78222]"/></div>{alerts.length===0?<p className="py-8 text-sm text-[#718078]">No active alerts. You are all caught up.</p>:<div className="space-y-3">{alerts.slice(0,4).map((a,i)=><div key={a.id||i} className="flex gap-3 rounded-lg bg-[#fff8eb] p-3"><AlertTriangle size={16} className="mt-0.5 shrink-0 text-[#c78222]"/><div><p className="text-sm font-semibold">{a.entity_name||a.title}</p><p className="mt-0.5 text-xs text-[#8c7756]">{a.message}</p></div></div>)}</div>}</section></div></> );
+              <h2 className="mt-1 text-lg font-bold">The numbers that need your attention</h2></div><ArrowUpRight size={19} className="text-primary"/></div><div className="grid gap-3 sm:grid-cols-3"><div className="rounded-lg bg-background p-4"><p className="text-xs text-muted">Average sale</p><p className="mt-2 text-xl font-bold">{formatMoney(d.average_sale)}</p></div><div className="rounded-lg bg-background p-4"><p className="text-xs text-muted">Supplier debt</p><p className="mt-2 text-xl font-bold">{formatMoney(d.supplier_debt)}</p></div><div className="rounded-lg bg-background p-4"><p className="text-xs text-muted">Units moved</p><p className="mt-2 text-xl font-bold">{d.units_sold.toLocaleString()}</p></div></div><div className="mt-5 rounded-lg border border-dashed border-border p-4"><p className="text-sm font-semibold">Your next best action</p><p className="mt-1 text-sm text-muted">{alerts.length?`Review ${alerts.length} alert${alerts.length===1?"":"s"} that need${alerts.length===1?"s":""} attention.`:"Nothing needs your attention right now. Keep recording activity as it happens."}</p></div></section><section className="panel p-5"><div className="mb-4 flex items-center justify-between"><div><p className="eyebrow">Alerts</p><h2 className="mt-1 text-lg font-bold">Needs attention</h2></div><AlertTriangle size={19} className="text-warning"/></div>{alerts.length===0?<p className="py-8 text-sm text-muted">No active alerts. You are all caught up.</p>:<div className="space-y-3">{alerts.slice(0,4).map((a,i)=><div key={a.id||i} className="flex gap-3 rounded-lg bg-warning-soft p-3"><AlertTriangle size={16} className="mt-0.5 shrink-0 text-warning"/><div><p className="text-sm font-semibold">{a.entity_name||a.title}</p><p className="mt-0.5 text-xs text-warning-strong">{a.message}</p></div></div>)}</div>}</section></div></> );
 }
 
+/** Dashboard landing page; redirects users without analytics access. */
 export default function DashboardPage() {
-  return (
-    <AuthProvider>
-      <DashboardContent />
-    </AuthProvider>
-  );
+  return <DashboardContent />;
 }

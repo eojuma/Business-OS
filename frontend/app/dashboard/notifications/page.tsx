@@ -18,9 +18,9 @@ type Notification = {
 };
 
 const severityStyles: Record<string, string> = {
-  info: "bg-[#eef1f4] text-[#52616a]",
-  warning: "bg-[#fff3df] text-[#b36f16]",
-  critical: "bg-[#fdeeea] text-[#a3543f]",
+  info: "bg-surface-muted text-muted",
+  warning: "bg-warning-soft text-warning-strong",
+  critical: "bg-danger-soft text-danger",
 };
 
 function typeIcon(type: string) {
@@ -99,21 +99,21 @@ export default function NotificationsPage() {
         }
       />
 
-      {error && <p className="mb-4 rounded-lg bg-red-50 p-3 text-sm text-red-700">{error}</p>}
+      {error && <p className="mb-4 rounded-lg bg-danger-soft p-3 text-sm text-danger">{error}</p>}
 
       <div className="panel overflow-hidden">
         {loading ? (
-          <p className="p-6 text-sm text-[#718078]">Loading notifications...</p>
+          <p className="p-6 text-sm text-muted">Loading notifications...</p>
         ) : visible.length === 0 ? (
           <div className="p-12 text-center">
-            <Bell className="mx-auto text-[#9aa59d]" />
+            <Bell className="mx-auto text-subtle" />
             <p className="mt-3 font-semibold">You are all caught up</p>
-            <p className="mt-1 text-sm text-[#718078]">
+            <p className="mt-1 text-sm text-muted">
               {unreadOnly ? "No unread notifications." : "Nothing needs your attention right now."}
             </p>
           </div>
         ) : (
-          <div className="divide-y divide-[#eef1ed]">
+          <div className="divide-y divide-border-subtle">
             {visible.map((n) => {
               const Icon = typeIcon(n.type);
               return (
@@ -124,10 +124,10 @@ export default function NotificationsPage() {
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2">
                       <p className="text-sm font-semibold">{n.title || n.entity_name || "Notification"}</p>
-                      {!n.read && <span className="h-2 w-2 rounded-full bg-[#16794c]" />}
+                      {!n.read && <span className="h-2 w-2 rounded-full bg-primary-solid" />}
                     </div>
-                    <p className="mt-0.5 text-sm text-[#718078]">{n.message}</p>
-                    <p className="mt-1 text-xs text-[#9aa59d]">{new Date(n.created_at).toLocaleString()}</p>
+                    <p className="mt-0.5 text-sm text-muted">{n.message}</p>
+                    <p className="mt-1 text-xs text-subtle">{new Date(n.created_at).toLocaleString()}</p>
                   </div>
                   {!n.read && (
                     <button className="btn-secondary py-1.5 text-xs" onClick={() => markRead(n.id)}>

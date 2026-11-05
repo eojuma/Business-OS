@@ -4,6 +4,7 @@ import (
 	"errors"
 	"log"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -39,13 +40,14 @@ type WalkInCustomerInput struct {
 }
 
 type CreateSaleInput struct {
-	BusinessID uuid.UUID
-	CustomerID *uuid.UUID
-	WalkIn     *WalkInCustomerInput
-	SaleType   SaleType
-	Discount   int64
-	Note       string
-	Items      []SaleItemInput
+	BusinessID     uuid.UUID
+	CustomerID     *uuid.UUID
+	WalkIn         *WalkInCustomerInput
+	SaleType       SaleType
+	Discount       int64
+	Note           string
+	InvoiceDueDate *time.Time
+	Items          []SaleItemInput
 }
 
 type Service interface {
@@ -117,11 +119,12 @@ func (s *service) CreateSale(input CreateSaleInput) (*Sale, error) {
 	}
 
 	sale := &Sale{
-		BusinessID: input.BusinessID,
-		CustomerID: customerID,
-		SaleType:   saleType,
-		Discount:   input.Discount,
-		Note:       input.Note,
+		BusinessID:     input.BusinessID,
+		CustomerID:     customerID,
+		SaleType:       saleType,
+		Discount:       input.Discount,
+		Note:           input.Note,
+		InvoiceDueDate: input.InvoiceDueDate,
 	}
 
 	lineItems := make([]SaleLineItem, 0, len(input.Items))

@@ -3,6 +3,7 @@ package suppliers
 import (
 	"context"
 	"fmt"
+	"math"
 	"net/url"
 	"os"
 	"strings"
@@ -102,6 +103,87 @@ func setupTestDB(t *testing.T) (*gorm.DB, uuid.UUID) {
 	})
 
 	return db, testBusinessSchema.ID
+}
+
+func TestRepositoryGetAging(t *testing.T) {
+	db, businessID := setupTestDB(t)
+	asOf := time.Date(2026, time.November, 1, 0, 30, 0, 0, time.UTC)
+	dayEnd := time.Date(2026, time.November, 1, 23, 59, 59, 0, time.UTC)
+	type expected struct {
+		bucket AgingBucket
+		days   int
+	}
+	want := make(map[uuid.UUID]expected)
+	for _, tc := range []struct {
+		days   int
+		bucket AgingBucket
+	}{
+		{-1, AgingCurrent}, {0, AgingCurrent}, {1, AgingDays1To30}, {30, AgingDays1To30},
+		{31, AgingDays31To60}, {60, AgingDays31To60}, {61, AgingDays61To90}, {90, AgingDays61To90},
+		{91, AgingDays90Plus}, {365, AgingDays90Plus},
+	} {
+		dueDate := dayEnd.AddDate(0, 0, -tc.days)
+		supplier := Supplier{BusinessID: businessID, Name: fmt.Sprintf("Due %d days ago", tc.days), OutstandingBalance: 100, DueDate: &dueDate}
+		if err := db.Create(&supplier).Error; err != nil {
+			t.Fatal(err)
+		}
+		want[supplier.ID] = expected{bucket: tc.bucket, days: max(0, tc.days)}
+	}
+	undated := Supplier{BusinessID: businessID, Name: "No due date", OutstandingBalance: 100}
+	if err := db.Create(&undated).Error; err != nil {
+		t.Fatal(err)
+	}
+	want[undated.ID] = expected{bucket: AgingCurrent}
+
+	otherBusiness := business.Business{ID: uuid.New(), Name: "Other aging business"}
+	if err := db.Create(&otherBusiness).Error; err != nil {
+		t.Fatal(err)
+	}
+	for _, supplier := range []Supplier{
+		{BusinessID: otherBusiness.ID, Name: "Other business", OutstandingBalance: 500, DueDate: &dayEnd},
+		{BusinessID: businessID, Name: "Paid off", OutstandingBalance: 0, DueDate: &dayEnd},
+		{BusinessID: businessID, Name: "Archived aging supplier", OutstandingBalance: 500, DeletedAt: gorm.DeletedAt{Time: asOf, Valid: true}},
+	} {
+		if err := db.Create(&supplier).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	for _, zone := range []string{"Pacific/Honolulu", "Asia/Tokyo"} {
+		t.Run(zone, func(t *testing.T) {
+			if err := db.Exec("SELECT set_config('TimeZone', ?, false)", zone).Error; err != nil {
+				t.Fatal(err)
+			}
+			rows, err := NewRepository(db).GetAging(context.Background(), businessID, asOf.In(time.FixedZone("EAT", 3*60*60)))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(rows) != len(want) {
+				t.Fatalf("rows = %d, want %d", len(rows), len(want))
+			}
+			seen := make(map[uuid.UUID]bool)
+			for i, row := range rows {
+				expectedRow, ok := want[row.ID]
+				if !ok || seen[row.ID] {
+					t.Fatalf("unexpected or repeated supplier %s", row.ID)
+				}
+				seen[row.ID] = true
+				if row.Bucket != expectedRow.bucket || row.DaysOverdue != expectedRow.days || row.OutstandingBalance != 100 {
+					t.Fatalf("row = %+v, want bucket %s, days %d, balance 100", row, expectedRow.bucket, expectedRow.days)
+				}
+				if (row.DueDate == nil) != (row.ID == undated.ID) {
+					t.Fatalf("unexpected due date for %s: %v", row.ID, row.DueDate)
+				}
+				if i > 0 && rows[i-1].Name > row.Name {
+					t.Fatal("suppliers are not sorted by name")
+				}
+			}
+		})
+	}
+	rows, err := NewRepository(db).GetAging(context.Background(), uuid.New(), asOf)
+	if err != nil || len(rows) != 0 {
+		t.Fatalf("empty business report = %+v, %v", rows, err)
+	}
 }
 
 func TestRepositoryCreate(t *testing.T) {
@@ -208,6 +290,80 @@ func TestRepositoryList(t *testing.T) {
 	}
 	if len(all) != 3 {
 		t.Fatalf("len = %d, want 3 including archived", len(all))
+	}
+}
+
+func TestRepositoryListPaginated(t *testing.T) {
+	db, businessID := setupTestDB(t)
+	repo := NewRepository(db)
+
+	seed := []Supplier{
+		{BusinessID: businessID, Name: "Alpha Hardware", Phone: "0700111222", Email: "alpha@example.com"},
+		{BusinessID: businessID, Name: "Bravo Cement", Phone: "0700333444", Email: "bravo@example.com"},
+		{BusinessID: businessID, Name: "Charlie Steel", Phone: "0700555666", Email: "charlie@example.com"},
+	}
+	for i := range seed {
+		if err := db.Create(&seed[i]).Error; err != nil {
+			t.Fatalf("create supplier %q: %v", seed[i].Name, err)
+		}
+	}
+	if err := db.Create(&Supplier{
+		BusinessID: businessID,
+		Name:       "Archived Supplier",
+		DeletedAt:  gorm.DeletedAt{Time: time.Now(), Valid: true},
+	}).Error; err != nil {
+		t.Fatalf("create archived supplier: %v", err)
+	}
+
+	items, total, err := repo.ListPaginated(businessID, 1, 2, "", false)
+	if err != nil {
+		t.Fatalf("ListPaginated failed: %v", err)
+	}
+	if total != 3 || len(items) != 2 {
+		t.Fatalf("total = %d, len = %d, want total 3 and len 2", total, len(items))
+	}
+	if items[0].Name != "Alpha Hardware" || items[1].Name != "Bravo Cement" {
+		t.Fatalf("page 1 = %q, %q", items[0].Name, items[1].Name)
+	}
+
+	items, total, err = repo.ListPaginated(businessID, 2, 2, "", false)
+	if err != nil {
+		t.Fatalf("ListPaginated page 2 failed: %v", err)
+	}
+	if total != 3 || len(items) != 1 || items[0].Name != "Charlie Steel" {
+		t.Fatalf("page 2 total = %d, len = %d", total, len(items))
+	}
+
+	items, total, err = repo.ListPaginated(businessID, 1, 10, "bravo", false)
+	if err != nil {
+		t.Fatalf("search by name failed: %v", err)
+	}
+	if total != 1 || len(items) != 1 || items[0].Name != "Bravo Cement" {
+		t.Fatalf("name search total = %d, len = %d", total, len(items))
+	}
+
+	items, total, err = repo.ListPaginated(businessID, 1, 10, "0700555", false)
+	if err != nil {
+		t.Fatalf("search by phone failed: %v", err)
+	}
+	if total != 1 || len(items) != 1 || items[0].Name != "Charlie Steel" {
+		t.Fatalf("phone search total = %d, len = %d", total, len(items))
+	}
+
+	items, total, err = repo.ListPaginated(businessID, 1, 10, "ALPHA@EXAMPLE.COM", false)
+	if err != nil {
+		t.Fatalf("search by email failed: %v", err)
+	}
+	if total != 1 || len(items) != 1 || items[0].Name != "Alpha Hardware" {
+		t.Fatalf("email search total = %d, len = %d", total, len(items))
+	}
+
+	_, total, err = repo.ListPaginated(businessID, 1, 10, "", true)
+	if err != nil {
+		t.Fatalf("ListPaginated including archived failed: %v", err)
+	}
+	if total != 4 {
+		t.Fatalf("total including archived = %d, want 4", total)
 	}
 }
 
@@ -746,29 +902,45 @@ func TestSupplierNameIndex(t *testing.T) {
 	}
 }
 
-func TestDaysPastDue(t *testing.T) {
-	asOf := time.Date(2026, time.January, 15, 12, 0, 0, 0, time.UTC)
+func TestEscapeLike(t *testing.T) {
+	tests := map[string]string{
+		"plain":  "plain",
+		"50%":    `50\%`,
+		"a_b":    `a\_b`,
+		`a\b`:    `a\\b`,
+		"100%_x": `100\%\_x`,
+	}
+	for input, want := range tests {
+		if got := escapeLike(input); got != want {
+			t.Fatalf("escapeLike(%q) = %q, want %q", input, got, want)
+		}
+	}
+}
+
+func TestPaginatedOffset(t *testing.T) {
 	tests := []struct {
-		name string
-		due  time.Time
-		asOf time.Time
-		want int
+		name  string
+		page  int
+		limit int
+		want  int
+		ok    bool
 	}{
-		{name: "less than one day", due: time.Date(2026, time.January, 15, 9, 0, 0, 0, time.UTC), want: 1},
-		{name: "previous calendar day", due: time.Date(2026, time.January, 14, 12, 0, 0, 0, time.UTC), want: 1},
-		{name: "ten days", due: asOf.AddDate(0, 0, -10), want: 10},
-		// The same instant must land in the same bucket regardless of offset.
-		{name: "negative offset", due: time.Date(2026, time.January, 1, 0, 0, 0, 0, time.UTC), asOf: time.Date(2026, time.January, 31, 23, 30, 0, 0, time.FixedZone("", -2*3600)), want: 31},
-		{name: "utc equivalent", due: time.Date(2026, time.January, 1, 0, 0, 0, 0, time.UTC), asOf: time.Date(2026, time.February, 1, 1, 30, 0, 0, time.UTC), want: 31},
+		{name: "first page", page: 1, limit: 20, want: 0, ok: true},
+		{name: "third page", page: 3, limit: 20, want: 40, ok: true},
+		{name: "zero page", page: 0, limit: 20, ok: false},
+		{name: "negative page", page: -1, limit: 20, ok: false},
+		{name: "zero limit", page: 1, limit: 0, ok: false},
+		{name: "too large page", page: math.MaxInt, limit: 100, ok: false},
+		{name: "overflow wrapping to zero", page: math.MaxInt/2 + 2, limit: 4, ok: false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ref := asOf
-			if !tt.asOf.IsZero() {
-				ref = tt.asOf
-			}
-			if got := daysPastDue(tt.due, ref); got != tt.want {
-				t.Fatalf("daysPastDue() = %d, want %d", got, tt.want)
+			got, ok := paginatedOffset(tt.page, tt.limit)
+			if ok != tt.ok || (ok && got != tt.want) {
+				t.Fatalf(
+					"paginatedOffset(%d, %d) = (%d, %t), want (%d, %t)",
+					tt.page, tt.limit, got, ok, tt.want, tt.ok,
+				)
 			}
 		})
 	}

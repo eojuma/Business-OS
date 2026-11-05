@@ -2,6 +2,8 @@
 
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
+import { usePermissions } from "@/hooks/usePermissions";
+import { PERMISSIONS } from "@/lib/permissions";
 
 interface Product {
   id: string;
@@ -16,7 +18,10 @@ function formatMoney(cents: number): string {
   return (cents / 100).toFixed(2);
 }
 
+/** Product catalogue with role-gated price and creation controls. */
 export default function ProductsPage() {
+  const { can } = usePermissions();
+  const canManage = can(PERMISSIONS.productsManage);
   const [products, setProducts] = useState<Product[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -33,6 +38,7 @@ export default function ProductsPage() {
   const [editPrice, setEditPrice] = useState("");
   const [saving, setSaving] = useState(false);
 
+  /** Saves a price change for product managers. */
   async function savePrice(id: string) {
     const cents = Math.round(parseFloat(editPrice) * 100);
     if (isNaN(cents) || cents < 0) {
@@ -52,6 +58,7 @@ export default function ProductsPage() {
     }
   }
 
+  /** Loads the product catalogue. */
   async function loadProducts() {
     try {
       const res = await api.get("/products");
@@ -67,6 +74,7 @@ export default function ProductsPage() {
     loadProducts();
   }, []);
 
+  /** Creates a product from the add form. */
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setFormError("");
@@ -104,19 +112,20 @@ export default function ProductsPage() {
     <main className="min-h-screen p-8">
       <h1 className="mb-6 text-2xl font-semibold">Products</h1>
 
+      {canManage && (
       <form
         onSubmit={handleSubmit}
-        className="mb-8 grid max-w-2xl gap-3 rounded-lg border border-gray-200 p-4 sm:grid-cols-2"
+        className="mb-8 grid max-w-2xl gap-3 rounded-lg border border-border-subtle p-4 sm:grid-cols-2"
       >
         {formError && (
-          <p className="text-sm text-red-600 sm:col-span-2">{formError}</p>
+          <p className="text-sm text-danger sm:col-span-2">{formError}</p>
         )}
         <input
           type="text"
           placeholder="Name (e.g. Cement 50kg)"
           value={name}
           onChange={(e) => setName(e.target.value)}
-          className="rounded border border-gray-300 px-3 py-2"
+          className="rounded border border-border px-3 py-2"
           required
         />
         <input
@@ -124,14 +133,14 @@ export default function ProductsPage() {
           placeholder="Category (e.g. Building Materials)"
           value={category}
           onChange={(e) => setCategory(e.target.value)}
-          className="rounded border border-gray-300 px-3 py-2"
+          className="rounded border border-border px-3 py-2"
         />
         <input
           type="text"
           placeholder="Unit (e.g. bag, piece, kg)"
           value={unit}
           onChange={(e) => setUnit(e.target.value)}
-          className="rounded border border-gray-300 px-3 py-2"
+          className="rounded border border-border px-3 py-2"
           required
         />
         <input
@@ -139,7 +148,7 @@ export default function ProductsPage() {
           placeholder="Price (KSh, e.g. 450.50)"
           value={priceInput}
           onChange={(e) => setPriceInput(e.target.value)}
-          className="rounded border border-gray-300 px-3 py-2"
+          className="rounded border border-border px-3 py-2"
           required
         />
         <button
@@ -150,32 +159,33 @@ export default function ProductsPage() {
           {submitting ? "Adding..." : "Add product"}
         </button>
       </form>
+      )}
 
       {loading ? (
         <p>Loading products...</p>
       ) : error ? (
-        <p className="text-red-600">{error}</p>
+        <p className="text-danger">{error}</p>
       ) : products.length === 0 ? (
-        <p className="text-gray-500">No products yet — add your first one above.</p>
+        <p className="text-muted">No products yet — add your first one above.</p>
       ) : (
         <table className="w-full max-w-2xl border-collapse text-left">
           <thead>
-            <tr className="border-b border-gray-200 text-sm text-gray-500">
+            <tr className="border-b border-border-subtle text-sm text-muted">
               <th className="py-2">Name</th>
               <th className="py-2">Category</th>
               <th className="py-2">Unit</th>
               <th className="py-2 text-right">Price</th>
-              <th className="py-2 text-right">Adjust</th>
+              {canManage && <th className="py-2 text-right">Adjust</th>}
             </tr>
           </thead>
           <tbody>
             {products.map((p) => (
-              <tr key={p.id} className="border-b border-gray-100">
+              <tr key={p.id} className="border-b border-border-subtle">
                 <td className="py-2">{p.name}</td>
                 <td className="py-2">{p.category || "—"}</td>
                 <td className="py-2">{p.unit}</td>
                 <td className="py-2 text-right">KSh {formatMoney(p.price)}</td>
-                <td className="py-2 text-right">
+                {canManage && <td className="py-2 text-right">
                   {editingId === p.id ? (
                     <span className="inline-flex items-center gap-2">
                       <input
@@ -183,7 +193,7 @@ export default function ProductsPage() {
                         value={editPrice}
                         onChange={(e) => setEditPrice(e.target.value)}
                         placeholder="New price"
-                        className="w-24 rounded border border-gray-300 px-2 py-1 text-sm"
+                        className="w-24 rounded border border-border px-2 py-1 text-sm"
                       />
                       <button
                         onClick={() => savePrice(p.id)}
@@ -197,7 +207,7 @@ export default function ProductsPage() {
                           setEditingId(null);
                           setEditPrice("");
                         }}
-                        className="text-xs text-gray-500"
+                        className="text-xs text-muted"
                       >
                         Cancel
                       </button>
@@ -213,7 +223,7 @@ export default function ProductsPage() {
                       Adjust price
                     </button>
                   )}
-                </td>
+                </td>}
               </tr>
             ))}
           </tbody>

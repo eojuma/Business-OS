@@ -3,6 +3,7 @@ package sales
 import (
 	"errors"
 	"net/http"
+	"time"
 
 	"github.com/businessos/backend/internal/shared/middleware"
 	"github.com/businessos/backend/internal/shared/response"
@@ -35,6 +36,7 @@ type createSaleRequest struct {
 	SaleType   string            `json:"sale_type"`
 	Discount   int64             `json:"discount"`
 	Note       string            `json:"note"`
+	DueDate    *string           `json:"due_date"`
 	Items      []saleItemRequest `json:"items" binding:"required,min=1"`
 }
 
@@ -74,6 +76,16 @@ func (h *Handler) Create(c *gin.Context) {
 		})
 	}
 
+	var dueDate *time.Time
+	if req.DueDate != nil && *req.DueDate != "" {
+		parsed, err := parseSaleDate(*req.DueDate)
+		if err != nil {
+			response.Error(c, http.StatusBadRequest, "invalid due_date")
+			return
+		}
+		dueDate = &parsed
+	}
+
 	var walkIn *WalkInCustomerInput
 	if req.WalkIn != nil {
 		walkIn = &WalkInCustomerInput{
@@ -84,13 +96,14 @@ func (h *Handler) Create(c *gin.Context) {
 	}
 
 	sale, err := h.service.CreateSale(CreateSaleInput{
-		BusinessID: businessID,
-		CustomerID: customerID,
-		WalkIn:     walkIn,
-		SaleType:   SaleType(req.SaleType),
-		Discount:   req.Discount,
-		Note:       req.Note,
-		Items:      items,
+		BusinessID:     businessID,
+		CustomerID:     customerID,
+		WalkIn:         walkIn,
+		SaleType:       SaleType(req.SaleType),
+		Discount:       req.Discount,
+		Note:           req.Note,
+		InvoiceDueDate: dueDate,
+		Items:          items,
 	})
 	if err != nil {
 		switch {
@@ -147,4 +160,17 @@ func (h *Handler) List(c *gin.Context) {
 	}
 
 	response.Success(c, http.StatusOK, sales)
+}
+
+// parseSaleDate accepts an RFC3339 timestamp or a date-only value.
+func parseSaleDate(value string) (time.Time, error) {
+	if parsed, err := time.Parse(time.RFC3339, value); err == nil {
+		return parsed, nil
+	}
+	parsed, err := time.Parse("2006-01-02", value)
+	if err != nil {
+		return time.Time{}, err
+	}
+	// A date-only due date means the whole calendar day, not its midnight.
+	return parsed.Add(24*time.Hour - time.Nanosecond), nil
 }

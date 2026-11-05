@@ -1,6 +1,10 @@
 package suppliers
 
 import (
+	"context"
+	"database/sql"
+	"math"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -12,6 +16,8 @@ type Repository interface {
 	Create(*Supplier) error
 	FindByID(id, businessID uuid.UUID) (*Supplier, error)
 	List(businessID uuid.UUID, includeArchived bool) ([]Supplier, error)
+	ListPaginated(businessID uuid.UUID, page, limit int, search string, includeArchived bool) ([]Supplier, int64, error)
+	GetAging(ctx context.Context, businessID uuid.UUID, asOf time.Time) ([]AgingSupplier, error)
 	Update(*Supplier) error
 	Delete(id, businessID uuid.UUID) error
 	Restore(id, businessID uuid.UUID) error
@@ -19,7 +25,6 @@ type Repository interface {
 	ListPayments(id, businessID uuid.UUID) ([]Payment, error)
 	AddOutstandingTx(tx *gorm.DB, id, businessID uuid.UUID, amount int64) error
 	SetPaymentDueDateTx(tx *gorm.DB, id, businessID uuid.UUID, receivedAt time.Time) (*time.Time, error)
-	GetAging(businessID uuid.UUID, asOf time.Time) (*AgingReport, error)
 }
 
 type repository struct{ db *gorm.DB }
@@ -42,6 +47,87 @@ func (r *repository) List(businessID uuid.UUID, includeArchived bool) ([]Supplie
 	}
 	err := query.Where("business_id = ?", businessID).Order("name asc").Find(&suppliers).Error
 	return suppliers, err
+}
+
+// GetAging reads all buckets in one snapshot. Explicit UTC date arithmetic
+// keeps calendar-day boundaries independent of the connection's time zone.
+func (r *repository) GetAging(ctx context.Context, businessID uuid.UUID, asOf time.Time) ([]AgingSupplier, error) {
+	var rows []AgingSupplier
+	err := r.db.WithContext(ctx).Raw(`
+		SELECT id, name, outstanding_balance, due_date, days_overdue,
+			CASE
+				WHEN days_overdue = 0 THEN 'current'
+				WHEN days_overdue <= 30 THEN 'days_1_30'
+				WHEN days_overdue <= 60 THEN 'days_31_60'
+				WHEN days_overdue <= 90 THEN 'days_61_90'
+				ELSE 'days_90_plus'
+			END AS bucket
+		FROM (
+			SELECT id, name, outstanding_balance, due_date,
+				CASE WHEN due_date IS NULL THEN 0 ELSE
+					GREATEST(0, (?::timestamptz AT TIME ZONE 'UTC')::date
+						- (due_date AT TIME ZONE 'UTC')::date)
+				END AS days_overdue
+			FROM suppliers
+			WHERE business_id = ? AND deleted_at IS NULL AND outstanding_balance > 0
+		) AS aged
+		ORDER BY name, id`, asOf.UTC(), businessID).Scan(&rows).Error
+	return rows, err
+}
+
+// paginatedOffset converts a page and page size into a SQL offset. It reports
+// false for invalid values or when the multiplication would overflow (checked
+// before multiplying, since a wrapped result can also be zero or positive).
+func paginatedOffset(page, limit int) (int, bool) {
+	if page < 1 || limit < 1 || page-1 > math.MaxInt/limit {
+		return 0, false
+	}
+	return (page - 1) * limit, true
+}
+
+// escapeLike makes user input literal inside a LIKE pattern so "%" and "_"
+// match themselves instead of acting as wildcards.
+func escapeLike(value string) string {
+	return strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(value)
+}
+
+func (r *repository) ListPaginated(businessID uuid.UUID, page, limit int, search string, includeArchived bool) ([]Supplier, int64, error) {
+	var suppliers []Supplier
+	var total int64
+
+	// Count and page must come from the same snapshot, otherwise concurrent
+	// writes can make meta.total disagree with the returned rows.
+	err := r.db.Transaction(func(tx *gorm.DB) error {
+		query := tx
+		if includeArchived {
+			query = query.Unscoped()
+		}
+		query = query.Model(&Supplier{}).Where("business_id = ?", businessID)
+		if search != "" {
+			term := "%" + escapeLike(strings.ToLower(search)) + "%"
+			query = query.Where(
+				`LOWER(name) LIKE ? ESCAPE '\' OR LOWER(phone) LIKE ? ESCAPE '\' OR LOWER(email) LIKE ? ESCAPE '\'`,
+				term, term, term,
+			)
+		}
+
+		if err := query.Count(&total).Error; err != nil {
+			return err
+		}
+
+		offset, ok := paginatedOffset(page, limit)
+		if !ok {
+			suppliers = []Supplier{}
+			return nil
+		}
+
+		query = query.Offset(offset).Limit(limit).Order("name asc, id asc")
+		return query.Find(&suppliers).Error
+	}, &sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: true})
+	if err != nil {
+		return nil, 0, err
+	}
+	return suppliers, total, nil
 }
 
 func (r *repository) Update(s *Supplier) error {
@@ -161,94 +247,4 @@ func (r *repository) SetPaymentDueDateTx(tx *gorm.DB, id, businessID uuid.UUID, 
 		return nil, ErrSupplierNotFound
 	}
 	return &dueDate, nil
-}
-
-// AgingReport represents the supplier aging report.
-type AgingReport struct {
-	Current    []AgingSupplier `json:"current"`
-	Days1_30   []AgingSupplier `json:"days_1_30"`
-	Days31_60  []AgingSupplier `json:"days_31_60"`
-	Days61_90  []AgingSupplier `json:"days_61_90"`
-	Days90Plus []AgingSupplier `json:"days_90_plus"`
-	Totals     AgingTotals     `json:"totals"`
-}
-
-type AgingSupplier struct {
-	ID          uuid.UUID  `json:"id"`
-	Name        string     `json:"name"`
-	Outstanding int64      `json:"outstanding"`
-	DueDate     *time.Time `json:"due_date"`
-	DaysOverdue int        `json:"days_overdue"`
-}
-
-type AgingTotals struct {
-	Current    int64 `json:"current"`
-	Days1_30   int64 `json:"days_1_30"`
-	Days31_60  int64 `json:"days_31_60"`
-	Days61_90  int64 `json:"days_61_90"`
-	Days90Plus int64 `json:"days_90_plus"`
-	Total      int64 `json:"total"`
-}
-
-// startOfUTCDay converts an instant to UTC before taking its calendar fields,
-// so the same instant always maps to the same day regardless of the RFC3339
-// offset it arrived with.
-func startOfUTCDay(t time.Time) time.Time {
-	t = t.UTC()
-	return time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, time.UTC)
-}
-
-func daysPastDue(dueDate, asOf time.Time) int {
-	due := startOfUTCDay(dueDate)
-	ref := startOfUTCDay(asOf)
-	days := int(ref.Sub(due).Hours() / 24)
-	if days < 1 {
-		return 1
-	}
-	return days
-}
-
-func (r *repository) GetAging(businessID uuid.UUID, asOf time.Time) (*AgingReport, error) {
-	var suppliers []Supplier
-	err := r.db.Where("business_id = ? AND deleted_at IS NULL AND outstanding_balance > 0", businessID).
-		Order("name asc").Find(&suppliers).Error
-	if err != nil {
-		return nil, err
-	}
-
-	report := &AgingReport{}
-	for _, s := range suppliers {
-		daysOverdue := 0
-		if s.DueDate != nil && s.DueDate.Before(asOf) {
-			daysOverdue = daysPastDue(*s.DueDate, asOf)
-		}
-
-		entry := AgingSupplier{
-			ID:          s.ID,
-			Name:        s.Name,
-			Outstanding: s.OutstandingBalance,
-			DueDate:     s.DueDate,
-			DaysOverdue: daysOverdue,
-		}
-
-		switch {
-		case daysOverdue <= 0:
-			report.Current = append(report.Current, entry)
-			report.Totals.Current += s.OutstandingBalance
-		case daysOverdue <= 30:
-			report.Days1_30 = append(report.Days1_30, entry)
-			report.Totals.Days1_30 += s.OutstandingBalance
-		case daysOverdue <= 60:
-			report.Days31_60 = append(report.Days31_60, entry)
-			report.Totals.Days31_60 += s.OutstandingBalance
-		case daysOverdue <= 90:
-			report.Days61_90 = append(report.Days61_90, entry)
-			report.Totals.Days61_90 += s.OutstandingBalance
-		default:
-			report.Days90Plus = append(report.Days90Plus, entry)
-			report.Totals.Days90Plus += s.OutstandingBalance
-		}
-		report.Totals.Total += s.OutstandingBalance
-	}
-	return report, nil
 }

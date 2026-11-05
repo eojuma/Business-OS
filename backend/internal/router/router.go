@@ -1,6 +1,7 @@
 package router
 
 import (
+	"context"
 	"net/http"
 
 	"github.com/businessos/backend/internal/config"
@@ -11,6 +12,7 @@ import (
 	"github.com/businessos/backend/internal/modules/customers"
 	"github.com/businessos/backend/internal/modules/finance"
 	"github.com/businessos/backend/internal/modules/inventory"
+	"github.com/businessos/backend/internal/modules/invoices"
 	"github.com/businessos/backend/internal/modules/notifications"
 	"github.com/businessos/backend/internal/modules/products"
 	"github.com/businessos/backend/internal/modules/purchases"
@@ -23,7 +25,7 @@ import (
 	"gorm.io/gorm"
 )
 
-func New(db *gorm.DB, cfg *config.Config) *gin.Engine {
+func New(db *gorm.DB, cfg *config.Config) (*gin.Engine, func(context.Context)) {
 	if cfg.IsProduction() {
 		gin.SetMode(gin.ReleaseMode)
 	}
@@ -39,11 +41,11 @@ func New(db *gorm.DB, cfg *config.Config) *gin.Engine {
 
 	v1 := r.Group("/api/v1")
 
-	auth.RegisterRoutes(v1, db, cfg)
+	waitAuthBackground := auth.RegisterRoutes(v1, db, cfg)
 	business.RegisterRoutes(v1, db, cfg)
 
 	protected := v1.Group("")
-	protected.Use(middleware.RequireAuth(cfg))
+	protected.Use(middleware.RequireAuth(cfg, middleware.RoleFromDB(db)), middleware.RequireRoutePermission())
 	{
 		inventory.RegisterRoutes(protected, db, cfg)
 		products.RegisterRoutes(protected, db, cfg)
@@ -57,7 +59,8 @@ func New(db *gorm.DB, cfg *config.Config) *gin.Engine {
 		analytics.RegisterRoutes(protected, db, cfg)
 		assistant.RegisterRoutes(protected, db, cfg)
 		receipts.RegisterRoutes(protected, db, cfg)
+		invoices.RegisterRoutes(protected, db, cfg)
 	}
 
-	return r
+	return r, waitAuthBackground
 }

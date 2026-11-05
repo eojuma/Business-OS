@@ -167,5 +167,10 @@ func parseSaleDate(value string) (time.Time, error) {
 	if parsed, err := time.Parse(time.RFC3339, value); err == nil {
 		return parsed, nil
 	}
-	return time.Parse("2006-01-02", value)
+	parsed, err := time.Parse("2006-01-02", value)
+	if err != nil {
+		return time.Time{}, err
+	}
+	// A date-only due date means the whole calendar day, not its midnight.
+	return parsed.Add(24*time.Hour - time.Nanosecond), nil
 }

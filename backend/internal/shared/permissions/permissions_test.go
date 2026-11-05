@@ -25,8 +25,11 @@ func TestPermissionMatrix(t *testing.T) {
 		{"manager reads team", RoleManager, TeamRead, true},
 		{"manager cannot manage team", RoleManager, TeamManage, false},
 		{"cashier records sales", RoleCashier, SalesCreate, true},
+		{"cashier records invoice payments", RoleCashier, InvoicePayment, true},
 		{"cashier cannot read finance", RoleCashier, FinanceRead, false},
 		{"cashier records customer payment", RoleCashier, CustomerPayment, true},
+		{"accountant reads invoices", RoleAccountant, InvoiceRead, true},
+		{"accountant records invoice payments", RoleAccountant, InvoicePayment, true},
 		{"accountant reads finance", RoleAccountant, FinanceRead, true},
 		{"accountant manages expenses", RoleAccountant, FinanceManage, true},
 		{"accountant cannot delete finance", RoleAccountant, FinanceDelete, false},
@@ -35,6 +38,7 @@ func TestPermissionMatrix(t *testing.T) {
 		{"warehouse receives purchases", RoleWarehouse, PurchaseReceive, true},
 		{"warehouse cannot create purchases", RoleWarehouse, PurchaseCreate, false},
 		{"warehouse cannot record sales", RoleWarehouse, SalesCreate, false},
+		{"warehouse cannot read invoices", RoleWarehouse, InvoiceRead, false},
 		{"unknown role has no access", "superuser", SalesRead, false},
 	}
 	for _, tt := range tests {

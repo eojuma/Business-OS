@@ -32,6 +32,8 @@ for the token to expire.
 | `team:manage` | Yes |  |  |  |  |
 | `sales:read` | Yes | Yes | Yes | Yes |  |
 | `sales:create` | Yes | Yes | Yes |  |  |
+| `invoices:read` | Yes | Yes | Yes | Yes |  |
+| `invoices:payment` | Yes | Yes | Yes | Yes |  |
 | `purchases:read` | Yes | Yes |  | Yes | Yes |
 | `purchases:create` | Yes | Yes |  |  |  |
 | `purchases:receive` | Yes | Yes |  |  | Yes |
@@ -74,6 +76,8 @@ for the token to expire.
 - Receipt commits also require the matching record permission: `purchases:create`
   for a purchase and `sales:create` for a sale, even when the caller has
   `receipts:use`.
+- Invoice listing and detail require `invoices:read`; applying a payment requires
+  `invoices:payment`.
 - The dashboard hides navigation items and action controls the current role
   cannot use, and short-circuits pages that require a missing read permission.
 

@@ -30,9 +30,13 @@ describe("frontend permission matrix", () => {
 
   it("keeps sensitive actions with the right roles", () => {
     expect(can("cashier", PERMISSIONS.salesCreate)).toBe(true);
+    expect(can("cashier", PERMISSIONS.invoicesRead)).toBe(true);
+    expect(can("cashier", PERMISSIONS.invoicesPayment)).toBe(true);
     expect(can("cashier", PERMISSIONS.financeRead)).toBe(false);
     expect(can("cashier", PERMISSIONS.teamManage)).toBe(false);
 
+    expect(can("accountant", PERMISSIONS.invoicesRead)).toBe(true);
+    expect(can("accountant", PERMISSIONS.invoicesPayment)).toBe(true);
     expect(can("accountant", PERMISSIONS.financeManage)).toBe(true);
     expect(can("accountant", PERMISSIONS.financeDelete)).toBe(false);
     expect(can("accountant", PERMISSIONS.teamManage)).toBe(false);
@@ -41,6 +45,7 @@ describe("frontend permission matrix", () => {
     expect(can("warehouse", PERMISSIONS.purchasesReceive)).toBe(true);
     expect(can("warehouse", PERMISSIONS.purchasesCreate)).toBe(false);
     expect(can("warehouse", PERMISSIONS.salesCreate)).toBe(false);
+    expect(can("warehouse", PERMISSIONS.invoicesRead)).toBe(false);
     expect(can("warehouse", PERMISSIONS.receiptsUse)).toBe(false);
     expect(can("cashier", PERMISSIONS.receiptsUse)).toBe(true);
 

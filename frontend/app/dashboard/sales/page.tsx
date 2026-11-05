@@ -43,6 +43,7 @@ interface RecordedSale {
   discount: number;
   created_at: string;
   line_items?: { product_id: string; quantity: number; unit_price: number; subtotal: number }[];
+  invoice?: { invoice_number: string; due_date: string };
 }
 
 const SALE_TYPE_LABEL: Record<SaleType, string> = {
@@ -62,6 +63,7 @@ export default function SalesPage() {
   const [items, setItems] = useState<LineItem[]>([]);
   const [saleType, setSaleType] = useState<SaleType>("cash");
   const [customerId, setCustomerId] = useState("");
+  const [dueDate, setDueDate] = useState("");
   const [walkInName, setWalkInName] = useState("");
   const [walkInPhone, setWalkInPhone] = useState("");
   const [walkInEmail, setWalkInEmail] = useState("");
@@ -159,6 +161,9 @@ export default function SalesPage() {
       } else if (walkInName.trim() || walkInPhone.trim()) {
         payload.walk_in = { name: walkInName.trim(), phone: walkInPhone.trim(), email: walkInEmail.trim() };
       }
+      if (saleType === "credit" && dueDate) {
+        payload.due_date = new Date(`${dueDate}T00:00:00`).toISOString();
+      }
 
       const res = await api.post("/sales", payload);
       const saved = res.data.data as RecordedSale;
@@ -172,6 +177,7 @@ export default function SalesPage() {
       setReceipt(saved);
       setItems([]);
       setCustomerId("");
+      setDueDate("");
       setWalkInName("");
       setWalkInPhone("");
       setWalkInEmail("");
@@ -340,6 +346,17 @@ export default function SalesPage() {
                 <input className="field" type="email" placeholder="Email (optional)" value={walkInEmail} onChange={(e) => setWalkInEmail(e.target.value)} />
               </div>
             )}
+            {saleType === "credit" && (
+              <label className="mt-3 block text-xs font-semibold text-muted">
+                Invoice due date <span className="font-normal text-subtle">(defaults to 30 days)</span>
+                <input
+                  type="date"
+                  className="field mt-1.5"
+                  value={dueDate}
+                  onChange={(e) => setDueDate(e.target.value)}
+                />
+              </label>
+            )}
           </div>
 
           <div className="border-t border-border-subtle pt-4">
@@ -431,6 +448,7 @@ function ReceiptView({
           <div className="text-right">
             <p className="text-sm font-bold uppercase tracking-wide text-primary">{SALE_TYPE_LABEL[type]}</p>
             <p className="mt-1 text-xs text-muted">Ref {shortId}</p>
+            {receipt.invoice && <p className="text-xs text-muted">{receipt.invoice.invoice_number}</p>}
             <p className="text-xs text-muted">{created.toLocaleString()}</p>
           </div>
         </div>
@@ -484,6 +502,7 @@ function ReceiptView({
             <p className="text-2xl font-bold">{formatMoney(receipt.total_amount)}</p>
             {type === "quotation" && <p className="mt-1 text-xs text-subtle">Quotation valid for 14 days</p>}
             {type === "credit" && <p className="mt-1 text-xs text-subtle">Charged to customer account</p>}
+            {receipt.invoice && <p className="mt-1 text-xs text-subtle">Invoice {receipt.invoice.invoice_number}</p>}
           </div>
         </div>
 

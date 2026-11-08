@@ -14,13 +14,21 @@ Each entry captures:
 - entity type and id
 - before and after JSON snapshots
 - HTTP method, route, status code
-- client IP
+- client IP (proxy headers are trusted only when `TRUSTED_PROXIES` is configured)
 - timestamp
 
-The shared middleware covers all successful `POST`, `PATCH`, `PUT` and `DELETE`
-requests on protected business routes. Before snapshots are read from the
-database for updates, deletes, payments, restores, receives and role changes.
-After snapshots come from the API response.
+The shared middleware covers successful `POST`, `PATCH`, `PUT` and `DELETE`
+requests on protected business routes, with these deliberate exceptions:
+
+- `POST /api/v1/assistant/interpret` is a read-only preview and is not recorded.
+- `POST /api/v1/receipts/scan` only reads an uploaded image and is not recorded.
+- Personal auth routes (login, register, Google link/unlink, email verification)
+  are excluded so credentials never enter the trail.
+- Notification read/mark actions are excluded as routine per-user state updates.
+
+Before snapshots are read from the database for updates, deletes, payments,
+restores, receives and role changes. After snapshots are read from the persisted
+row when the entity is known, otherwise from the API response.
 
 ## Secret handling
 
@@ -29,6 +37,13 @@ ids are removed recursively before snapshots are stored. Personal auth routes
 (login, register, Google link/unlink, email verification) are excluded so
 credentials never enter the trail. Notifications are excluded because they are
 routine per-user state updates.
+
+## Durability
+
+Audit rows are written immediately after a successful response. The write is
+retried, and any persistent failure is logged. The API currently treats audit
+persistence as best-effort rather than sharing each handler's transaction; use
+the application logs to detect and investigate a failed audit insert.
 
 ## Immutability
 

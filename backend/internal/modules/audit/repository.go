@@ -27,12 +27,15 @@ type Repository interface {
 
 type repository struct{ db *gorm.DB }
 
+// NewRepository builds an audit repository over the given database.
 func NewRepository(db *gorm.DB) Repository { return &repository{db: db} }
 
+// Create appends one audit entry.
 func (r *repository) Create(entry *Entry) error {
 	return r.db.Create(entry).Error
 }
 
+// List returns filtered audit entries with pagination.
 func (r *repository) List(businessID uuid.UUID, filter ListFilter) ([]Entry, int64, error) {
 	query := r.db.Model(&Entry{}).Where("business_id = ?", businessID)
 	if filter.ActorID != nil {

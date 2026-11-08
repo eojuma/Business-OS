@@ -26,12 +26,18 @@ import (
 	"gorm.io/gorm"
 )
 
+// New builds the API router and returns the auth background drain hook.
 func New(db *gorm.DB, cfg *config.Config) (*gin.Engine, func(context.Context)) {
 	if cfg.IsProduction() {
 		gin.SetMode(gin.ReleaseMode)
 	}
 
 	r := gin.New()
+	if len(cfg.TrustedProxies) == 0 {
+		_ = r.SetTrustedProxies(nil)
+	} else if err := r.SetTrustedProxies(cfg.TrustedProxies); err != nil {
+		_ = r.SetTrustedProxies(nil)
+	}
 	r.Use(gin.Recovery())
 	r.Use(middleware.RequestLogger())
 	r.Use(middleware.CORS(cfg))

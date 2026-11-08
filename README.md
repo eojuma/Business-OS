@@ -122,6 +122,7 @@ Business-OS/
 ├── docs/
 │   ├── PRODUCT.md                   Product scope and module plan
 │   ├── RBAC.md                      Role and permission matrix
+│   ├── AUDIT.md                     Audit trail and retention policy
 │   └── OCR.md                       Receipt OCR flow
 ├── docker-compose.yml               Postgres, Redis, API, web
 ├── Makefile                         Common local tasks

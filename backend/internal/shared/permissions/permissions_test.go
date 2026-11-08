@@ -20,6 +20,10 @@ func TestPermissionMatrix(t *testing.T) {
 		permission Permission
 		want       bool
 	}{
+		{"owner reads audit", RoleOwner, AuditRead, true},
+		{"admin reads audit", RoleAdmin, AuditRead, true},
+		{"manager cannot read audit", RoleManager, AuditRead, false},
+		{"accountant cannot read audit", RoleAccountant, AuditRead, false},
 		{"owner manages team", RoleOwner, TeamManage, true},
 		{"admin manages team", RoleAdmin, TeamManage, true},
 		{"manager reads team", RoleManager, TeamRead, true},

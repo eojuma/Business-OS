@@ -17,7 +17,7 @@ func (j JSON) Value() (driver.Value, error) {
 	if len(j) == 0 || string(j) == "null" {
 		return nil, nil
 	}
-	return string(j), nil
+	return []byte(j), nil
 }
 
 // Scan implements sql.Scanner for jsonb columns.

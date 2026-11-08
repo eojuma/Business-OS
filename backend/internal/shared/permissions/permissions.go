@@ -66,6 +66,8 @@ const (
 
 	AssistantUse Permission = "assistant:use"
 	ReceiptUse   Permission = "receipts:use"
+
+	AuditRead Permission = "audit:read"
 )
 
 // AllRoles lists every supported role in display order.
@@ -86,6 +88,7 @@ var allPermissions = []Permission{
 	ReportRead, AnalyticsRead,
 	NotificationRead, NotificationWrite,
 	AssistantUse, ReceiptUse,
+	AuditRead,
 }
 
 var matrix = map[string]map[Permission]bool{

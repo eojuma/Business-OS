@@ -13,6 +13,15 @@ import (
 	"gorm.io/gorm"
 )
 
+// ContextEntityIDKey lets a handler supply the audit entity id when the
+// response does not expose it under a conventional key.
+const ContextEntityIDKey = "audit_entity_id"
+
+// SetEntityID records the entity id for the current request's audit entry.
+func SetEntityID(c *gin.Context, id uuid.UUID) {
+	c.Set(ContextEntityIDKey, id.String())
+}
+
 // Middleware records successful mutating requests from one shared hook.
 func Middleware(db *gorm.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
@@ -43,8 +52,20 @@ func Middleware(db *gorm.DB) gin.HandlerFunc {
 			return
 		}
 		after := responseData(writer.body.Bytes())
-		if entityID == nil {
+		if action == ActionReceiptCommit {
+			if recordType := recordTypeFromJSON(after); recordType == "sale" || recordType == "purchase" {
+				entity = recordType
+			}
+		}
+		if override := contextUUID(c, ContextEntityIDKey); override != nil {
+			entityID = override
+		} else if entityID == nil {
 			entityID = idFromJSON(after)
+		}
+		if action != ActionDelete && entityID != nil {
+			if persisted := snapshot(db, *businessID, entity, *entityID); persisted != nil {
+				after = persisted
+			}
 		}
 
 		entry := Entry{
@@ -74,12 +95,13 @@ func Middleware(db *gorm.DB) gin.HandlerFunc {
 				entry.ActorEmail = actor.Email
 			}
 		}
-		if err := NewRepository(db).Create(&entry); err != nil {
+		if err := recordWithRetry(db, &entry); err != nil {
 			log.Printf("audit: failed to record %s %s: %v", c.Request.Method, c.FullPath(), err)
 		}
 	}
 }
 
+// contextUUID reads a UUID string from the Gin request context.
 func contextUUID(c *gin.Context, key string) *uuid.UUID {
 	raw, exists := c.Get(key)
 	if !exists {
@@ -96,6 +118,7 @@ func contextUUID(c *gin.Context, key string) *uuid.UUID {
 	return &parsed
 }
 
+// pathEntityID resolves the entity id from route parameters.
 func pathEntityID(c *gin.Context, entity string, businessID uuid.UUID) *uuid.UUID {
 	if entity == "business" {
 		return &businessID
@@ -114,6 +137,7 @@ func pathEntityID(c *gin.Context, entity string, businessID uuid.UUID) *uuid.UUI
 	return &parsed
 }
 
+// snapshot reads a sanitized database row for before/after comparison.
 func snapshot(db *gorm.DB, businessID uuid.UUID, entity string, id uuid.UUID) JSON {
 	table, scoped := EntityTable(entity)
 	if table == "" {
@@ -160,6 +184,7 @@ func snapshot(db *gorm.DB, businessID uuid.UUID, entity string, id uuid.UUID) JS
 	return Sanitize(JSON(raw))
 }
 
+// responseData extracts and sanitizes the success envelope data.
 func responseData(body []byte) JSON {
 	if len(body) == 0 {
 		return nil
@@ -176,6 +201,34 @@ func responseData(body []byte) JSON {
 	return Sanitize(JSON(envelope.Data))
 }
 
+// recordWithRetry retries transient audit insert failures a few times.
+func recordWithRetry(db *gorm.DB, entry *Entry) error {
+	repo := NewRepository(db)
+	var err error
+	for attempt := 0; attempt < 3; attempt++ {
+		if err = repo.Create(entry); err == nil {
+			return nil
+		}
+		time.Sleep(time.Duration(attempt+1) * 10 * time.Millisecond)
+	}
+	return err
+}
+
+// recordTypeFromJSON reads the receipt record type from a commit response.
+func recordTypeFromJSON(raw JSON) string {
+	if raw.IsZero() {
+		return ""
+	}
+	var object struct {
+		RecordType string `json:"record_type"`
+	}
+	if err := json.Unmarshal(raw, &object); err != nil {
+		return ""
+	}
+	return object.RecordType
+}
+
+// idFromJSON extracts a created entity id from a response payload.
 func idFromJSON(raw JSON) *uuid.UUID {
 	if raw.IsZero() {
 		return nil
@@ -203,11 +256,13 @@ type recordingWriter struct {
 	status int
 }
 
+// WriteHeader records the status before delegating to Gin.
 func (w *recordingWriter) WriteHeader(code int) {
 	w.status = code
 	w.ResponseWriter.WriteHeader(code)
 }
 
+// Write buffers the response body while sending it to the client.
 func (w *recordingWriter) Write(data []byte) (int, error) {
 	if w.status == 0 {
 		w.status = http.StatusOK
@@ -216,6 +271,7 @@ func (w *recordingWriter) Write(data []byte) (int, error) {
 	return w.ResponseWriter.Write(data)
 }
 
+// Status returns the captured or underlying response status.
 func (w *recordingWriter) Status() int {
 	if w.status != 0 {
 		return w.status

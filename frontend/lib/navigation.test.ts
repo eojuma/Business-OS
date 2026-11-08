@@ -28,7 +28,7 @@ describe("navigation groups", () => {
       { label: "Inventory", items: ["Products", "Inventory", "Receipt OCR"] },
       { label: "Finance", items: ["Finance", "Reports", "Analytics"] },
       { label: "People", items: ["Customers", "Suppliers"] },
-      { label: "System", items: ["Notifications", "AI assistant", "Settings"] },
+      { label: "System", items: ["Notifications", "Audit log", "AI assistant", "Settings"] },
     ]);
   });
 
@@ -59,6 +59,7 @@ describe("navigation groups", () => {
       "/dashboard/customers",
       "/dashboard/suppliers",
       "/dashboard/notifications",
+      "/dashboard/audit",
       "/dashboard/assistant",
       "/dashboard/settings",
     ]);

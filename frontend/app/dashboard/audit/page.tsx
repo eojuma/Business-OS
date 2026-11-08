@@ -18,6 +18,7 @@ import {
 type User = { id: string; name: string; email: string };
 type Meta = { page: number; per_page: number; total: number };
 
+/** Extracts the API error message with a safe fallback. */
 function errorMessage(error: unknown, fallback: string): string {
   const e = error as { response?: { data?: { error?: string } } };
   return e.response?.data?.error || fallback;
@@ -42,6 +43,7 @@ export default function AuditPage() {
   const [page, setPage] = useState(1);
   const limit = 20;
 
+  /** Loads audit entries for the current filters and page. */
   const loadEntries = useCallback(async () => {
     if (!canRead) {
       setLoading(false);
@@ -94,6 +96,7 @@ export default function AuditPage() {
 
   const totalPages = meta ? Math.max(1, Math.ceil(meta.total / meta.per_page)) : 1;
 
+  /** Clears every filter and returns to the first page. */
   function resetFilters() {
     setActorId("");
     setAction("");

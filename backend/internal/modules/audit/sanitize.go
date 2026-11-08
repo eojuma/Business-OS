@@ -1,6 +1,9 @@
 package audit
 
-import "encoding/json"
+import (
+	"bytes"
+	"encoding/json"
+)
 
 // Sanitize removes secrets from a JSON snapshot before it is persisted.
 func Sanitize(raw JSON) JSON {
@@ -8,7 +11,9 @@ func Sanitize(raw JSON) JSON {
 		return nil
 	}
 	var value any
-	if err := json.Unmarshal(raw, &value); err != nil {
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	if err := decoder.Decode(&value); err != nil {
 		return nil
 	}
 	cleaned, err := json.Marshal(sanitizeValue(value))
@@ -18,6 +23,7 @@ func Sanitize(raw JSON) JSON {
 	return JSON(cleaned)
 }
 
+// sanitizeValue walks maps and slices, dropping sensitive keys.
 func sanitizeValue(value any) any {
 	switch v := value.(type) {
 	case map[string]any:

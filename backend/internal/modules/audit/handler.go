@@ -17,6 +17,7 @@ type Handler struct {
 	service Service
 }
 
+// NewHandler builds the audit viewer handler.
 func NewHandler(service Service) *Handler { return &Handler{service: service} }
 
 // List returns filtered, paginated audit entries for the current business.
@@ -70,7 +71,7 @@ func (h *Handler) List(c *gin.Context) {
 	}
 
 	entries, total, err := h.service.List(businessID, filter)
-	if errors.Is(err, ErrInvalidDateRange) {
+	if errors.Is(err, ErrInvalidDateRange) || errors.Is(err, ErrInvalidPagination) {
 		response.Error(c, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -82,6 +83,7 @@ func (h *Handler) List(c *gin.Context) {
 	response.Paginated(c, http.StatusOK, entries, filter.Page, filter.Limit, total)
 }
 
+// intQuery parses a positive integer query parameter.
 func intQuery(c *gin.Context, key string, fallback int) (int, error) {
 	raw := c.Query(key)
 	if raw == "" {
@@ -96,6 +98,7 @@ func intQuery(c *gin.Context, key string, fallback int) (int, error) {
 
 // dateQuery accepts RFC3339 timestamps or date-only values. Date-only upper
 // bounds include the whole day.
+// dateQuery parses date-only or RFC3339 query values.
 func dateQuery(c *gin.Context, key string, endOfDay bool) (*time.Time, error) {
 	raw := c.Query(key)
 	if raw == "" {

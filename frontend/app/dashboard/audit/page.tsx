@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { ShieldCheck, X } from "lucide-react";
 import { api } from "@/lib/api";
 import { PageHeader } from "@/components/app-shell";
@@ -34,6 +34,7 @@ export default function AuditPage() {
   const [meta, setMeta] = useState<Meta | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [filterError, setFilterError] = useState("");
 
   const [actorId, setActorId] = useState("");
   const [action, setAction] = useState("");
@@ -113,6 +114,10 @@ export default function AuditPage() {
         title="Audit log"
         description="Who changed what, when, and from where. Entries are append-only."
       />
+
+      {filterError && (
+        <p className="mb-4 rounded-lg bg-warning-soft p-3 text-sm text-warning-strong">{filterError}</p>
+      )}
 
       {error && (
         <p className="mb-4 flex items-start justify-between gap-3 rounded-lg bg-danger-soft p-3 text-sm text-danger">

@@ -1,12 +1,14 @@
 package audit
 
 import (
+	"bytes"
 	"encoding/json"
 	"testing"
 )
 
 const testEntityProduct = "product"
 
+// TestClassify documents its scenario and asserts the expected audit behaviour.
 func TestClassify(t *testing.T) {
 	tests := []struct {
 		method, path string
@@ -41,6 +43,7 @@ func TestClassify(t *testing.T) {
 	}
 }
 
+// TestSanitizeRemovesSecretsRecursively documents its scenario and asserts the expected audit behaviour.
 func TestSanitizeRemovesSecretsRecursively(t *testing.T) {
 	raw := JSON(`{
 		"name":"Ada",
@@ -90,6 +93,25 @@ func TestSanitizeRemovesSecretsRecursively(t *testing.T) {
 	}
 }
 
+// TestSanitizePreservesLargeIntegers documents its scenario and asserts the expected audit behaviour.
+func TestSanitizePreservesLargeIntegers(t *testing.T) {
+	cleaned := Sanitize(JSON(`{"amount":9007199254740993,"password":"x"}`))
+	var value map[string]any
+	decoder := json.NewDecoder(bytes.NewReader(cleaned))
+	decoder.UseNumber()
+	if err := decoder.Decode(&value); err != nil {
+		t.Fatalf("decode cleaned JSON: %v", err)
+	}
+	number, ok := value["amount"].(json.Number)
+	if !ok {
+		t.Fatalf("amount type = %T", value["amount"])
+	}
+	if number.String() != "9007199254740993" {
+		t.Fatalf("amount = %s, want 9007199254740993", number)
+	}
+}
+
+// TestSanitizeHandlesInvalidJSON documents its scenario and asserts the expected audit behaviour.
 func TestSanitizeHandlesInvalidJSON(t *testing.T) {
 	if got := Sanitize(JSON(`{not-json`)); !got.IsZero() {
 		t.Fatalf("expected invalid JSON to sanitize to nil, got %s", got)

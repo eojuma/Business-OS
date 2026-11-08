@@ -65,4 +65,5 @@ type Entry struct {
 	CreatedAt   time.Time  `gorm:"index" json:"created_at"`
 }
 
+// TableName returns the append-only audit table name.
 func (Entry) TableName() string { return "audit_logs" }

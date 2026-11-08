@@ -5,6 +5,7 @@ import (
 	"log"
 
 	"github.com/businessos/backend/internal/config"
+	"github.com/businessos/backend/internal/modules/audit"
 	"github.com/businessos/backend/internal/modules/business"
 	"github.com/businessos/backend/internal/shared/email"
 	"github.com/businessos/backend/internal/shared/middleware"
@@ -64,7 +65,7 @@ func RegisterRoutes(rg *gin.RouterGroup, db *gorm.DB, cfg *config.Config) func(c
 	linkGroup.POST("/google/link", handler.LinkGoogle)
 	linkGroup.POST("/google/unlink", handler.UnlinkGoogle)
 	team := rg.Group("/users")
-	team.Use(middleware.RequireAuth(cfg, middleware.RoleFromDB(db)), middleware.RequireRoutePermission())
+	team.Use(middleware.RequireAuth(cfg, middleware.RoleFromDB(db)), middleware.RequireRoutePermission(), audit.Middleware(db))
 	team.GET("", handler.ListTeam)
 	team.POST("", handler.CreateTeamUser)
 	team.PATCH("/:id/role", handler.UpdateTeamMemberRole)

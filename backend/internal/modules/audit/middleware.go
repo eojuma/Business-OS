@@ -125,9 +125,33 @@ func snapshot(db *gorm.DB, businessID uuid.UUID, entity string, id uuid.UUID) JS
 		query += " AND business_id = ?"
 		args = append(args, businessID)
 	}
-	var row map[string]any
-	if err := db.Raw(query, args...).Scan(&row).Error; err != nil || len(row) == 0 {
+	rows, err := db.Raw(query, args...).Rows()
+	if err != nil {
 		return nil
+	}
+	defer func() { _ = rows.Close() }()
+	if !rows.Next() {
+		return nil
+	}
+	columns, err := rows.Columns()
+	if err != nil {
+		return nil
+	}
+	values := make([]any, len(columns))
+	pointers := make([]any, len(columns))
+	for i := range values {
+		pointers[i] = &values[i]
+	}
+	if err := rows.Scan(pointers...); err != nil {
+		return nil
+	}
+	row := make(map[string]any, len(columns))
+	for i, column := range columns {
+		if bytes, ok := values[i].([]byte); ok {
+			row[column] = string(bytes)
+			continue
+		}
+		row[column] = values[i]
 	}
 	raw, err := json.Marshal(row)
 	if err != nil {

@@ -38,6 +38,7 @@ func (c *businessOwnerCreator) DeleteWorkspace(businessID uuid.UUID) error {
 	return c.db.Where("id = ?", businessID).Delete(&business.Business{}).Error
 }
 
+// RegisterRoutes wires auth, account, and team endpoints and returns the drain hook.
 func RegisterRoutes(rg *gin.RouterGroup, db *gorm.DB, cfg *config.Config) func(context.Context) {
 	repo := NewRepository(db)
 

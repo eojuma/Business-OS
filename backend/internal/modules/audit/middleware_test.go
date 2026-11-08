@@ -23,6 +23,7 @@ import (
 
 const testErrorKey = "error"
 
+// setupAuditTestDB documents its scenario and asserts the expected audit behaviour.
 func setupAuditTestDB(t *testing.T) (*gorm.DB, uuid.UUID, uuid.UUID) {
 	t.Helper()
 	testDBURL := os.Getenv("TEST_DATABASE_URL")
@@ -83,6 +84,7 @@ func setupAuditTestDB(t *testing.T) (*gorm.DB, uuid.UUID, uuid.UUID) {
 	return db, businessID, userID
 }
 
+// auditRouter documents its scenario and asserts the expected audit behaviour.
 func auditRouter(db *gorm.DB, businessID, userID uuid.UUID) *gin.Engine {
 	router := gin.New()
 	router.Use(func(c *gin.Context) {
@@ -93,6 +95,7 @@ func auditRouter(db *gorm.DB, businessID, userID uuid.UUID) *gin.Engine {
 	return router
 }
 
+// TestMiddlewareRecordsProductUpdate documents its scenario and asserts the expected audit behaviour.
 func TestMiddlewareRecordsProductUpdate(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	db, businessID, userID := setupAuditTestDB(t)
@@ -159,6 +162,7 @@ func TestMiddlewareRecordsProductUpdate(t *testing.T) {
 	}
 }
 
+// TestMiddlewareRecordsRoleChangeWithoutSecrets documents its scenario and asserts the expected audit behaviour.
 func TestMiddlewareRecordsRoleChangeWithoutSecrets(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	db, businessID, userID := setupAuditTestDB(t)
@@ -213,5 +217,70 @@ func TestMiddlewareRecordsRoleChangeWithoutSecrets(t *testing.T) {
 		if strings.Contains(before, forbidden) || strings.Contains(after, forbidden) {
 			t.Fatalf("audit entry leaked %q: before=%s after=%s", forbidden, before, after)
 		}
+	}
+}
+
+// TestMiddlewareClassifiesReceiptCommitByRecordType checks receipt entity resolution.
+func TestMiddlewareClassifiesReceiptCommitByRecordType(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db, businessID, userID := setupAuditTestDB(t)
+	saleID := uuid.New()
+
+	router := auditRouter(db, businessID, userID)
+	router.POST("/api/v1/receipts/commit", func(c *gin.Context) {
+		response.Success(c, http.StatusCreated, map[string]any{
+			"record_type":  "sale",
+			"id":           saleID,
+			"total_amount": 100,
+		})
+	})
+
+	request := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/api/v1/receipts/commit", strings.NewReader(`{}`))
+	request.Header.Set("Content-Type", "application/json")
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusCreated {
+		t.Fatalf("status = %d: %s", recorder.Code, recorder.Body.String())
+	}
+
+	var entry Entry
+	if err := db.First(&entry).Error; err != nil {
+		t.Fatalf("load audit entry: %v", err)
+	}
+	if entry.Action != ActionReceiptCommit || entry.EntityType != "sale" || entry.EntityID == nil || *entry.EntityID != saleID {
+		t.Fatalf("entry = %+v", entry)
+	}
+}
+
+// TestMiddlewareUsesHandlerSuppliedStockMovementID checks context overrides.
+func TestMiddlewareUsesHandlerSuppliedStockMovementID(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db, businessID, userID := setupAuditTestDB(t)
+	movementID := uuid.New()
+	stockLevelID := uuid.New()
+
+	router := auditRouter(db, businessID, userID)
+	router.POST("/api/v1/inventory/movements", func(c *gin.Context) {
+		SetEntityID(c, movementID)
+		response.Success(c, http.StatusCreated, map[string]any{"id": stockLevelID, "quantity": 5})
+	})
+
+	request := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/api/v1/inventory/movements", strings.NewReader(`{}`))
+	request.Header.Set("Content-Type", "application/json")
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusCreated {
+		t.Fatalf("status = %d: %s", recorder.Code, recorder.Body.String())
+	}
+
+	var entry Entry
+	if err := db.First(&entry).Error; err != nil {
+		t.Fatalf("load audit entry: %v", err)
+	}
+	if entry.Action != ActionStockMovement || entry.EntityType != "stock_movement" {
+		t.Fatalf("entry = %+v", entry)
+	}
+	if entry.EntityID == nil || *entry.EntityID != movementID {
+		t.Fatalf("entity id = %v, want movement %s", entry.EntityID, movementID)
 	}
 }

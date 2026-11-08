@@ -12,6 +12,7 @@ var routePermissions = map[string]Permission{
 	"PATCH /api/v1/users/:id/role":               TeamManage,
 	"GET /api/v1/business":                       BusinessRead,
 	"PATCH /api/v1/business":                     BusinessManage,
+	"GET /api/v1/audit":                          AuditRead,
 	"GET /api/v1/analytics/overview":             AnalyticsRead,
 	"GET /api/v1/analytics/top-products":         AnalyticsRead,
 	"GET /api/v1/analytics/slow-moving":          AnalyticsRead,

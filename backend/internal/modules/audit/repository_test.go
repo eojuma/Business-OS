@@ -7,6 +7,7 @@ import (
 	"github.com/google/uuid"
 )
 
+// TestRepositoryListFiltersAndPagination documents its scenario and asserts the expected audit behaviour.
 func TestRepositoryListFiltersAndPagination(t *testing.T) {
 	db, businessID, userID := setupAuditTestDB(t)
 	repo := NewRepository(db)

@@ -18,11 +18,13 @@ type fakeService struct {
 	err     error
 }
 
+// List records the filter and returns the configured fake response.
 func (f *fakeService) List(businessID uuid.UUID, filter ListFilter) ([]Entry, int64, error) {
 	f.filter = filter
 	return f.entries, f.total, f.err
 }
 
+// auditViewerRouter mounts the audit handler with a business context.
 func auditViewerRouter(service Service) *gin.Engine {
 	handler := NewHandler(service)
 	router := gin.New()
@@ -34,6 +36,7 @@ func auditViewerRouter(service Service) *gin.Engine {
 	return router
 }
 
+// TestAuditListParsesFilters documents its scenario and asserts the expected audit behaviour.
 func TestAuditListParsesFilters(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	service := &fakeService{total: 1, entries: []Entry{{ID: uuid.New()}}}
@@ -69,6 +72,20 @@ func TestAuditListParsesFilters(t *testing.T) {
 	}
 }
 
+// TestAuditListRejectsOverflowingPagination documents its scenario and asserts the expected audit behaviour.
+func TestAuditListRejectsOverflowingPagination(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	service := &fakeService{err: ErrInvalidPagination}
+	request := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/audit?page=461168601842738792&limit=20", nil)
+	recorder := httptest.NewRecorder()
+	auditViewerRouter(service).ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusBadRequest)
+	}
+}
+
+// TestAuditListRejectsInvalidDateRange documents its scenario and asserts the expected audit behaviour.
 func TestAuditListRejectsInvalidDateRange(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	service := &fakeService{err: ErrInvalidDateRange}
@@ -81,6 +98,7 @@ func TestAuditListRejectsInvalidDateRange(t *testing.T) {
 	}
 }
 
+// TestAuditListRejectsInvalidActorID documents its scenario and asserts the expected audit behaviour.
 func TestAuditListRejectsInvalidActorID(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	service := &fakeService{}

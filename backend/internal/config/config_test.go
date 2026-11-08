@@ -68,3 +68,17 @@ func TestValidateAllowsKnownNonProductionEnvs(t *testing.T) {
 		}
 	}
 }
+
+// TestParseCSVTrimsAndDropsEmptyValues documents its scenario and asserts the expected audit behaviour.
+func TestParseCSVTrimsAndDropsEmptyValues(t *testing.T) {
+	got := parseCSV(" 10.0.0.0/8, ,192.168.1.0/24,")
+	want := []string{"10.0.0.0/8", "192.168.1.0/24"}
+	if len(got) != len(want) {
+		t.Fatalf("parseCSV length = %d, want %d", len(got), len(want))
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("parseCSV[%d] = %q, want %q", i, got[i], want[i])
+		}
+	}
+}

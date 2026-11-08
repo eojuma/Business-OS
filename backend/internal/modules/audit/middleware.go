@@ -156,17 +156,21 @@ func idFromJSON(raw JSON) *uuid.UUID {
 	if raw.IsZero() {
 		return nil
 	}
-	var envelope struct {
-		ID string `json:"id"`
-	}
-	if err := json.Unmarshal(raw, &envelope); err != nil {
+	var object map[string]any
+	if err := json.Unmarshal(raw, &object); err != nil {
 		return nil
 	}
-	parsed, err := uuid.Parse(envelope.ID)
-	if err != nil {
-		return nil
+	for _, key := range []string{"id", "ID", "sale_id", "purchase_id"} {
+		value, ok := object[key].(string)
+		if !ok {
+			continue
+		}
+		parsed, err := uuid.Parse(value)
+		if err == nil {
+			return &parsed
+		}
 	}
-	return &parsed
+	return nil
 }
 
 type recordingWriter struct {

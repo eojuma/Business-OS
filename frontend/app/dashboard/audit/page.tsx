@@ -35,6 +35,7 @@ export default function AuditPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [filterError, setFilterError] = useState("");
+  const [actorError, setActorError] = useState("");
 
   const [actorId, setActorId] = useState("");
   const [action, setAction] = useState("");
@@ -44,6 +45,26 @@ export default function AuditPage() {
   const [page, setPage] = useState(1);
   const limit = 20;
 
+  /** Converts a local date-only string to a UTC timestamp covering the whole day. */
+  function dayBounds(date: string, endOfDay: boolean): string {
+    const d = new Date(`${date}T00:00:00`);
+    if (endOfDay) d.setHours(23, 59, 59, 999);
+    return d.toISOString();
+  }
+
+  /** Loads the actor list for the actor filter dropdown. */
+  const loadActors = useCallback(async () => {
+    if (!canRead) return;
+    try {
+      const res = await api.get("/users");
+      setUsers(res.data.data || []);
+      setActorError("");
+    } catch {
+      setUsers([]);
+      setActorError("Unable to load actor list. Try again.");
+    }
+  }, [canRead]);
+
   /** Loads audit entries for the current filters and page. */
   const loadEntries = useCallback(async () => {
     if (!canRead) {
@@ -52,13 +73,19 @@ export default function AuditPage() {
     }
     setLoading(true);
     setError("");
+    setFilterError("");
     try {
+      if (dateFrom && dateTo && dateFrom > dateTo) {
+        setFilterError("From date must be on or before To date.");
+        setLoading(false);
+        return;
+      }
       const params: Record<string, string | number> = { page, limit };
       if (actorId) params.actor_id = actorId;
       if (action) params.action = action;
       if (entityType) params.entity_type = entityType;
-      if (dateFrom) params.date_from = dateFrom;
-      if (dateTo) params.date_to = dateTo;
+      if (dateFrom) params.date_from = dayBounds(dateFrom, false);
+      if (dateTo) params.date_to = dayBounds(dateTo, true);
       const res = await api.get("/audit", { params });
       setEntries(res.data.data || []);
       setMeta(res.data.meta || null);
@@ -73,7 +100,8 @@ export default function AuditPage() {
 
   useEffect(() => {
     void loadEntries();
-  }, [loadEntries]);
+    void loadActors();
+  }, [loadEntries, loadActors]);
 
   useEffect(() => {
     if (!canRead) return;
@@ -81,10 +109,16 @@ export default function AuditPage() {
     api
       .get("/users")
       .then((res) => {
-        if (active) setUsers(res.data.data || []);
+        if (active) {
+          setUsers(res.data.data || []);
+          setActorError("");
+        }
       })
       .catch(() => {
-        if (active) setUsers([]);
+        if (active) {
+          setUsers([]);
+          setActorError("Unable to load actor list. Try again.");
+        }
       });
     return () => {
       active = false;
@@ -150,6 +184,21 @@ export default function AuditPage() {
                 </option>
               ))}
             </select>
+          {actorError && (
+            <p className="mt-2 flex items-center gap-2 text-xs text-danger">
+              {actorError}
+              <button
+                type="button"
+                className="text-xs underline"
+                onClick={() => {
+                  setActorError("");
+                  void loadActors();
+                }}
+              >
+                Retry
+              </button>
+            </p>
+          )}
           </label>
           <label className="text-xs font-semibold text-muted">
             Action

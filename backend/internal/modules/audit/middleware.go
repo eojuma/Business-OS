@@ -32,15 +32,19 @@ func Middleware(db *gorm.DB) gin.HandlerFunc {
 		}
 		actorID := contextUUID(c, sharedmw.ContextUserIDKey)
 		businessID := contextUUID(c, sharedmw.ContextBusinessIDKey)
-		if businessID == nil {
+		publicBusinessCreate := businessID == nil && entity == "business" && action == ActionCreate
+		if businessID == nil && !publicBusinessCreate {
 			c.Next()
 			return
 		}
 
-		entityID := pathEntityID(c, entity, *businessID)
+		var entityID *uuid.UUID
 		var before JSON
-		if entityID != nil {
-			before = snapshot(db, *businessID, entity, *entityID)
+		if businessID != nil {
+			entityID = pathEntityID(c, entity, *businessID)
+			if entityID != nil {
+				before = snapshot(db, *businessID, entity, *entityID)
+			}
 		}
 
 		writer := &recordingWriter{ResponseWriter: c.Writer}
@@ -57,6 +61,13 @@ func Middleware(db *gorm.DB) gin.HandlerFunc {
 				entity = recordType
 			}
 		}
+		if businessID == nil {
+			businessID = idFromJSON(after)
+			if businessID == nil {
+				return
+			}
+			entityID = businessID
+		}
 		if override := contextUUID(c, ContextEntityIDKey); override != nil {
 			entityID = override
 		} else if entityID == nil {
@@ -64,7 +75,7 @@ func Middleware(db *gorm.DB) gin.HandlerFunc {
 		}
 		if action != ActionDelete && entityID != nil {
 			if persisted := snapshot(db, *businessID, entity, *entityID); persisted != nil {
-				after = persisted
+				after = mergeSnapshots(after, persisted)
 			}
 		}
 
@@ -212,6 +223,32 @@ func recordWithRetry(db *gorm.DB, entry *Entry) error {
 		time.Sleep(time.Duration(attempt+1) * 10 * time.Millisecond)
 	}
 	return err
+}
+
+// mergeSnapshots overlays persisted fields on the response snapshot, keeping
+// response-only fields such as line items.
+func mergeSnapshots(base, overlay JSON) JSON {
+	if overlay.IsZero() {
+		return base
+	}
+	if base.IsZero() {
+		return overlay
+	}
+	var baseMap, overlayMap map[string]any
+	if err := json.Unmarshal(base, &baseMap); err != nil {
+		return overlay
+	}
+	if err := json.Unmarshal(overlay, &overlayMap); err != nil {
+		return overlay
+	}
+	for key, value := range overlayMap {
+		baseMap[key] = value
+	}
+	raw, err := json.Marshal(baseMap)
+	if err != nil {
+		return overlay
+	}
+	return Sanitize(JSON(raw))
 }
 
 // recordTypeFromJSON reads the receipt record type from a commit response.

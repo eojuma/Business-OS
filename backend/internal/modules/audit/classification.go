@@ -109,6 +109,8 @@ func EntityTable(entity string) (string, bool) {
 		return "expenses", true
 	case "invoice":
 		return "invoices", true
+	case "stock_movement":
+		return "stock_movements", true
 	case "user":
 		return "users", true
 	case "business":

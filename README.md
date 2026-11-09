@@ -238,7 +238,7 @@ NEXT_PUBLIC_GOOGLE_CLIENT_ID=<client-id>.apps.googleusercontent.com
 
 Behaviour and security rules:
 
-- A password account is **never** linked to a Google identity automatically. When a Google email matches a verified password account, sign-in returns `409` with code `google_link_requires_password` (or `google_link_required` for passwordless accounts). The user signs in with their existing method and connects Google from **Settings → Connected accounts** (`POST /auth/google/link`), which requires the Google email to match the account email.
+- A password account is **never** linked to a Google identity automatically. When a Google email matches a verified password account, sign-in returns `409` with a code `google_link_requires_password` (or `google_link_required` for passwordless accounts). The user signs in with their existing method and connects Google from **Settings → Connected accounts** (`POST /auth/google/link`), which requires the Google email to match the account email.
 - A **verified** local account is never silently claimed. An **unverified** local account (password sign-up that was never confirmed) can be claimed by the Google-verified owner: the account is marked verified, the Google subject is attached, and the untrusted password is cleared. This resolves pre-registration/“pre-hijacking” abuse without locking out the real inbox owner.
 - If the Google subject behind an email changes (Workspace user recreated, address reassigned), sign-in returns `409` with code `google_account_conflict`. Re-linking is a deliberate operator action: verify the new owner out of band and clear the stale link before the user signs in again.
 

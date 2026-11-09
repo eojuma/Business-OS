@@ -138,3 +138,20 @@ describe("user id from token", () => {
     expect(decodeUserId(tokenWith({ user_id: "" }))).toBeNull();
   });
 });
+
+describe("navigation keyboard accessibility", () => {
+  it("every navigation item has an href for keyboard access", () => {
+    const items = NAV_GROUPS.flatMap((group) => group.items);
+    items.forEach((item) => {
+      expect(item.href).toBeTruthy();
+      expect(item.href.startsWith("/")).toBe(true);
+    });
+  });
+
+  it("every group button has an accessible label", () => {
+    NAV_GROUPS.forEach((group) => {
+      expect(group.label).toBeTruthy();
+      expect(group.label.length).toBeGreaterThan(0);
+    });
+  });
+});

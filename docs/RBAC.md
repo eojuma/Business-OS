@@ -83,4 +83,4 @@ for the token to expire.
 
 When adding a protected route, add its mapping in
 `backend/internal/shared/permissions/routes.go`; the router test fails if a
-protected route has no mapping.
+protected route has no mappings.

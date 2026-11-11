@@ -76,7 +76,7 @@ Design rules enforced across the codebase:
 - **Tenant scope comes from the token.** Protected handlers read the business identifier from the JWT via `middleware.CurrentBusinessID`; request bodies never supply it.
 - **Cross-module writes are transactional.** Stock, sales, receivables and supplier balances are updated inside a single `db.Transaction`.
 - **Modules communicate through narrow interfaces.** A module declares only the capability it needs from another module and adapters translate errors at the boundary.
-- **Migrations are embedded and serialized.** They run at API startup under a PostgreSQL advisory lock so parallel processes cannot apply them concurrently.
+- **Migrations are embedded and serialized.**  They run at API startup under a PostgreSQL advisory lock so parallel processes cannot apply them concurrently.
 
 ---
 

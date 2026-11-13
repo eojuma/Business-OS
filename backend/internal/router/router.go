@@ -7,6 +7,7 @@ import (
 	"github.com/businessos/backend/internal/config"
 	"github.com/businessos/backend/internal/modules/analytics"
 	"github.com/businessos/backend/internal/modules/assistant"
+	"github.com/businessos/backend/internal/modules/audit"
 	"github.com/businessos/backend/internal/modules/auth"
 	"github.com/businessos/backend/internal/modules/business"
 	"github.com/businessos/backend/internal/modules/customers"
@@ -25,12 +26,18 @@ import (
 	"gorm.io/gorm"
 )
 
+// New builds the API router and returns the auth background drain hook.
 func New(db *gorm.DB, cfg *config.Config) (*gin.Engine, func(context.Context)) {
 	if cfg.IsProduction() {
 		gin.SetMode(gin.ReleaseMode)
 	}
 
 	r := gin.New()
+	if len(cfg.TrustedProxies) == 0 {
+		_ = r.SetTrustedProxies(nil)
+	} else if err := r.SetTrustedProxies(cfg.TrustedProxies); err != nil {
+		_ = r.SetTrustedProxies(nil)
+	}
 	r.Use(gin.Recovery())
 	r.Use(middleware.RequestLogger())
 	r.Use(middleware.CORS(cfg))
@@ -45,7 +52,7 @@ func New(db *gorm.DB, cfg *config.Config) (*gin.Engine, func(context.Context)) {
 	business.RegisterRoutes(v1, db, cfg)
 
 	protected := v1.Group("")
-	protected.Use(middleware.RequireAuth(cfg, middleware.RoleFromDB(db)), middleware.RequireRoutePermission())
+	protected.Use(middleware.RequireAuth(cfg, middleware.RoleFromDB(db)), middleware.RequireRoutePermission(), audit.Middleware(db))
 	{
 		inventory.RegisterRoutes(protected, db, cfg)
 		products.RegisterRoutes(protected, db, cfg)
@@ -60,6 +67,7 @@ func New(db *gorm.DB, cfg *config.Config) (*gin.Engine, func(context.Context)) {
 		assistant.RegisterRoutes(protected, db, cfg)
 		receipts.RegisterRoutes(protected, db, cfg)
 		invoices.RegisterRoutes(protected, db, cfg)
+		audit.RegisterRoutes(protected, db, cfg)
 	}
 
 	return r, waitAuthBackground

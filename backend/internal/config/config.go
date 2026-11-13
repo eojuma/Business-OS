@@ -20,6 +20,9 @@ type Config struct {
 	// opposed to the development default).
 	FrontendURLSet bool
 	AllowedOrigins []string
+	// TrustedProxies lists proxy IPs/CIDRs allowed to set X-Forwarded-For.
+	// Empty disables proxy trust so clients cannot choose their audit IP.
+	TrustedProxies []string
 
 	DBHost     string
 	DBPort     string
@@ -80,6 +83,7 @@ func Load() *Config {
 		FrontendURL:    frontendURL,
 		FrontendURLSet: frontendSet,
 		AllowedOrigins: parseOrigins(frontendURL, appEnv == "production"),
+		TrustedProxies: parseCSV(getEnv("TRUSTED_PROXIES", "")),
 
 		DBHost:     getEnv("DB_HOST", "localhost"),
 		DBPort:     getEnv("DB_PORT", "5432"),
@@ -228,6 +232,17 @@ func parseOrigins(raw string, production bool) []string {
 	}
 
 	return origins
+}
+
+// parseCSV splits a comma-separated list into trimmed, non-empty values.
+func parseCSV(raw string) []string {
+	values := make([]string, 0)
+	for _, part := range strings.Split(raw, ",") {
+		if value := strings.TrimSpace(part); value != "" {
+			values = append(values, value)
+		}
+	}
+	return values
 }
 
 func getEnv(key, fallback string) string {

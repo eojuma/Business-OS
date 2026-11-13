@@ -2,6 +2,7 @@ package permissions
 
 import "testing"
 
+// TestAllRolesAreValid checks the supported role list.
 func TestAllRolesAreValid(t *testing.T) {
 	for _, role := range AllRoles {
 		if !ValidRole(role) {
@@ -13,6 +14,7 @@ func TestAllRolesAreValid(t *testing.T) {
 	}
 }
 
+// TestPermissionMatrix covers representative allow and deny decisions.
 func TestPermissionMatrix(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -20,6 +22,10 @@ func TestPermissionMatrix(t *testing.T) {
 		permission Permission
 		want       bool
 	}{
+		{"owner reads audit", RoleOwner, AuditRead, true},
+		{"admin reads audit", RoleAdmin, AuditRead, true},
+		{"manager cannot read audit", RoleManager, AuditRead, false},
+		{"accountant cannot read audit", RoleAccountant, AuditRead, false},
 		{"owner manages team", RoleOwner, TeamManage, true},
 		{"admin manages team", RoleAdmin, TeamManage, true},
 		{"manager reads team", RoleManager, TeamRead, true},
@@ -50,6 +56,7 @@ func TestPermissionMatrix(t *testing.T) {
 	}
 }
 
+// TestForRoute checks route-to-permission mappings.
 func TestForRoute(t *testing.T) {
 	tests := []struct {
 		method string

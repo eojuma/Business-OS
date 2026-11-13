@@ -51,6 +51,10 @@ describe("frontend permission matrix", () => {
 
     expect(can("manager", PERMISSIONS.teamRead)).toBe(true);
     expect(can("manager", PERMISSIONS.teamManage)).toBe(false);
+    expect(can("manager", PERMISSIONS.auditRead)).toBe(false);
+    expect(can("accountant", PERMISSIONS.auditRead)).toBe(false);
+    expect(can("owner", PERMISSIONS.auditRead)).toBe(true);
+    expect(can("admin", PERMISSIONS.auditRead)).toBe(true);
   });
 
   it("rejects unknown or missing roles", () => {

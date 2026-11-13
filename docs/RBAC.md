@@ -55,6 +55,7 @@ for the token to expire.
 | `finance:delete` | Yes | Yes |  |  |  |
 | `reports:read` | Yes | Yes |  | Yes |  |
 | `analytics:read` | Yes | Yes |  | Yes |  |
+| `audit:read` | Yes |  |  |  |  |
 | `notifications:read` | Yes | Yes | Yes | Yes | Yes |
 | `notifications:write` | Yes | Yes | Yes | Yes | Yes |
 | `assistant:use` | Yes | Yes | Yes | Yes | Yes |
@@ -78,6 +79,8 @@ for the token to expire.
   `receipts:use`.
 - Invoice listing and detail require `invoices:read`; applying a payment requires
   `invoices:payment`.
+- The audit viewer (`GET /api/v1/audit`) requires `audit:read`, held only by
+  owner and admin.
 - The dashboard hides navigation items and action controls the current role
   cannot use, and short-circuits pages that require a missing read permission.
 

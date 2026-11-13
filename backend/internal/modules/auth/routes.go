@@ -5,6 +5,7 @@ import (
 	"log"
 
 	"github.com/businessos/backend/internal/config"
+	"github.com/businessos/backend/internal/modules/audit"
 	"github.com/businessos/backend/internal/modules/business"
 	"github.com/businessos/backend/internal/shared/email"
 	"github.com/businessos/backend/internal/shared/middleware"
@@ -37,6 +38,7 @@ func (c *businessOwnerCreator) DeleteWorkspace(businessID uuid.UUID) error {
 	return c.db.Where("id = ?", businessID).Delete(&business.Business{}).Error
 }
 
+// RegisterRoutes wires auth, account, and team endpoints and returns the drain hook.
 func RegisterRoutes(rg *gin.RouterGroup, db *gorm.DB, cfg *config.Config) func(context.Context) {
 	repo := NewRepository(db)
 
@@ -64,7 +66,7 @@ func RegisterRoutes(rg *gin.RouterGroup, db *gorm.DB, cfg *config.Config) func(c
 	linkGroup.POST("/google/link", handler.LinkGoogle)
 	linkGroup.POST("/google/unlink", handler.UnlinkGoogle)
 	team := rg.Group("/users")
-	team.Use(middleware.RequireAuth(cfg, middleware.RoleFromDB(db)), middleware.RequireRoutePermission())
+	team.Use(middleware.RequireAuth(cfg, middleware.RoleFromDB(db)), middleware.RequireRoutePermission(), audit.Middleware(db))
 	team.GET("", handler.ListTeam)
 	team.POST("", handler.CreateTeamUser)
 	team.PATCH("/:id/role", handler.UpdateTeamMemberRole)

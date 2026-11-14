@@ -10,6 +10,7 @@ import {
   LayoutDashboard,
   Package,
   ScanLine,
+  ScrollText,
   Settings,
   ShoppingCart,
   Truck,
@@ -74,6 +75,7 @@ export const NAV_GROUPS: NavGroup[] = [
     label: "System",
     items: [
       { href: "/dashboard/notifications", label: "Notifications", icon: Bell, permission: PERMISSIONS.notificationsRead },
+      { href: "/dashboard/audit", label: "Audit log", icon: ScrollText, permission: PERMISSIONS.auditRead },
       { href: "/dashboard/assistant", label: "AI assistant", icon: Brain, permission: PERMISSIONS.assistantUse },
       { href: "/dashboard/settings", label: "Settings", icon: Settings, permission: PERMISSIONS.accountSelf },
     ],

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 
+	"github.com/businessos/backend/internal/modules/audit"
 	"github.com/businessos/backend/internal/shared/middleware"
 	"github.com/businessos/backend/internal/shared/response"
 	"github.com/gin-gonic/gin"
@@ -26,6 +27,7 @@ type recordMovementRequest struct {
 	Note      string            `json:"note"`
 }
 
+// RecordMovement applies a stock movement and exposes it to the audit hook.
 func (h *Handler) RecordMovement(c *gin.Context) {
 	businessID, err := middleware.CurrentBusinessID(c)
 	if err != nil {
@@ -45,7 +47,7 @@ func (h *Handler) RecordMovement(c *gin.Context) {
 		return
 	}
 
-	level, err := h.service.RecordMovement(RecordMovementInput{
+	level, movement, err := h.service.RecordMovement(RecordMovementInput{
 		BusinessID: businessID,
 		ProductID:  productID,
 		Type:       req.Type,
@@ -62,6 +64,7 @@ func (h *Handler) RecordMovement(c *gin.Context) {
 		return
 	}
 
+	audit.SetEntityID(c, movement.ID)
 	response.Success(c, http.StatusCreated, level)
 }
 

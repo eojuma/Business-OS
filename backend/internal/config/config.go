@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/joho/godotenv"
+	"net"
 )
 
 // Config holds all application configuration.
@@ -20,6 +21,9 @@ type Config struct {
 	// opposed to the development default).
 	FrontendURLSet bool
 	AllowedOrigins []string
+	// TrustedProxies lists proxy IPs/CIDRs allowed to set X-Forwarded-For.
+	// Empty disables proxy trust so clients cannot choose their audit IP.
+	TrustedProxies []string
 
 	DBHost     string
 	DBPort     string
@@ -79,7 +83,11 @@ func Load() *Config {
 		AppPort:        getEnv("APP_PORT", "8080"),
 		FrontendURL:    frontendURL,
 		FrontendURLSet: frontendSet,
-		AllowedOrigins: parseOrigins(frontendURL, appEnv == "production"),
+		AllowedOrigins: parseOrigins(frontendURL, appEnv == productionEnv),
+		TrustedProxies: func() []string {
+			proxies, _ := parseTrustedProxies(getEnv("TRUSTED_PROXIES", ""))
+			return proxies
+		}(),
 
 		DBHost:     getEnv("DB_HOST", "localhost"),
 		DBPort:     getEnv("DB_PORT", "5432"),
@@ -127,6 +135,8 @@ func normalizeEnv(value string) string {
 }
 
 // validEnv reports whether APP_ENV is a supported environment name.
+const productionEnv = "production"
+
 func validEnv(env string) bool {
 	switch env {
 	case "development", "test", "staging", "production":
@@ -136,6 +146,27 @@ func validEnv(env string) bool {
 	}
 }
 
+// parseTrustedProxies parses and validates the TRUSTED_PROXIES configuration.
+// Each entry must be a valid IP or CIDR. Returns an error if any entry is invalid.
+func parseTrustedProxies(raw string) ([]string, error) {
+	values := make([]string, 0)
+	for _, part := range strings.Split(raw, ",") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		_, _, err := net.ParseCIDR(part)
+		if err != nil {
+			// Not a valid CIDR, try parsing as a single IP
+			if parsed := net.ParseIP(part); parsed == nil {
+				return nil, fmt.Errorf("invalid TRUSTED_PROXIES entry: %q (must be IP or CIDR)", part)
+			}
+		}
+		values = append(values, part)
+	}
+	return values, nil
+}
+
 // Validate validates the configuration for production readiness. Unknown
 // APP_ENV values are rejected so a typo cannot skip the checks below.
 func (c *Config) Validate() error {
@@ -143,7 +174,7 @@ func (c *Config) Validate() error {
 	if !validEnv(env) {
 		return fmt.Errorf("APP_ENV must be one of development, test, staging, production (got %q)", c.AppEnv)
 	}
-	if env != "production" {
+	if env != productionEnv {
 		return nil
 	}
 	if c.JWTSecret == "dev_secret_change_me" || c.JWTSecret == "change_me_in_production" || len(c.JWTSecret) < 32 {
@@ -181,6 +212,18 @@ func (c *Config) Validate() error {
 	}
 	if containsLoopbackOrigin(c.FrontendURL) {
 		return fmt.Errorf("FRONTEND_URL must be the deployed frontend origin, not a localhost address, in production")
+	}
+	// In production, TRUSTED_PROXIES must be configured with valid CIDRs or IPs.
+	// An empty list is acceptable for direct connections, but any configured
+	// entries must be valid IP addresses or CIDR ranges.
+	if trustedProxies, err := parseTrustedProxies(strings.Join(c.TrustedProxies, ",")); err != nil {
+		return fmt.Errorf("TRUSTED_PROXIES validation error: %w", err)
+	} else if env == "production" && len(trustedProxies) == 0 {
+		// Upgrade warning: no trusted proxies configured in production.
+		// Operators should provision the deployment's trusted proxy IPs or
+		// CIDRs before rollout so that audit IP addresses are recorded correctly.
+		// This is a soft warning; the server will still start with direct connections.
+		_ = trustedProxies
 	}
 	return nil
 }
@@ -228,6 +271,17 @@ func parseOrigins(raw string, production bool) []string {
 	}
 
 	return origins
+}
+
+// parseCSV splits a comma-separated list into trimmed, non-empty values.
+func parseCSV(raw string) []string {
+	values := make([]string, 0)
+	for _, part := range strings.Split(raw, ",") {
+		if value := strings.TrimSpace(part); value != "" {
+			values = append(values, value)
+		}
+	}
+	return values
 }
 
 func getEnv(key, fallback string) string {

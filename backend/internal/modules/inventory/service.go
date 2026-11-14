@@ -29,7 +29,7 @@ type RecordMovementInput struct {
 }
 
 type Service interface {
-	RecordMovement(input RecordMovementInput) (*StockLevel, error)
+	RecordMovement(input RecordMovementInput) (*StockLevel, *StockMovement, error)
 	GetStockLevel(productID, businessID uuid.UUID) (*StockLevel, error)
 	ListLowStock(businessID uuid.UUID) ([]StockLevel, error)
 	ListMovements(productID, businessID uuid.UUID) ([]StockMovement, error)
@@ -44,7 +44,8 @@ func NewService(repo Repository, notifier LowStockNotifier) Service {
 	return &service{repo: repo, notifier: notifier}
 }
 
-func (s *service) RecordMovement(input RecordMovementInput) (*StockLevel, error) {
+// RecordMovement applies a stock movement and returns the updated level too.
+func (s *service) RecordMovement(input RecordMovementInput) (*StockLevel, *StockMovement, error) {
 	direction := input.Direction
 	if direction != DirectionOut {
 		direction = DirectionIn
@@ -60,7 +61,7 @@ func (s *service) RecordMovement(input RecordMovementInput) (*StockLevel, error)
 			currentQty = current.Quantity
 		}
 		if currentQty+signed < 0 {
-			return nil, ErrInsufficientStock
+			return nil, nil, ErrInsufficientStock
 		}
 	}
 
@@ -74,7 +75,7 @@ func (s *service) RecordMovement(input RecordMovementInput) (*StockLevel, error)
 
 	level, err := s.repo.RecordMovement(movement, direction)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	// Fire the alert immediately so the notifications page updates without
@@ -86,7 +87,7 @@ func (s *service) RecordMovement(input RecordMovementInput) (*StockLevel, error)
 		}
 	}
 
-	return level, nil
+	return level, movement, nil
 }
 
 func (s *service) GetStockLevel(productID, businessID uuid.UUID) (*StockLevel, error) {

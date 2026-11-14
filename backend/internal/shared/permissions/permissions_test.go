@@ -2,6 +2,7 @@ package permissions
 
 import "testing"
 
+// TestAllRolesAreValid checks the supported role list.
 func TestAllRolesAreValid(t *testing.T) {
 	for _, role := range AllRoles {
 		if !ValidRole(role) {
@@ -13,6 +14,7 @@ func TestAllRolesAreValid(t *testing.T) {
 	}
 }
 
+// TestPermissionMatrix covers representative allow and deny decisions.
 func TestPermissionMatrix(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -20,6 +22,10 @@ func TestPermissionMatrix(t *testing.T) {
 		permission Permission
 		want       bool
 	}{
+		{"owner reads audit", RoleOwner, AuditRead, true},
+		{"admin reads audit", RoleAdmin, AuditRead, true},
+		{"manager cannot read audit", RoleManager, AuditRead, false},
+		{"accountant cannot read audit", RoleAccountant, AuditRead, false},
 		{"owner manages team", RoleOwner, TeamManage, true},
 		{"admin manages team", RoleAdmin, TeamManage, true},
 		{"manager reads team", RoleManager, TeamRead, true},
@@ -50,6 +56,7 @@ func TestPermissionMatrix(t *testing.T) {
 	}
 }
 
+// TestForRoute checks route-to-permission mappings.
 func TestForRoute(t *testing.T) {
 	tests := []struct {
 		method string
@@ -70,6 +77,31 @@ func TestForRoute(t *testing.T) {
 		permission, ok := ForRoute(tt.method, tt.path)
 		if ok != tt.mapped || permission != tt.want {
 			t.Fatalf("ForRoute(%q, %q) = (%q, %t), want (%q, %t)", tt.method, tt.path, permission, ok, tt.want, tt.mapped)
+		}
+	}
+}
+
+// TestForMountedRoutes checks that mounted routes enforce permissions correctly.
+const auditRoute = "/api/v1/audit"
+
+func TestForMountedRoutes(t *testing.T) {
+	tests := []struct {
+		method string
+		path   string
+		role   string
+		want   bool
+	}{
+		{"GET", auditRoute, RoleOwner, true},
+		{"GET", auditRoute, RoleAdmin, true},
+		{"GET", auditRoute, RoleManager, false},
+		{"GET", auditRoute, RoleAccountant, false},
+		{"GET", auditRoute, "", false},
+	}
+	for _, tt := range tests {
+		permission, _ := ForRoute(tt.method, tt.path)
+		got := Allows(tt.role, permission)
+		if got != tt.want {
+			t.Fatalf("Allows(%q, %q) = %t, want %t", tt.role, permission, got, tt.want)
 		}
 	}
 }

@@ -53,6 +53,7 @@ export const PERMISSIONS = {
   notificationsWrite: "notifications:write",
   assistantUse: "assistant:use",
   receiptsUse: "receipts:use",
+  auditRead: "audit:read",
 } as const;
 
 export type Permission = (typeof PERMISSIONS)[keyof typeof PERMISSIONS];

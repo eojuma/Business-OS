@@ -18,7 +18,9 @@ func RegisterRoutes(rg *gin.RouterGroup, db *gorm.DB, cfg *config.Config) {
 
 	group := rg.Group("/business")
 	{
-		group.POST("", handler.Create)
+		// The public create route is audited without an authenticated actor.
+		// audit.Middleware derives the new business id from the response.
+		group.POST("", audit.Middleware(db), handler.Create)
 
 		protected := group.Group("")
 		protected.Use(middleware.RequireAuth(cfg, middleware.RoleFromDB(db)), middleware.RequireRoutePermission(), audit.Middleware(db))

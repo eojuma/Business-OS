@@ -17,9 +17,20 @@ import (
 // response does not expose it under a conventional key.
 const ContextEntityIDKey = "audit_entity_id"
 
+// ContextBeforeSnapshotKey lets a handler override the pre-change snapshot
+// with one read inside the same transaction as its mutation.
+const ContextBeforeSnapshotKey = "audit_before_snapshot"
+
 // SetEntityID records the entity id for the current request's audit entry.
 func SetEntityID(c *gin.Context, id uuid.UUID) {
 	c.Set(ContextEntityIDKey, id.String())
+}
+
+// SetBeforeSnapshot records the authoritative pre-change state for this request.
+// Handlers that already hold a row lock inside a transaction can capture the
+// snapshot there and pass it here so the audit entry reflects their transition.
+func SetBeforeSnapshot(c *gin.Context, snapshot JSON) {
+	c.Set(ContextBeforeSnapshotKey, snapshot)
 }
 
 // Middleware records successful mutating requests from one shared hook.
@@ -38,6 +49,9 @@ func Middleware(db *gorm.DB) gin.HandlerFunc {
 			return
 		}
 
+		// The fallback pre-change snapshot is read immediately before the
+		// handler. Under concurrent writes handlers can supply a
+		// transaction-accurate snapshot via SetBeforeSnapshot.
 		var entityID *uuid.UUID
 		var before JSON
 		if businessID != nil {
@@ -67,6 +81,11 @@ func Middleware(db *gorm.DB) gin.HandlerFunc {
 				return
 			}
 			entityID = businessID
+		}
+		if raw, exists := c.Get(ContextBeforeSnapshotKey); exists {
+			if snapshot, ok := raw.(JSON); ok {
+				before = snapshot
+			}
 		}
 		if override := contextUUID(c, ContextEntityIDKey); override != nil {
 			entityID = override

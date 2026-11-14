@@ -80,3 +80,28 @@ func TestForRoute(t *testing.T) {
 		}
 	}
 }
+
+// TestForMountedRoutes checks that mounted routes enforce permissions correctly.
+const auditRoute = "/api/v1/audit"
+
+func TestForMountedRoutes(t *testing.T) {
+	tests := []struct {
+		method string
+		path   string
+		role   string
+		want   bool
+	}{
+		{"GET", auditRoute, RoleOwner, true},
+		{"GET", auditRoute, RoleAdmin, true},
+		{"GET", auditRoute, RoleManager, false},
+		{"GET", auditRoute, RoleAccountant, false},
+		{"GET", auditRoute, "", false},
+	}
+	for _, tt := range tests {
+		permission, _ := ForRoute(tt.method, tt.path)
+		got := Allows(tt.role, permission)
+		if got != tt.want {
+			t.Fatalf("Allows(%q, %q) = %t, want %t", tt.role, permission, got, tt.want)
+		}
+	}
+}

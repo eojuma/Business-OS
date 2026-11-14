@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/businessos/backend/internal/shared/middleware"
 	"github.com/gin-gonic/gin"
@@ -95,6 +96,19 @@ func TestAuditListRejectsInvalidDateRange(t *testing.T) {
 
 	if recorder.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusBadRequest)
+	}
+}
+
+// TestAuditListRejectsInvalidDateRangeWithRealService documents its scenario and asserts the expected audit behaviour.
+func TestAuditListRejectsInvalidDateRangeWithRealService(t *testing.T) {
+	db, businessID, _ := setupAuditTestDB(t)
+	repo := NewRepository(db)
+	service := NewService(repo)
+
+	from := time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC)
+	to := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	if _, _, err := service.List(businessID, ListFilter{DateFrom: &from, DateTo: &to}); err != ErrInvalidDateRange {
+		t.Fatalf("expected ErrInvalidDateRange, got %v", err)
 	}
 }
 

@@ -84,7 +84,7 @@ func Middleware(db *gorm.DB) gin.HandlerFunc {
 		}
 		if raw, exists := c.Get(ContextBeforeSnapshotKey); exists {
 			if snapshot, ok := raw.(JSON); ok {
-				before = snapshot
+				before = Sanitize(snapshot)
 			}
 		}
 		if override := contextUUID(c, ContextEntityIDKey); override != nil {
@@ -254,10 +254,14 @@ func mergeSnapshots(base, overlay JSON) JSON {
 		return overlay
 	}
 	var baseMap, overlayMap map[string]any
-	if err := json.Unmarshal(base, &baseMap); err != nil {
+	baseDecoder := json.NewDecoder(bytes.NewReader(base))
+	baseDecoder.UseNumber()
+	if err := baseDecoder.Decode(&baseMap); err != nil {
 		return overlay
 	}
-	if err := json.Unmarshal(overlay, &overlayMap); err != nil {
+	overlayDecoder := json.NewDecoder(bytes.NewReader(overlay))
+	overlayDecoder.UseNumber()
+	if err := overlayDecoder.Decode(&overlayMap); err != nil {
 		return overlay
 	}
 	for key, value := range overlayMap {

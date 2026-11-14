@@ -44,6 +44,7 @@ export default function AuditPage() {
   const [dateTo, setDateTo] = useState("");
   const [page, setPage] = useState(1);
   const limit = 20;
+  const latestRequest = useRef(0);
 
   /** Converts a local date-only string to a UTC timestamp covering the whole day. */
   function dayBounds(date: string, endOfDay: boolean): string {
@@ -74,6 +75,7 @@ export default function AuditPage() {
     setLoading(true);
     setError("");
     setFilterError("");
+    const requestId = ++latestRequest.current;
     try {
       if (dateFrom && dateTo && dateFrom > dateTo) {
         setFilterError("From date must be on or before To date.");
@@ -87,14 +89,16 @@ export default function AuditPage() {
       if (dateFrom) params.date_from = dayBounds(dateFrom, false);
       if (dateTo) params.date_to = dayBounds(dateTo, true);
       const res = await api.get("/audit", { params });
+      if (requestId !== latestRequest.current) return;
       setEntries(res.data.data || []);
       setMeta(res.data.meta || null);
     } catch (e) {
+      if (requestId !== latestRequest.current) return;
       setEntries([]);
       setMeta(null);
       setError(errorMessage(e, "Failed to load the audit log"));
     } finally {
-      setLoading(false);
+      if (requestId === latestRequest.current) setLoading(false);
     }
   }, [action, actorId, canRead, dateFrom, dateTo, entityType, page]);
 
@@ -102,28 +106,6 @@ export default function AuditPage() {
     void loadEntries();
     void loadActors();
   }, [loadEntries, loadActors]);
-
-  useEffect(() => {
-    if (!canRead) return;
-    let active = true;
-    api
-      .get("/users")
-      .then((res) => {
-        if (active) {
-          setUsers(res.data.data || []);
-          setActorError("");
-        }
-      })
-      .catch(() => {
-        if (active) {
-          setUsers([]);
-          setActorError("Unable to load actor list. Try again.");
-        }
-      });
-    return () => {
-      active = false;
-    };
-  }, [canRead]);
 
   if (!canRead) {
     return <div className="panel p-6 text-sm text-muted">Your role does not have access to the audit log.</div>;

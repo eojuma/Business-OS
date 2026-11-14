@@ -74,6 +74,12 @@ func TestRepositoryListFiltersAndPagination(t *testing.T) {
 	if firstPage[0].ID == secondPage[0].ID {
 		t.Fatal("pagination returned duplicate rows")
 	}
+	// Verify pagination returns entries newest first across both pages.
+	if firstPage[0].EntityType != entries[2].EntityType ||
+		firstPage[1].EntityType != entries[1].EntityType ||
+		secondPage[0].EntityType != entries[0].EntityType {
+		t.Fatal("pagination did not return entries newest first")
+	}
 
 	otherEntries, total, err := repo.List(uuid.New(), ListFilter{Page: 1, Limit: 20})
 	if err != nil {

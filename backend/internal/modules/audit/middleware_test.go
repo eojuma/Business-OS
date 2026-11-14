@@ -227,8 +227,8 @@ func TestMiddlewareRecordsFailedRequestsLeavesAuditUnchanged(t *testing.T) {
 	db, businessID, userID := setupAuditTestDB(t)
 	productID := uuid.New()
 	if err := db.Exec(
-		`INSERT INTO products (id, business_id, name, unit, price) VALUES (?, ?, ?, ?)`,
-		productID, businessID, "Old Name",
+		`INSERT INTO products (id, business_id, name, unit, price) VALUES (?, ?, ?, ?, ?)`,
+		productID, businessID, "Old Name", "unit", 100,
 	).Error; err != nil {
 		t.Fatalf("create product: %v", err)
 	}

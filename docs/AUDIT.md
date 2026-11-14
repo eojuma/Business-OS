@@ -33,9 +33,9 @@ response. Public `POST /api/v1/business` creation is audited without an actor an
 uses the new business id from the response.
 
 Handlers that mutate a row inside their own transaction can call
-`audit.SetBeforeSnapshot` with the state they read under the row lock, so the
-entry describes that request's transition even when concurrent writers target the
-same row.
+`audit.SetBeforeSnapshot` with the state they read under the row lock. This sets
+the before snapshot only. The after snapshot is read from the database after the
+handler returns, so a concurrent commit to the same row can appear in that entry.
 
 ## Secret handling
 
@@ -55,9 +55,9 @@ investigate a failed audit insert.
 
 Fallback before snapshots are captured just before the handler runs. Two
 concurrent updates to the same row can therefore observe the same predecessor;
-the entry still records the actor and the persisted after state, but exact
-per-transaction history requires the handler to supply `SetBeforeSnapshot` from
-inside its transaction.
+the entry still records the actor and the persisted after state. Exact
+per-request history is only guaranteed for the locked before snapshot, because
+the after snapshot is captured after the handler returns.
 
 ## Immutability
 

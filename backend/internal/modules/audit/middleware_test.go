@@ -162,6 +162,105 @@ func TestMiddlewareRecordsProductUpdate(t *testing.T) {
 	}
 }
 
+// TestMiddlewareUsesPersistedSnapshotForOmittedFields verifies that the after snapshot
+// comes from the persisted database state, not the response, so omitted fields retain
+// their persisted values.
+func TestMiddlewareUsesPersistedSnapshotForOmittedFields(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db, businessID, userID := setupAuditTestDB(t)
+	productID := uuid.New()
+	// Create a product with a SKU that will be cleared in the update.
+	if err := db.Exec(
+		`INSERT INTO products (id, business_id, name, sku, unit, price) VALUES (?, ?, ?, ?, ?, ?)`,
+		productID, businessID, "Test Product", "OLD-SKU", "unit", 100,
+	).Error; err != nil {
+		t.Fatalf("create product: %v", err)
+	}
+
+	router := auditRouter(db, businessID, userID)
+	router.PATCH("/api/v1/products/:id", func(c *gin.Context) {
+		// Clear the SKU in the database.
+		if err := db.Exec("UPDATE products SET sku = '' WHERE id = ?", productID).Error; err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{testErrorKey: err.Error()})
+			return
+		}
+		// Return a response that omits the SKU field entirely.
+		response.Success(c, http.StatusOK, map[string]any{
+			"id":    productID,
+			"name":  "Updated Product",
+			"price": 100,
+			// Note: sku is intentionally omitted from the response
+		})
+	})
+
+	request := httptest.NewRequestWithContext(context.Background(), http.MethodPatch,
+		"/api/v1/products/"+productID.String(), strings.NewReader(`{"name":"Updated Product"}`))
+	request.Header.Set("Content-Type", "application/json")
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d: %s", recorder.Code, recorder.Body.String())
+	}
+
+	var entry Entry
+	if err := db.First(&entry).Error; err != nil {
+		t.Fatalf("load audit entry: %v", err)
+	}
+	var after map[string]any
+	if err := json.Unmarshal(entry.After, &after); err != nil {
+		t.Fatalf("decode after: %v", err)
+	}
+	// The after snapshot should contain the persisted empty SKU, not be missing the field.
+	sku, exists := after["sku"]
+	if !exists {
+		t.Fatalf("sku field missing from after snapshot: %+v", after)
+	}
+	if sku != "" {
+		t.Fatalf("sku = %q, want empty string from persisted state", sku)
+	}
+}
+
+// TestMiddlewareRecordsFailedRequestsLeavesAuditUnchanged documents that failed requests
+// do not create audit entries, even when the middleware is active.
+func TestMiddlewareRecordsFailedRequestsLeavesAuditUnchanged(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db, businessID, userID := setupAuditTestDB(t)
+	productID := uuid.New()
+	if err := db.Exec(
+		`INSERT INTO products (id, business_id, name, unit, price) VALUES (?, ?, ?, ?)`,
+		productID, businessID, "Old Name",
+	).Error; err != nil {
+		t.Fatalf("create product: %v", err)
+	}
+
+	router := auditRouter(db, businessID, userID)
+	router.PATCH("/api/v1/products/:id", func(c *gin.Context) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "validation failed"})
+	})
+
+	// Send two failed requests
+	for i := 0; i < 2; i++ {
+		request := httptest.NewRequestWithContext(context.Background(), http.MethodPatch,
+			"/api/v1/products/"+productID.String(), strings.NewReader(`{"name":"New Name"}`))
+		request.Header.Set("Content-Type", "application/json")
+		request.RemoteAddr = "192.0.2.10:1234"
+		recorder := httptest.NewRecorder()
+		router.ServeHTTP(recorder, request)
+		if recorder.Code != http.StatusBadRequest {
+			t.Fatalf("status = %d: %s", recorder.Code, recorder.Body.String())
+		}
+	}
+
+	// Verify no audit entries were created
+	var count int64
+	if err := db.Model(&Entry{}).Where("business_id = ? AND action = ?", businessID, ActionUpdate).Count(&count).Error; err != nil {
+		t.Fatalf("count entries: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("expected 0 audit entries for failed requests, got %d", count)
+	}
+}
+
 // TestMiddlewareRecordsRoleChangeWithoutSecrets documents its scenario and asserts the expected audit behaviour.
 func TestMiddlewareRecordsRoleChangeWithoutSecrets(t *testing.T) {
 	gin.SetMode(gin.TestMode)
@@ -217,6 +316,17 @@ func TestMiddlewareRecordsRoleChangeWithoutSecrets(t *testing.T) {
 		if strings.Contains(before, forbidden) || strings.Contains(after, forbidden) {
 			t.Fatalf("audit entry leaked %q: before=%s after=%s", forbidden, before, after)
 		}
+	}
+	// Verify the role change is captured in both snapshots.
+	var beforeSnapshot, afterSnapshot map[string]any
+	if err := json.Unmarshal(entry.Before, &beforeSnapshot); err != nil {
+		t.Fatalf("decode before: %v", err)
+	}
+	if err := json.Unmarshal(entry.After, &afterSnapshot); err != nil {
+		t.Fatalf("decode after: %v", err)
+	}
+	if beforeSnapshot["role"] != "cashier" || afterSnapshot["role"] != "manager" {
+		t.Fatalf("before role=%v after role=%v", beforeSnapshot["role"], afterSnapshot["role"])
 	}
 }
 
@@ -282,5 +392,44 @@ func TestMiddlewareUsesHandlerSuppliedStockMovementID(t *testing.T) {
 	}
 	if entry.EntityID == nil || *entry.EntityID != movementID {
 		t.Fatalf("entity id = %v, want movement %s", entry.EntityID, movementID)
+	}
+}
+
+func TestMiddlewareUsesHandlerBeforeSnapshot(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db, businessID, userID := setupAuditTestDB(t)
+	productID := uuid.New()
+	if err := db.Exec(
+		`INSERT INTO products (id, business_id, name, unit, price) VALUES (?, ?, ?, ?, ?)`,
+		productID, businessID, "Stored Before", "unit", 100,
+	).Error; err != nil {
+		t.Fatalf("create product: %v", err)
+	}
+
+	router := auditRouter(db, businessID, userID)
+	router.PATCH("/api/v1/products/:id", func(c *gin.Context) {
+		// Simulate a handler that read the row under its own transaction lock.
+		SetBeforeSnapshot(c, JSON(`{"id":"`+productID.String()+`","name":"Locked Before"}`))
+		if err := db.Exec("UPDATE products SET name = ? WHERE id = ?", "After Update", productID).Error; err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{testErrorKey: err.Error()})
+			return
+		}
+		response.Success(c, http.StatusOK, map[string]any{"id": productID, "name": "After Update"})
+	})
+
+	request := httptest.NewRequestWithContext(context.Background(), http.MethodPatch, "/api/v1/products/"+productID.String(), strings.NewReader(`{"name":"After Update"}`))
+	request.Header.Set("Content-Type", "application/json")
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d: %s", recorder.Code, recorder.Body.String())
+	}
+
+	var entry Entry
+	if err := db.First(&entry).Error; err != nil {
+		t.Fatalf("load audit entry: %v", err)
+	}
+	if !strings.Contains(string(entry.Before), "Locked Before") {
+		t.Fatalf("before = %s, want handler-supplied snapshot", entry.Before)
 	}
 }

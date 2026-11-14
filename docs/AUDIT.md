@@ -26,9 +26,16 @@ requests on protected business routes, with these deliberate exceptions:
   are excluded so credentials never enter the trail.
 - Notification read/mark actions are excluded as routine per-user state updates.
 
-Before snapshots are read from the database for updates, deletes, payments,
-restores, receives and role changes. After snapshots are read from the persisted
-row when the entity is known, otherwise from the API response.
+Before snapshots are read from the database immediately before the handler for
+updates, deletes, payments, restores, receives and role changes. After snapshots
+are read from the persisted row when the entity is known, otherwise from the API
+response. Public `POST /api/v1/business` creation is audited without an actor and
+uses the new business id from the response.
+
+Handlers that mutate a row inside their own transaction can call
+`audit.SetBeforeSnapshot` with the state they read under the row lock, so the
+entry describes that request's transition even when concurrent writers target the
+same row.
 
 ## Secret handling
 
@@ -40,10 +47,17 @@ routine per-user state updates.
 
 ## Durability
 
-Audit rows are written immediately after a successful response. The write is
-retried, and any persistent failure is logged. The API currently treats audit
-persistence as best-effort rather than sharing each handler's transaction; use
-the application logs to detect and investigate a failed audit insert.
+Audit rows are written immediately after a successful response and the insert is
+retried; any persistent failure is logged. Audit persistence is currently
+best-effort rather than sharing each handler's mutation transaction, so a hard
+database failure can still drop an entry. Use the application logs to detect and
+investigate a failed audit insert.
+
+Fallback before snapshots are captured just before the handler runs. Two
+concurrent updates to the same row can therefore observe the same predecessor;
+the entry still records the actor and the persisted after state, but exact
+per-transaction history requires the handler to supply `SetBeforeSnapshot` from
+inside its transaction.
 
 ## Immutability
 

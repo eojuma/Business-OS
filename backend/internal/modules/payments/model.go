@@ -41,6 +41,15 @@ const (
 	EntitySupplierPayment ReconciledEntityType = "supplier_payment"
 )
 
+const (
+	ResultCodeKey        = "ResultCode"
+	ResultDescKey        = "ResultDesc"
+	DescAccepted         = "Accepted"
+	DescInvalidSignature = "Invalid signature"
+	DescInvalidPayload   = "Invalid payload"
+	DescInvalidJSON      = "Invalid JSON"
+)
+
 // MpesaTransaction represents a record of Lipa Na M-Pesa STK, C2B, or B2C payout.
 type MpesaTransaction struct {
 	ID                   uuid.UUID            `gorm:"type:uuid;primaryKey;default:gen_random_uuid()" json:"id"`
@@ -95,15 +104,15 @@ func (BankTransaction) TableName() string { return "bank_transactions" }
 
 // Unified review queue item across M-Pesa and Bank transactions.
 type ReviewQueueItem struct {
-	ID           uuid.UUID           `json:"id"`
-	Source       string              `json:"source"` // "mpesa" or "bank"
-	Reference    string              `json:"reference"`
-	Counterparty string              `json:"counterparty"`
-	Amount       int64               `json:"amount"` // cents
-	Type         string              `json:"type"`   // "inflow" or "outflow"
-	Description  string              `json:"description"`
-	TransactedAt time.Time           `json:"transacted_at"`
-	Status       string              `json:"status"`
+	ID           uuid.UUID `json:"id"`
+	Source       string    `json:"source"` // "mpesa" or "bank"
+	Reference    string    `json:"reference"`
+	Counterparty string    `json:"counterparty"`
+	Amount       int64     `json:"amount"` // cents
+	Type         string    `json:"type"`   // "inflow" or "outflow"
+	Description  string    `json:"description"`
+	TransactedAt time.Time `json:"transacted_at"`
+	Status       string    `json:"status"`
 }
 
 // Input DTOs
@@ -128,7 +137,7 @@ type B2CPayoutInput struct {
 type BankManualInput struct {
 	BankName     string    `json:"bank_name"`
 	Reference    string    `json:"reference" binding:"required"`
-	Type         string    `json:"type" binding:"required"` // "inflow" or "outflow"
+	Type         string    `json:"type" binding:"required"`   // "inflow" or "outflow"
 	Amount       int64     `json:"amount" binding:"required"` // in cents
 	Description  string    `json:"description"`
 	TransactedAt time.Time `json:"transacted_at"`

@@ -41,27 +41,27 @@ func (h *Handler) HandleSTKCallback(c *gin.Context) {
 	sig := extractSignature(c)
 	body, err := c.GetRawData()
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"ResultCode": 1, "ResultDesc": "Invalid payload"})
+		c.JSON(http.StatusBadRequest, gin.H{ResultCodeKey: 1, ResultDescKey: DescInvalidPayload})
 		return
 	}
 
 	if err := h.service.HandleSTKCallback(sig, body); err != nil {
 		if errors.Is(err, ErrInvalidSignature) {
-			c.JSON(http.StatusUnauthorized, gin.H{"ResultCode": 1, "ResultDesc": "Invalid signature"})
+			c.JSON(http.StatusUnauthorized, gin.H{ResultCodeKey: 1, ResultDescKey: DescInvalidSignature})
 			return
 		}
-		c.JSON(http.StatusOK, gin.H{"ResultCode": 0, "ResultDesc": "Accepted"})
+		c.JSON(http.StatusOK, gin.H{ResultCodeKey: 0, ResultDescKey: DescAccepted})
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"ResultCode": 0, "ResultDesc": "Accepted"})
+	c.JSON(http.StatusOK, gin.H{ResultCodeKey: 0, ResultDescKey: DescAccepted})
 }
 
 func (h *Handler) HandleC2BValidate(c *gin.Context) {
 	sig := extractSignature(c)
 	var req C2BValidationRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusOK, C2BValidationResponse{ResultCode: 1, ResultDesc: "Invalid JSON"})
+		c.JSON(http.StatusOK, C2BValidationResponse{ResultCode: 1, ResultDesc: DescInvalidJSON})
 		return
 	}
 
@@ -78,7 +78,7 @@ func (h *Handler) HandleC2BConfirm(c *gin.Context) {
 	sig := extractSignature(c)
 	var req C2BConfirmationRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusOK, C2BConfirmationResponse{ResultCode: 1, ResultDesc: "Invalid JSON"})
+		c.JSON(http.StatusOK, C2BConfirmationResponse{ResultCode: 1, ResultDesc: DescInvalidJSON})
 		return
 	}
 
@@ -95,18 +95,18 @@ func (h *Handler) HandleB2CResult(c *gin.Context) {
 	sig := extractSignature(c)
 	body, err := c.GetRawData()
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"ResultCode": 1, "ResultDesc": "Invalid payload"})
+		c.JSON(http.StatusBadRequest, gin.H{ResultCodeKey: 1, ResultDescKey: DescInvalidPayload})
 		return
 	}
 
 	if err := h.service.HandleB2CResult(sig, body); err != nil {
 		if errors.Is(err, ErrInvalidSignature) {
-			c.JSON(http.StatusUnauthorized, gin.H{"ResultCode": 1, "ResultDesc": "Invalid signature"})
+			c.JSON(http.StatusUnauthorized, gin.H{ResultCodeKey: 1, ResultDescKey: DescInvalidSignature})
 			return
 		}
 	}
 
-	c.JSON(http.StatusOK, gin.H{"ResultCode": 0, "ResultDesc": "Accepted"})
+	c.JSON(http.StatusOK, gin.H{ResultCodeKey: 0, ResultDescKey: DescAccepted})
 }
 
 func (h *Handler) HandleB2CTimeout(c *gin.Context) {
@@ -114,11 +114,11 @@ func (h *Handler) HandleB2CTimeout(c *gin.Context) {
 	body, _ := c.GetRawData()
 	if err := h.service.HandleB2CTimeout(sig, body); err != nil {
 		if errors.Is(err, ErrInvalidSignature) {
-			c.JSON(http.StatusUnauthorized, gin.H{"ResultCode": 1, "ResultDesc": "Invalid signature"})
+			c.JSON(http.StatusUnauthorized, gin.H{ResultCodeKey: 1, ResultDescKey: DescInvalidSignature})
 			return
 		}
 	}
-	c.JSON(http.StatusOK, gin.H{"ResultCode": 0, "ResultDesc": "Accepted"})
+	c.JSON(http.StatusOK, gin.H{ResultCodeKey: 0, ResultDescKey: DescAccepted})
 }
 
 // Protected Endpoints
@@ -224,7 +224,7 @@ func (h *Handler) ImportBankStatement(c *gin.Context) {
 	var r io.Reader
 	file, _, err := c.Request.FormFile("statement")
 	if err == nil {
-		defer file.Close()
+		defer func() { _ = file.Close() }()
 		r = file
 	} else {
 		// Try raw body if multipart form-data was not used

@@ -20,12 +20,12 @@ import (
 )
 
 var (
-	ErrInvalidAmount         = errors.New("amount must be greater than zero")
-	ErrMissingPhone          = errors.New("phone number is required")
-	ErrMissingReference      = errors.New("transaction reference is required")
-	ErrAlreadyReconciled     = errors.New("transaction has already been reconciled")
-	ErrInvalidTarget         = errors.New("invalid reconciliation target")
-	ErrInvalidStatementFile  = errors.New("statement file could not be parsed")
+	ErrInvalidAmount        = errors.New("amount must be greater than zero")
+	ErrMissingPhone         = errors.New("phone number is required")
+	ErrMissingReference     = errors.New("transaction reference is required")
+	ErrAlreadyReconciled    = errors.New("transaction has already been reconciled")
+	ErrInvalidTarget        = errors.New("invalid reconciliation target")
+	ErrInvalidStatementFile = errors.New("statement file could not be parsed")
 )
 
 type Service interface {
@@ -235,7 +235,7 @@ func (s *service) HandleSTKCallback(signatureHeader string, body []byte) error {
 // HandleC2BValidation validates incoming C2B payment before acceptance.
 func (s *service) HandleC2BValidation(signatureHeader string, req C2BValidationRequest) (C2BValidationResponse, error) {
 	if !ValidateCallbackSignature(s.cfg.MpesaCallbackSecret, nil, signatureHeader) {
-		return C2BValidationResponse{ResultCode: 1, ResultDesc: "Invalid signature"}, ErrInvalidSignature
+		return C2BValidationResponse{ResultCode: 1, ResultDesc: DescInvalidSignature}, ErrInvalidSignature
 	}
 
 	amount, err := strconv.ParseFloat(req.TransAmount, 64)
@@ -243,18 +243,18 @@ func (s *service) HandleC2BValidation(signatureHeader string, req C2BValidationR
 		return C2BValidationResponse{ResultCode: 1, ResultDesc: "Invalid amount"}, nil
 	}
 
-	return C2BValidationResponse{ResultCode: 0, ResultDesc: "Accepted"}, nil
+	return C2BValidationResponse{ResultCode: 0, ResultDesc: DescAccepted}, nil
 }
 
 // HandleC2BConfirmation handles confirmed C2B payment with automatic reconciliation.
 func (s *service) HandleC2BConfirmation(signatureHeader string, req C2BConfirmationRequest) (C2BConfirmationResponse, error) {
 	if !ValidateCallbackSignature(s.cfg.MpesaCallbackSecret, nil, signatureHeader) {
-		return C2BConfirmationResponse{ResultCode: 1, ResultDesc: "Invalid signature"}, ErrInvalidSignature
+		return C2BConfirmationResponse{ResultCode: 1, ResultDesc: DescInvalidSignature}, ErrInvalidSignature
 	}
 
 	// Idempotency: skip duplicate TransID
 	if existing, err := s.repo.GetMpesaTransactionByReceipt(req.TransID); err == nil && existing != nil {
-		return C2BConfirmationResponse{ResultCode: 0, ResultDesc: "Accepted"}, nil
+		return C2BConfirmationResponse{ResultCode: 0, ResultDesc: DescAccepted}, nil
 	}
 
 	amountFloat, _ := strconv.ParseFloat(req.TransAmount, 64)
@@ -303,7 +303,7 @@ func (s *service) HandleC2BConfirmation(signatureHeader string, req C2BConfirmat
 		return C2BConfirmationResponse{ResultCode: 1, ResultDesc: "Failed to persist"}, err
 	}
 
-	return C2BConfirmationResponse{ResultCode: 0, ResultDesc: "Accepted"}, nil
+	return C2BConfirmationResponse{ResultCode: 0, ResultDesc: DescAccepted}, nil
 }
 
 // InitiateB2C starts an M-Pesa B2C payout for expenses or supplier settlements.
@@ -666,7 +666,7 @@ func (s *service) ImportBankStatement(businessID uuid.UUID, bankName string, r i
 		}
 
 		var amountCents int64
-		var txType BankTransactionType = BankInflow
+		txType := BankInflow
 
 		if inflowIdx >= 0 && inflowIdx < len(row) && strings.TrimSpace(row[inflowIdx]) != "" {
 			if v, err := parseMoneyString(row[inflowIdx]); err == nil && v > 0 {
@@ -790,7 +790,8 @@ func (s *service) ReconcileReviewItem(businessID uuid.UUID, itemID uuid.UUID, in
 	var mpesaTx *MpesaTransaction
 	var bankTx *BankTransaction
 
-	if input.Source == "mpesa" {
+	switch input.Source {
+	case "mpesa":
 		tx, err := s.repo.GetMpesaTransactionByID(itemID, businessID)
 		if err != nil {
 			return ErrTransactionNotFound
@@ -801,7 +802,7 @@ func (s *service) ReconcileReviewItem(businessID uuid.UUID, itemID uuid.UUID, in
 		mpesaTx = tx
 		amount = tx.Amount
 		refString = tx.MpesaReceiptNumber
-	} else if input.Source == "bank" {
+	case "bank":
 		tx, err := s.repo.GetBankTransactionByID(itemID, businessID)
 		if err != nil {
 			return ErrTransactionNotFound
@@ -812,7 +813,7 @@ func (s *service) ReconcileReviewItem(businessID uuid.UUID, itemID uuid.UUID, in
 		bankTx = tx
 		amount = tx.Amount
 		refString = tx.Reference
-	} else {
+	default:
 		return ErrInvalidTarget
 	}
 

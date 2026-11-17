@@ -18,12 +18,12 @@ func TestEveryProtectedRouteHasAPermission(t *testing.T) {
 	engine, _ := New(nil, cfg)
 
 	public := map[string]bool{
-		"GET /health":                    true,
-		"POST /api/v1/auth/register":     true,
-		"POST /api/v1/auth/login":        true,
-		"POST /api/v1/auth/google":       true,
-		"POST /api/v1/auth/email/verify":                   true,
-		"POST /api/v1/auth/email/resend":                   true,
+		"GET /health":                                       true,
+		"POST /api/v1/auth/register":                        true,
+		"POST /api/v1/auth/login":                           true,
+		"POST /api/v1/auth/google":                          true,
+		"POST /api/v1/auth/email/verify":                    true,
+		"POST /api/v1/auth/email/resend":                    true,
 		"POST /api/v1/business":                             true,
 		"POST /api/v1/payments/mpesa/callback/stk":          true,
 		"POST /api/v1/payments/mpesa/callback/c2b-validate": true,

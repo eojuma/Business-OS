@@ -19,11 +19,11 @@ import (
 )
 
 var (
-	ErrInvalidSignature    = errors.New("invalid callback signature")
-	ErrMpesaClientFailed   = errors.New("failed to connect to m-pesa gateway")
-	ErrMpesaAuthFailed     = errors.New("m-pesa authentication failed")
-	ErrMissingConfig       = errors.New("m-pesa configuration is incomplete")
-	ErrTransactionFailed   = errors.New("m-pesa transaction request failed")
+	ErrInvalidSignature  = errors.New("invalid callback signature")
+	ErrMpesaClientFailed = errors.New("failed to connect to m-pesa gateway")
+	ErrMpesaAuthFailed   = errors.New("m-pesa authentication failed")
+	ErrMissingConfig     = errors.New("m-pesa configuration is incomplete")
+	ErrTransactionFailed = errors.New("m-pesa transaction request failed")
 )
 
 type MpesaClient interface {
@@ -70,7 +70,7 @@ func (c *mpesaClient) getOAuthToken(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("%w: %v", ErrMpesaClientFailed, err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		bodyBytes, _ := io.ReadAll(resp.Body)
@@ -95,6 +95,7 @@ func (c *mpesaClient) InitiateSTKPush(ctx context.Context, req DarajaSTKPushRequ
 		return nil, err
 	}
 
+	//nolint:gosec // G117: Daraja STK push protocol requires password field in JSON body
 	payloadBytes, err := json.Marshal(req)
 	if err != nil {
 		return nil, fmt.Errorf("marshal stk request: %w", err)
@@ -113,7 +114,7 @@ func (c *mpesaClient) InitiateSTKPush(ctx context.Context, req DarajaSTKPushRequ
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrMpesaClientFailed, err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	bodyBytes, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -157,7 +158,7 @@ func (c *mpesaClient) InitiateB2CPayout(ctx context.Context, req DarajaB2CReques
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrMpesaClientFailed, err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	bodyBytes, err := io.ReadAll(resp.Body)
 	if err != nil {

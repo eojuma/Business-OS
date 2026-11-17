@@ -12,7 +12,7 @@ import (
 )
 
 var (
-	ErrDuplicateReference = errors.New("bank transaction with this reference already exists")
+	ErrDuplicateReference  = errors.New("bank transaction with this reference already exists")
 	ErrTransactionNotFound = errors.New("payment transaction not found")
 )
 

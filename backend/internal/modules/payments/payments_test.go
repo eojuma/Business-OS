@@ -302,6 +302,7 @@ func TestSTKPushInitiationAndIdempotency(t *testing.T) {
 			ResponseDescription: "Success. Request accepted for processing",
 		},
 	}
+	//nolint:gosec // G101: Daraja sandbox test credentials — not production secrets
 	cfg := &config.Config{
 		MpesaShortCode:      "174379",
 		MpesaPasskey:        "bfb279f9aa9bdbcf158e97dd71a467cd2e0c893059b10f78e6b72ada1ed2c919",

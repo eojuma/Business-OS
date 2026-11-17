@@ -22,9 +22,14 @@ func TestEveryProtectedRouteHasAPermission(t *testing.T) {
 		"POST /api/v1/auth/register":     true,
 		"POST /api/v1/auth/login":        true,
 		"POST /api/v1/auth/google":       true,
-		"POST /api/v1/auth/email/verify": true,
-		"POST /api/v1/auth/email/resend": true,
-		"POST /api/v1/business":          true,
+		"POST /api/v1/auth/email/verify":                   true,
+		"POST /api/v1/auth/email/resend":                   true,
+		"POST /api/v1/business":                             true,
+		"POST /api/v1/payments/mpesa/callback/stk":          true,
+		"POST /api/v1/payments/mpesa/callback/c2b-validate": true,
+		"POST /api/v1/payments/mpesa/callback/c2b-confirm":  true,
+		"POST /api/v1/payments/mpesa/callback/b2c-result":   true,
+		"POST /api/v1/payments/mpesa/callback/b2c-timeout":  true,
 	}
 
 	for _, route := range engine.Routes() {

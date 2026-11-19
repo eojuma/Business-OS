@@ -20,12 +20,13 @@ import (
 )
 
 var (
-	ErrInvalidAmount        = errors.New("amount must be greater than zero")
-	ErrMissingPhone         = errors.New("phone number is required")
-	ErrMissingReference     = errors.New("transaction reference is required")
-	ErrAlreadyReconciled    = errors.New("transaction has already been reconciled")
-	ErrInvalidTarget        = errors.New("invalid reconciliation target")
-	ErrInvalidStatementFile = errors.New("statement file could not be parsed")
+	ErrInvalidAmount           = errors.New("amount must be greater than zero")
+	ErrMissingPhone            = errors.New("phone number is required")
+	ErrMissingReference        = errors.New("transaction reference is required")
+	ErrAlreadyReconciled       = errors.New("transaction has already been reconciled")
+	ErrTransactionNotCompleted = errors.New("only completed m-pesa transactions can be reconciled")
+	ErrInvalidTarget           = errors.New("invalid reconciliation target")
+	ErrInvalidStatementFile    = errors.New("statement file could not be parsed")
 )
 
 type Service interface {
@@ -798,6 +799,9 @@ func (s *service) ReconcileReviewItem(businessID uuid.UUID, itemID uuid.UUID, in
 		}
 		if tx.ReconciliationStatus == Reconciled {
 			return ErrAlreadyReconciled
+		}
+		if tx.Status != StatusCompleted {
+			return ErrTransactionNotCompleted
 		}
 		mpesaTx = tx
 		amount = tx.Amount

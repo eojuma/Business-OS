@@ -213,6 +213,9 @@ func (c *Config) Validate() error {
 	if c.DBSSLMode == "disable" {
 		return fmt.Errorf("DB_SSLMODE must enable TLS in production")
 	}
+	if c.MpesaCallbackSecret == "" {
+		return fmt.Errorf("MPESA_CALLBACK_SECRET must be set in production so M-Pesa callbacks are signed")
+	}
 	// Email/password sign-ups verify their address; without SMTP the message
 	// cannot be delivered, so fail fast instead of silently breaking sign-up.
 	if c.SMTPHost == "" {

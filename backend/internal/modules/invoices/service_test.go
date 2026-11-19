@@ -43,6 +43,10 @@ func (f *fakeRepository) RecordPayment(id, businessID uuid.UUID, payment *Invoic
 	return &invoice, nil
 }
 
+func (f *fakeRepository) ListPayments(id, businessID uuid.UUID) ([]InvoicePayment, error) {
+	return nil, nil
+}
+
 func TestNormalizeFilter(t *testing.T) {
 	filter, err := NormalizeFilter(ListFilter{})
 	if err != nil {

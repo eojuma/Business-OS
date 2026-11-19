@@ -50,7 +50,7 @@ func (h *Handler) HandleSTKCallback(c *gin.Context) {
 			c.JSON(http.StatusUnauthorized, gin.H{ResultCodeKey: 1, ResultDescKey: DescInvalidSignature})
 			return
 		}
-		c.JSON(http.StatusOK, gin.H{ResultCodeKey: 0, ResultDescKey: DescAccepted})
+		c.JSON(http.StatusOK, gin.H{ResultCodeKey: 1, ResultDescKey: err.Error()})
 		return
 	}
 
@@ -104,6 +104,8 @@ func (h *Handler) HandleB2CResult(c *gin.Context) {
 			c.JSON(http.StatusUnauthorized, gin.H{ResultCodeKey: 1, ResultDescKey: DescInvalidSignature})
 			return
 		}
+		c.JSON(http.StatusOK, gin.H{ResultCodeKey: 1, ResultDescKey: err.Error()})
+		return
 	}
 
 	c.JSON(http.StatusOK, gin.H{ResultCodeKey: 0, ResultDescKey: DescAccepted})
@@ -117,6 +119,8 @@ func (h *Handler) HandleB2CTimeout(c *gin.Context) {
 			c.JSON(http.StatusUnauthorized, gin.H{ResultCodeKey: 1, ResultDescKey: DescInvalidSignature})
 			return
 		}
+		c.JSON(http.StatusOK, gin.H{ResultCodeKey: 1, ResultDescKey: err.Error()})
+		return
 	}
 	c.JSON(http.StatusOK, gin.H{ResultCodeKey: 0, ResultDescKey: DescAccepted})
 }

@@ -42,6 +42,7 @@ type Repository interface {
 	FindByID(id, businessID uuid.UUID) (*Invoice, error)
 	List(businessID uuid.UUID, filter ListFilter, now time.Time) ([]Invoice, int64, error)
 	RecordPayment(id, businessID uuid.UUID, payment *InvoicePayment) (*Invoice, error)
+	ListPayments(id, businessID uuid.UUID) ([]InvoicePayment, error)
 }
 
 type repository struct{ db *gorm.DB }
@@ -247,6 +248,12 @@ func (r *repository) RecordPayment(id, businessID uuid.UUID, payment *InvoicePay
 		return nil, err
 	}
 	return r.FindByID(id, businessID)
+}
+
+func (r *repository) ListPayments(id, businessID uuid.UUID) ([]InvoicePayment, error) {
+	var payments []InvoicePayment
+	err := r.db.Where("invoice_id = ? AND business_id = ?", id, businessID).Order("paid_at asc, created_at asc").Find(&payments).Error
+	return payments, err
 }
 
 // NormalizeFilter validates and normalizes list filters.

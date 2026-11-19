@@ -58,6 +58,9 @@ const (
 	FinanceManage Permission = "finance:manage"
 	FinanceDelete Permission = "finance:delete"
 
+	PaymentRead   Permission = "payments:read"
+	PaymentManage Permission = "payments:manage"
+
 	ReportRead    Permission = "reports:read"
 	AnalyticsRead Permission = "analytics:read"
 
@@ -85,6 +88,7 @@ var allPermissions = []Permission{
 	CustomerRead, CustomerManage, CustomerPayment,
 	SupplierRead, SupplierManage, SupplierPayment, SupplierDelete,
 	FinanceRead, FinanceManage, FinanceDelete,
+	PaymentRead, PaymentManage,
 	ReportRead, AnalyticsRead,
 	NotificationRead, NotificationWrite,
 	AssistantUse, ReceiptUse,
@@ -106,6 +110,7 @@ var matrix = map[string]map[Permission]bool{
 		CustomerRead, CustomerManage, CustomerPayment,
 		SupplierRead, SupplierManage, SupplierPayment, SupplierDelete,
 		FinanceRead, FinanceManage, FinanceDelete,
+		PaymentRead, PaymentManage,
 		ReportRead, AnalyticsRead,
 		NotificationRead, NotificationWrite,
 		AssistantUse, ReceiptUse,
@@ -119,6 +124,7 @@ var matrix = map[string]map[Permission]bool{
 		InventoryRead,
 		CustomerRead, CustomerManage, CustomerPayment,
 		SupplierRead,
+		PaymentRead, PaymentManage,
 		NotificationRead, NotificationWrite,
 		AssistantUse, ReceiptUse,
 	}),
@@ -134,6 +140,7 @@ var matrix = map[string]map[Permission]bool{
 		CustomerRead, CustomerPayment,
 		SupplierRead, SupplierPayment,
 		FinanceRead, FinanceManage,
+		PaymentRead, PaymentManage,
 		ReportRead, AnalyticsRead,
 		NotificationRead, NotificationWrite,
 		AssistantUse,

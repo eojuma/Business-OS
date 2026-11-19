@@ -40,6 +40,10 @@ func (f *fakeService) RecordPayment(id, businessID uuid.UUID, input RecordPaymen
 	return f.recorded, f.recordErr
 }
 
+func (f *fakeService) ListPayments(id, businessID uuid.UUID) ([]InvoicePayment, error) {
+	return nil, nil
+}
+
 func invoiceTestRouter(service Service) *gin.Engine {
 	handler := NewHandler(service)
 	router := gin.New()

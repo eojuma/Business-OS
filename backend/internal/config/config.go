@@ -63,6 +63,20 @@ type Config struct {
 	// AIOCRModel is the vision-capable model used for receipt OCR. It falls
 	// back to AIModel when unset.
 	AIOCRModel string
+
+	// M-Pesa configuration
+	MpesaEnv                   string
+	MpesaConsumerKey           string
+	MpesaConsumerSecret        string
+	MpesaPasskey               string
+	MpesaShortCode             string
+	MpesaStkCallbackURL        string
+	MpesaCallbackSecret        string
+	MpesaB2CInitiatorName      string
+	MpesaB2CSecurityCredential string
+	MpesaB2CShortCode          string
+	MpesaB2CResultURL          string
+	MpesaB2CTimeoutURL         string
 }
 
 // Load loads configuration from environment variables.
@@ -119,6 +133,19 @@ func Load() *Config {
 		AIModel:    getEnv("AI_MODEL", "gemini-3.6-flash"),
 		AIBaseURL:  getEnv("AI_BASE_URL", "https://generativelanguage.googleapis.com/v1beta/openai"),
 		AIOCRModel: getEnv("AI_OCR_MODEL", ""),
+
+		MpesaEnv:                   getEnv("MPESA_ENV", "sandbox"),
+		MpesaConsumerKey:           getEnv("MPESA_CONSUMER_KEY", ""),
+		MpesaConsumerSecret:        getEnv("MPESA_CONSUMER_SECRET", ""),
+		MpesaPasskey:               getEnv("MPESA_PASSKEY", ""),
+		MpesaShortCode:             getEnv("MPESA_SHORTCODE", ""),
+		MpesaStkCallbackURL:        getEnv("MPESA_STK_CALLBACK_URL", ""),
+		MpesaCallbackSecret:        getEnv("MPESA_CALLBACK_SECRET", ""),
+		MpesaB2CInitiatorName:      getEnv("MPESA_B2C_INITIATOR_NAME", ""),
+		MpesaB2CSecurityCredential: getEnv("MPESA_B2C_SECURITY_CREDENTIAL", ""),
+		MpesaB2CShortCode:          getEnv("MPESA_B2C_SHORTCODE", ""),
+		MpesaB2CResultURL:          getEnv("MPESA_B2C_RESULT_URL", ""),
+		MpesaB2CTimeoutURL:         getEnv("MPESA_B2C_TIMEOUT_URL", ""),
 	}
 }
 
@@ -185,6 +212,9 @@ func (c *Config) Validate() error {
 	}
 	if c.DBSSLMode == "disable" {
 		return fmt.Errorf("DB_SSLMODE must enable TLS in production")
+	}
+	if c.MpesaCallbackSecret == "" {
+		return fmt.Errorf("MPESA_CALLBACK_SECRET must be set in production so M-Pesa callbacks are signed")
 	}
 	// Email/password sign-ups verify their address; without SMTP the message
 	// cannot be delivered, so fail fast instead of silently breaking sign-up.

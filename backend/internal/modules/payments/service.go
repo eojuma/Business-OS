@@ -468,29 +468,54 @@ func (s *service) autoReconcileMpesa(tx *MpesaTransaction) {
 	}
 	if ref != "" && s.invoicesSvc != nil {
 		if inv, err := s.repo.FindInvoiceByNumber(tx.BusinessID, ref); err == nil && inv != nil && inv.Status != invoices.StatusPaid {
-			_, err := s.invoicesSvc.RecordPayment(inv.ID, tx.BusinessID, invoices.RecordPaymentInput{
-				Amount: tx.Amount,
-				Note:   fmt.Sprintf("M-Pesa payment %s", tx.MpesaReceiptNumber),
-			})
-			if err == nil {
-				tx.ReconciliationStatus = Reconciled
-				tx.ReconciledEntityType = EntityInvoice
-				tx.ReconciledEntityID = &inv.ID
-				return
+			note := fmt.Sprintf("M-Pesa payment %s", tx.MpesaReceiptNumber)
+			alreadyApplied := false
+			if payments, err := s.invoicesSvc.ListPayments(inv.ID, tx.BusinessID); err == nil {
+				for _, payment := range payments {
+					if payment.Note == note {
+						alreadyApplied = true
+						break
+					}
+				}
 			}
+			if !alreadyApplied {
+				_, err := s.invoicesSvc.RecordPayment(inv.ID, tx.BusinessID, invoices.RecordPaymentInput{
+					Amount: tx.Amount,
+					Note:   note,
+				})
+				if err != nil {
+					return
+				}
+			}
+			tx.ReconciliationStatus = Reconciled
+			tx.ReconciledEntityType = EntityInvoice
+			tx.ReconciledEntityID = &inv.ID
+			return
 		}
 	}
 
 	// 2. Try matching Customer by Phone Number
 	if tx.PhoneNumber != "" && s.customersSvc != nil {
 		if cust, err := s.repo.FindCustomerByPhone(tx.BusinessID, tx.PhoneNumber); err == nil && cust != nil {
-			_, err := s.customersSvc.RecordPayment(cust.ID, tx.BusinessID, tx.Amount, fmt.Sprintf("M-Pesa receipt %s", tx.MpesaReceiptNumber))
-			if err == nil {
-				tx.ReconciliationStatus = Reconciled
-				tx.ReconciledEntityType = EntityCustomerCredit
-				tx.ReconciledEntityID = &cust.ID
-				return
+			note := fmt.Sprintf("M-Pesa receipt %s", tx.MpesaReceiptNumber)
+			alreadyApplied := false
+			if payments, err := s.customersSvc.ListPayments(cust.ID, tx.BusinessID); err == nil {
+				for _, payment := range payments {
+					if payment.Note == note {
+						alreadyApplied = true
+						break
+					}
+				}
 			}
+			if !alreadyApplied {
+				if _, err := s.customersSvc.RecordPayment(cust.ID, tx.BusinessID, tx.Amount, note); err != nil {
+					return
+				}
+			}
+			tx.ReconciliationStatus = Reconciled
+			tx.ReconciledEntityType = EntityCustomerCredit
+			tx.ReconciledEntityID = &cust.ID
+			return
 		}
 	}
 

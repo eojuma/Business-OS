@@ -228,6 +228,10 @@ func (m *mockInvoicesService) RecordPayment(id, businessID uuid.UUID, input invo
 	return &invoices.Invoice{ID: id, BusinessID: businessID, AmountPaid: input.Amount, Status: invoices.StatusPaid}, nil
 }
 
+func (m *mockInvoicesService) ListPayments(id, businessID uuid.UUID) ([]invoices.InvoicePayment, error) {
+	return nil, nil
+}
+
 // Mock customers service
 type mockCustomersService struct {
 	paidCustID uuid.UUID

@@ -7,6 +7,7 @@ import (
 
 	"github.com/businessos/backend/internal/modules/customers"
 	"github.com/businessos/backend/internal/modules/invoices"
+	"github.com/businessos/backend/internal/modules/suppliers"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
@@ -14,6 +15,10 @@ import (
 var (
 	ErrDuplicateReference  = errors.New("bank transaction with this reference already exists")
 	ErrTransactionNotFound = errors.New("payment transaction not found")
+	// ErrMpesaReceiptExists is returned when a C2B confirmation inserts a row
+	// whose mpesa_receipt_number violates the partial unique index. It is a
+	// duplicate, not a persistence failure.
+	ErrMpesaReceiptExists = errors.New("mpesa receipt number already exists")
 )
 
 type Repository interface {
@@ -39,6 +44,12 @@ type Repository interface {
 	UpdateBankTransaction(tx *BankTransaction) error
 
 	ListReviewQueue(businessID uuid.UUID, source string, limit, offset int) ([]ReviewQueueItem, int64, error)
+	// ListAllMpesaPaymentNotes returns every payment note stored against
+	// invoices, customer credit, and supplier payments for one business. It is
+	// used to tell whether an M-Pesa receipt has already been applied to any
+	// target, so a failed reconciliation save cannot leave a receipt eligible
+	// for a second settlement in the review queue.
+	ListAllMpesaPaymentNotes(businessID uuid.UUID) ([]string, error)
 	FindInvoiceByNumber(businessID uuid.UUID, invoiceNumber string) (*invoices.Invoice, error)
 	FindCustomerByPhone(businessID uuid.UUID, phone string) (*customers.Customer, error)
 }
@@ -52,7 +63,27 @@ func NewRepository(db *gorm.DB) Repository {
 }
 
 func (r *repository) CreateMpesaTransaction(tx *MpesaTransaction) error {
-	return r.db.Create(tx).Error
+	err := r.db.Create(tx).Error
+	if err != nil && isMpesaReceiptConflict(err) {
+		return ErrMpesaReceiptExists
+	}
+	return err
+}
+
+// isMpesaReceiptConflict reports whether a create error is a violation of the
+// partial unique index on mpesa_receipt_number. Gorm surfaces it as a
+// gorm.ErrDuplicatedKey with the index name in the message.
+func isMpesaReceiptConflict(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, gorm.ErrDuplicatedKey) {
+		return true
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "mpesa_receipt_number") ||
+		strings.Contains(msg, "idx_mpesa_transactions_receipt_unique") ||
+		strings.Contains(msg, "23505") // unique_violation
 }
 
 func (r *repository) GetMpesaTransactionByID(id, businessID uuid.UUID) (*MpesaTransaction, error) {
@@ -201,6 +232,36 @@ func (r *repository) UpdateBankTransaction(tx *BankTransaction) error {
 		"reconciled_entity_id":   tx.ReconciledEntityID,
 		"updated_at":             tx.UpdatedAt,
 	}).Error
+}
+
+func (r *repository) ListAllMpesaPaymentNotes(businessID uuid.UUID) ([]string, error) {
+	notes := make([]string, 0)
+
+	var invoiceNotes []string
+	if err := r.db.Model(&invoices.InvoicePayment{}).
+		Where("business_id = ?", businessID).
+		Pluck("note", &invoiceNotes).Error; err != nil {
+		return nil, err
+	}
+	notes = append(notes, invoiceNotes...)
+
+	var customerNotes []string
+	if err := r.db.Model(&customers.Payment{}).
+		Where("business_id = ?", businessID).
+		Pluck("note", &customerNotes).Error; err != nil {
+		return nil, err
+	}
+	notes = append(notes, customerNotes...)
+
+	var supplierNotes []string
+	if err := r.db.Model(&suppliers.Payment{}).
+		Where("business_id = ?", businessID).
+		Pluck("note", &supplierNotes).Error; err != nil {
+		return nil, err
+	}
+	notes = append(notes, supplierNotes...)
+
+	return notes, nil
 }
 
 func (r *repository) ListReviewQueue(businessID uuid.UUID, source string, limit, offset int) ([]ReviewQueueItem, int64, error) {

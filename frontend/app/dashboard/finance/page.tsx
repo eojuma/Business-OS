@@ -76,6 +76,21 @@ type ReviewItem = {
 
 type TabType = "overview" | "mpesa" | "bank" | "review";
 
+/** Convert a decimal-string amount to integer cents without floating-point rounding. */
+function parseCents(input: string): number {
+  const t = input.trim();
+  if (t === "") return 0;
+  const negative = t.startsWith("-");
+  const abs = negative ? t.slice(1) : t;
+  const [intPart, fracPart = ""] = abs.split(".");
+  const intCents = parseInt(intPart, 10) * 100;
+  let fracCents = 0;
+  if (fracPart.length > 0) {
+    fracCents = parseInt((fracPart + "00").slice(0, 2), 10);
+  }
+  return negative ? -(intCents + fracCents) : intCents + fracCents;
+}
+
 export default function FinancePage() {
   const { can } = usePermissions();
   const canView = can(PERMISSIONS.financeRead);
@@ -89,6 +104,9 @@ export default function FinancePage() {
   const [reviewItems, setReviewItems] = useState<ReviewItem[]>([]);
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
+  // Each tab change increments the counter so a slow response from the
+  // previous tab cannot overwrite state after the user has switched away.
+  const [loadVersion, setLoadVersion] = useState(0);
 
   // Modals
   const [showExpenseForm, setShowExpenseForm] = useState(false);
@@ -117,48 +135,65 @@ export default function FinancePage() {
 
   // Review reconcile modal
   const [reconcileTarget, setReconcileTarget] = useState<ReviewItem | null>(null);
-  const [recType, setRecType] = useState<"invoice" | "customer_credit" | "expense" | "dismiss">("invoice");
+  const [recType, setRecType] = useState<"invoice" | "customer_credit" | "expense" | "supplier_payment" | "dismiss">("invoice");
   const [recTargetID, setRecTargetID] = useState("");
   const [recExpenseCategory, setRecExpenseCategory] = useState("Operations");
   const [recNote, setRecNote] = useState("");
 
   /** Loads summary and tab data. */
   const loadData = useCallback(async () => {
+    const myVersion = loadVersion + 1;
+    setLoadVersion(myVersion);
     setError("");
     try {
       if (activeTab === "overview") {
         const [s, e] = await Promise.all([api.get("/finance/summary"), api.get("/finance/expenses")]);
+        if (myVersion !== loadVersion) return;
         setD(s.data.data);
         setExpenses(e.data.data || []);
       } else if (activeTab === "mpesa") {
         const res = await api.get("/payments/mpesa/transactions");
+        if (myVersion !== loadVersion) return;
         setMpesaTxs(res.data.data || []);
       } else if (activeTab === "bank") {
         const res = await api.get("/payments/bank/transactions");
+        if (myVersion !== loadVersion) return;
         setBankTxs(res.data.data || []);
       } else if (activeTab === "review") {
         const res = await api.get("/payments/review-queue");
+        if (myVersion !== loadVersion) return;
         setReviewItems(res.data.data || []);
       }
     } catch (e: any) {
+      if (myVersion !== loadVersion) return;
       setError(e.response?.data?.error || "Failed to load data");
     }
-  }, [activeTab]);
+  }, [activeTab, loadVersion]);
 
   useEffect(() => {
     if (canView) void loadData();
   }, [canView, loadData]);
 
+  // Clear stale messages when the tab changes so the previous tab's
+  // success/error banner does not linger.
+  useEffect(() => {
+    setMessage("");
+  }, [activeTab]);
+
   /** Record expense */
   async function submitExpense(e: React.FormEvent) {
     e.preventDefault();
-    const cents = Math.round(Number(amount) * 100);
+    const cents = parseCents(amount);
+    if (!cents) {
+      setError("Enter a valid amount");
+      return;
+    }
     try {
       await api.post("/finance/expenses", { category, description, amount: cents });
       setAmount("");
       setDescription("");
       setShowExpenseForm(false);
-      setMessage("Expense recorded successfully.");
+      setMessage(`Expense recorded successfully for ${cents / 100}.`);
       await loadData();
     } catch (e: any) {
       setError(e.response?.data?.error || "Failed to save expense");
@@ -168,20 +203,24 @@ export default function FinancePage() {
   /** Send M-Pesa STK push */
   async function submitSTK(e: React.FormEvent) {
     e.preventDefault();
-    const cents = Math.round(Number(stkAmount) * 100);
+    const cents = parseCents(stkAmount);
+    if (!cents) {
+      setError("Enter a valid amount");
+      return;
+    }
     try {
       await api.post("/payments/mpesa/stk-push", {
         phone_number: stkPhone,
         amount: cents,
         account_reference: stkRef || "BusinessOS",
         transaction_desc: "Direct M-Pesa Payment",
-        idempotency_key: `stk-${Date.now()}`,
+        idempotency_key: `stk-${stkPhone}-${cents}-${Date.now()}`,
       });
       setShowSTKModal(false);
       setStkPhone("");
       setStkAmount("");
       setStkRef("");
-      setMessage("STK push initiated! The customer will be prompted on their phone.");
+      setMessage(`STK push for ${formatMoney(cents)} initiated! The customer will be prompted on their phone.`);
       await loadData();
     } catch (e: any) {
       setError(e.response?.data?.error || "Failed to initiate STK push");
@@ -191,7 +230,11 @@ export default function FinancePage() {
   /** Record manual bank transfer */
   async function submitBankManual(e: React.FormEvent) {
     e.preventDefault();
-    const cents = Math.round(Number(bankAmount) * 100);
+    const cents = parseCents(bankAmount);
+    if (!cents) {
+      setError("Enter a valid amount");
+      return;
+    }
     try {
       await api.post("/payments/bank/manual", {
         bank_name: bankName,
@@ -204,7 +247,7 @@ export default function FinancePage() {
       setBankRef("");
       setBankAmount("");
       setBankDesc("");
-      setMessage("Bank transfer recorded and reconciled.");
+      setMessage(`Bank transfer of ${formatMoney(cents)} recorded and reconciled.`);
       await loadData();
     } catch (e: any) {
       setError(e.response?.data?.error || "Failed to record bank transfer");
@@ -241,16 +284,18 @@ export default function FinancePage() {
     if (!reconcileTarget) return;
     if (
       reconcileTarget.type === "outflow" &&
-      (recType === "invoice" || recType === "customer_credit")
+      (recType === "invoice" || recType === "customer_credit" || recType === "supplier_payment")
     ) {
-      setError("An outflow cannot be reconciled against an invoice or customer balance.");
+      setError("An outflow cannot be reconciled against an invoice, customer balance, or supplier payment.");
       return;
     }
     if (
       reconcileTarget.type !== "outflow" &&
-      recType === "expense"
+      (recType === "expense" || recType === "supplier_payment")
     ) {
-      setError("An inflow cannot be booked as an operating expense.");
+      setError(recType === "supplier_payment"
+        ? "An inflow cannot be reconciled as a supplier payment."
+        : "An inflow cannot be booked as an operating expense.");
       return;
     }
 
@@ -263,7 +308,12 @@ export default function FinancePage() {
         note: recNote,
       });
       setReconcileTarget(null);
-      setMessage("Transaction successfully reconciled.");
+      const label = recType === "invoice" ? "invoice settlement" :
+                    recType === "customer_credit" ? "customer credit" :
+                    recType === "expense" ? "operating expense" :
+                    recType === "supplier_payment" ? "supplier payment" :
+                    "manual resolution";
+      setMessage(`Transaction successfully reconciled as ${label}.`);
       await loadData();
     } catch (e: any) {
       setError(e.response?.data?.error || "Failed to reconcile transaction");
@@ -846,7 +896,10 @@ export default function FinancePage() {
                     </>
                   )}
                   {reconcileTarget.type === "outflow" && (
-                    <option value="expense">Operating Expense</option>
+                    <>
+                      <option value="expense">Operating Expense</option>
+                      <option value="supplier_payment">Supplier Payment</option>
+                    </>
                   )}
                   <option value="dismiss">Dismiss / Manual Resolution</option>
                 </select>
@@ -898,6 +951,19 @@ export default function FinancePage() {
                     <option>Payroll</option>
                     <option>Other</option>
                   </select>
+                </div>
+              )}
+
+              {recType === "supplier_payment" && (
+                <div>
+                  <label className="block text-xs font-semibold text-muted">Supplier ID</label>
+                  <input
+                    className="field mt-1 font-mono"
+                    placeholder="Supplier UUID"
+                    value={recTargetID}
+                    onChange={(e) => setRecTargetID(e.target.value)}
+                    required
+                  />
                 </div>
               )}
 

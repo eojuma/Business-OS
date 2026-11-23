@@ -168,7 +168,7 @@ type StatementImportResult struct {
 
 type ReconcileInput struct {
 	Source          string `json:"source" binding:"required"`      // "mpesa" or "bank"
-	TargetType      string `json:"target_type" binding:"required"` // "invoice", "customer_credit", "expense", "dismiss"
+	TargetType      string `json:"target_type" binding:"required"` // "invoice", "customer_credit", "expense", "supplier_payment", "dismiss"
 	TargetID        string `json:"target_id"`
 	ExpenseCategory string `json:"expense_category"`
 	Note            string `json:"note"`

@@ -376,8 +376,13 @@ func (s *service) HandleC2BConfirmation(signatureHeader string, req C2BConfirmat
 
 	// Persist the receipt before applying the payment. The unique receipt lookup
 	// above then makes a redelivered C2B confirmation a no-op even if
-	// reconciliation failed on the first attempt.
+	// reconciliation failed on the first attempt. A duplicate-insert error
+	// means another delivery already recorded this receipt, so treat it as an
+	// accepted duplicate rather than a persistence failure.
 	if err := s.repo.CreateMpesaTransaction(tx); err != nil {
+		if isMpesaReceiptConflict(err) {
+			return C2BConfirmationResponse{ResultCode: 0, ResultDesc: DescAccepted}, nil
+		}
 		return C2BConfirmationResponse{ResultCode: 1, ResultDesc: "Failed to persist"}, err
 	}
 
@@ -760,6 +765,28 @@ func (s *service) supplierPaymentExists(supplierID, businessID uuid.UUID, marker
 	return false
 }
 
+// receiptAlreadyApplied reports whether an M-Pesa receipt number has already
+// been recorded against any invoice, customer, or supplier payment. The
+// callback path can leave a receipt unmatched when its reconciliation save
+// fails, so the review path must refuse a second settlement of the same
+// receipt rather than checking only the selected target.
+func (s *service) receiptAlreadyApplied(receipt string, businessID uuid.UUID) bool {
+	receipt = strings.TrimSpace(receipt)
+	if receipt == "" {
+		return false
+	}
+	notes, err := s.repo.ListAllMpesaPaymentNotes(businessID)
+	if err != nil {
+		return false
+	}
+	for _, note := range notes {
+		if strings.Contains(note, receipt) {
+			return true
+		}
+	}
+	return false
+}
+
 // findMpesaExpense checks a bounded window around the transaction for an
 // expense already created for this payout.
 func (s *service) findMpesaExpense(tx *MpesaTransaction, marker string) *finance.Expense {
@@ -1046,6 +1073,12 @@ func parseMoneyString(s string) (int64, error) {
 		if err != nil {
 			return 0, err
 		}
+		// Guard the scaling before it silently wraps. int64 max is
+		// 9223372036854775807, so any integer part above
+		// 92233720368547758 would overflow when multiplied by 100.
+		if n > math.MaxInt64/100 || n < math.MinInt64/100 {
+			return 0, errors.New("amount out of range")
+		}
 		intCents = n * 100
 	}
 
@@ -1073,6 +1106,8 @@ func parseMoneyString(s string) (int64, error) {
 		fracCents = cents
 	}
 
+	// The integer part was already bounded by MaxInt64/100 above and the
+	// fractional part is at most 999 cents, so the sum cannot overflow int64.
 	total := intCents + fracCents
 	if negative {
 		total = -total
@@ -1199,9 +1234,19 @@ func (s *service) ReconcileReviewItem(businessID uuid.UUID, itemID uuid.UUID, in
 		if direction == string(BankOutflow) {
 			return ErrTargetDirectionMismatch
 		}
-	case "expense":
+	case "expense", "supplier_payment":
 		if direction == string(BankInflow) {
 			return ErrTargetDirectionMismatch
+		}
+	}
+
+	// One M-Pesa receipt must settle exactly one target. The callback path
+	// claims the transaction before applying its effect, but if that save
+	// fails the receipt can remain unmatched and be applied again here. Check
+	// the receipt against every payment table, not just the selected target.
+	if mpesaTx != nil && mpesaTx.MpesaReceiptNumber != "" {
+		if s.receiptAlreadyApplied(mpesaTx.MpesaReceiptNumber, businessID) {
+			return ErrAlreadyReconciled
 		}
 	}
 
@@ -1324,6 +1369,39 @@ func (s *service) ReconcileReviewItem(businessID uuid.UUID, itemID uuid.UUID, in
 			bankTx.ReconciliationStatus = Reconciled
 			bankTx.ReconciledEntityType = EntityExpense
 			bankTx.ReconciledEntityID = &expenseID
+			return s.repo.UpdateBankTransaction(bankTx)
+		}
+
+	case "supplier_payment":
+		supplierUUID, err := uuid.Parse(input.TargetID)
+		if err != nil {
+			return fmt.Errorf("invalid supplier id: %w", err)
+		}
+		if s.suppliersSvc == nil {
+			return errors.New("supplier service not configured")
+		}
+		paymentNote := note
+		if mpesaTx != nil {
+			marker := mpesaMarker(mpesaTx)
+			paymentNote = marker + " supplier payment: " + note
+			if !s.supplierPaymentExists(supplierUUID, businessID, marker) {
+				if _, err := s.suppliersSvc.RecordPayment(supplierUUID, businessID, amount, paymentNote); err != nil {
+					return fmt.Errorf("record supplier payment: %w", err)
+				}
+			}
+		} else if _, err := s.suppliersSvc.RecordPayment(supplierUUID, businessID, amount, paymentNote); err != nil {
+			return fmt.Errorf("record supplier payment: %w", err)
+		}
+		if mpesaTx != nil {
+			mpesaTx.ReconciliationStatus = Reconciled
+			mpesaTx.ReconciledEntityType = EntitySupplierPayment
+			mpesaTx.ReconciledEntityID = &supplierUUID
+			return s.repo.UpdateMpesaReconciliation(mpesaTx)
+		}
+		if bankTx != nil {
+			bankTx.ReconciliationStatus = Reconciled
+			bankTx.ReconciledEntityType = EntitySupplierPayment
+			bankTx.ReconciledEntityID = &supplierUUID
 			return s.repo.UpdateBankTransaction(bankTx)
 		}
 

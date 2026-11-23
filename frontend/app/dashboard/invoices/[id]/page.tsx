@@ -38,6 +38,7 @@ export default function InvoiceDetailPage() {
   const [payMode, setPayMode] = useState<"manual" | "mpesa">("manual");
   const [stkPhone, setStkPhone] = useState("");
   const [stkSuccess, setStkSuccess] = useState("");
+  const [pollTimer, setPollTimer] = useState<NodeJS.Timeout | null>(null);
 
   /** Loads the invoice and resets the payment amount to the remainder. */
   const loadInvoice = useCallback(async () => {
@@ -48,9 +49,10 @@ export default function InvoiceDetailPage() {
       const res = await api.get(`/invoices/${id}`);
       const next = res.data.data as Invoice;
       setInvoice(next);
-      if (next.customer?.phone) {
-        setStkPhone(next.customer.phone);
-      }
+      // Reset the STK phone to the customer's current phone. If the customer
+      // has no phone, clear the field so a stale value from a previous
+      // invoice cannot be reused.
+      setStkPhone(next.customer?.phone || "");
       if (next.remaining_balance > 0) {
         setAmount((next.remaining_balance / 100).toFixed(2));
       } else {
@@ -67,6 +69,14 @@ export default function InvoiceDetailPage() {
   useEffect(() => {
     void loadInvoice();
   }, [loadInvoice]);
+
+  // Clear any pending STK reload timer on unmount so stale timers do not
+  // trigger setState after the component has left.
+  useEffect(() => {
+    return () => {
+      if (pollTimer) clearTimeout(pollTimer);
+    };
+  }, [pollTimer]);
 
   /** Applies a payment and refreshes the invoice from the response. */
   async function recordPayment(event: React.FormEvent) {
@@ -117,10 +127,25 @@ export default function InvoiceDetailPage() {
         amount: cents,
         account_reference: invoice.invoice_number,
         transaction_desc: `Payment for ${invoice.invoice_number}`,
-        idempotency_key: `stk-${invoice.id}-${Date.now()}`,
+        // Stable key so retries of this submit do not create duplicate
+        // requests. The server accepts them as one idempotent operation.
+        idempotency_key: `stk-${invoice.id}`,
       });
       setStkSuccess("M-Pesa STK push prompt sent! Payment will automatically reconcile upon confirmation.");
-      setTimeout(() => void loadInvoice(), 3000);
+      // Poll up to three times with two-second gaps so a pending callback
+      // has time to arrive before the UI falls back to manual refresh.
+      let attempts = 0;
+      const maxAttempts = 3;
+      function tick() {
+        const timer = setTimeout(async () => {
+          attempts += 1;
+          if (attempts >= maxAttempts) return;
+          await loadInvoice();
+          tick();
+        }, 2000);
+        setPollTimer(timer);
+      }
+      void tick();
     } catch (e) {
       setPaymentError(errorMessage(e, "Failed to send STK push"));
     } finally {

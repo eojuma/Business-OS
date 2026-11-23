@@ -25,16 +25,18 @@ type fakePaymentRepository struct {
 	bankTxs           map[string]*BankTransaction
 	invoices          map[string]*invoices.Invoice
 	custs             map[string]*customers.Customer
+	paymentNotes      []string
 	claimErr          error
 	reconciliationErr error
 }
 
 func newFakePaymentRepository() *fakePaymentRepository {
 	return &fakePaymentRepository{
-		mpesaTxs: make(map[string]*MpesaTransaction),
-		bankTxs:  make(map[string]*BankTransaction),
-		invoices: make(map[string]*invoices.Invoice),
-		custs:    make(map[string]*customers.Customer),
+		mpesaTxs:     make(map[string]*MpesaTransaction),
+		bankTxs:      make(map[string]*BankTransaction),
+		invoices:    make(map[string]*invoices.Invoice),
+		custs:       make(map[string]*customers.Customer),
+		paymentNotes: make([]string, 0),
 	}
 }
 
@@ -229,6 +231,13 @@ func (f *fakePaymentRepository) FindCustomerByPhone(businessID uuid.UUID, phone 
 		}
 	}
 	return nil, gorm.ErrRecordNotFound
+}
+
+// ListAllMpesaPaymentNotes returns every payment note stored across invoices,
+// customer credit, and supplier payments for one business. The fake keeps a
+// flat slice so the receipt-already-applied check can scan it.
+func (f *fakePaymentRepository) ListAllMpesaPaymentNotes(businessID uuid.UUID) ([]string, error) {
+	return f.paymentNotes, nil
 }
 
 // Mock MpesaClient

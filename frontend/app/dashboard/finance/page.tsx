@@ -239,6 +239,20 @@ export default function FinancePage() {
   async function submitReconcile(e: React.FormEvent) {
     e.preventDefault();
     if (!reconcileTarget) return;
+    if (
+      reconcileTarget.type === "outflow" &&
+      (recType === "invoice" || recType === "customer_credit")
+    ) {
+      setError("An outflow cannot be reconciled against an invoice or customer balance.");
+      return;
+    }
+    if (
+      reconcileTarget.type !== "outflow" &&
+      recType === "expense"
+    ) {
+      setError("An inflow cannot be booked as an operating expense.");
+      return;
+    }
 
     try {
       await api.post(`/payments/review-queue/${reconcileTarget.id}/reconcile`, {
@@ -624,6 +638,7 @@ export default function FinancePage() {
                             className="btn-secondary py-1 text-xs"
                             onClick={() => {
                               setReconcileTarget(item);
+                              setRecType(item.type === "outflow" ? "expense" : "invoice");
                               setRecTargetID("");
                               setRecNote(`Reconciled ${item.source} ref: ${item.reference}`);
                             }}
@@ -819,13 +834,27 @@ export default function FinancePage() {
                 <select
                   className="field mt-1"
                   value={recType}
-                  onChange={(e) => setRecType(e.target.value as any)}
+                  onChange={(e) => {
+                    setRecType(e.target.value as typeof recType);
+                    setRecTargetID("");
+                  }}
                 >
-                  <option value="invoice">Invoice Settlement</option>
-                  <option value="customer_credit">Customer Credit / Balance</option>
-                  <option value="expense">Operating Expense</option>
+                  {reconcileTarget.type !== "outflow" && (
+                    <>
+                      <option value="invoice">Invoice Settlement</option>
+                      <option value="customer_credit">Customer Credit / Balance</option>
+                    </>
+                  )}
+                  {reconcileTarget.type === "outflow" && (
+                    <option value="expense">Operating Expense</option>
+                  )}
                   <option value="dismiss">Dismiss / Manual Resolution</option>
                 </select>
+                <p className="mt-1 text-xs text-subtle">
+                  {reconcileTarget.type === "outflow"
+                    ? "Money left the business, so this can only be booked as an expense."
+                    : "Money arrived, so this can settle an invoice or customer balance."}
+                </p>
               </div>
 
               {recType === "invoice" && (

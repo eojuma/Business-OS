@@ -17,6 +17,9 @@ type Config struct {
 	AppEnv      string
 	AppPort     string
 	FrontendURL string
+	// BackendURL is the public origin of the API. M-Pesa callback URLs are built
+	// from it when a provider-specific override is not configured.
+	BackendURL string
 	// FrontendURLSet reports whether FRONTEND_URL was provided explicitly (as
 	// opposed to the development default).
 	FrontendURLSet bool
@@ -96,6 +99,7 @@ func Load() *Config {
 		AppEnv:         appEnv,
 		AppPort:        getEnv("APP_PORT", "8080"),
 		FrontendURL:    frontendURL,
+		BackendURL:     strings.TrimSpace(getEnv("BACKEND_URL", "")),
 		FrontendURLSet: frontendSet,
 		AllowedOrigins: parseOrigins(frontendURL, appEnv == productionEnv),
 		TrustedProxies: func() []string {

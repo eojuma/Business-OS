@@ -5,6 +5,7 @@ import (
 	"github.com/businessos/backend/internal/modules/customers"
 	"github.com/businessos/backend/internal/modules/finance"
 	"github.com/businessos/backend/internal/modules/invoices"
+	"github.com/businessos/backend/internal/modules/suppliers"
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 )
@@ -26,8 +27,12 @@ func RegisterRoutes(public *gin.RouterGroup, protected *gin.RouterGroup, db *gor
 	if db != nil {
 		finSvc = finance.NewService(finance.NewRepository(db))
 	}
+	var supSvc suppliers.Service
+	if db != nil {
+		supSvc = suppliers.NewService(suppliers.NewRepository(db))
+	}
 
-	svc := NewService(repo, client, cfg, invSvc, custSvc, finSvc)
+	svc := NewService(repo, client, cfg, invSvc, custSvc, finSvc, supSvc)
 	h := NewHandler(svc)
 
 	// Public M-Pesa webhooks (called by Safaricom without user JWT)

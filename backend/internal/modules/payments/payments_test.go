@@ -14,16 +14,19 @@ import (
 	"github.com/businessos/backend/internal/modules/customers"
 	"github.com/businessos/backend/internal/modules/finance"
 	"github.com/businessos/backend/internal/modules/invoices"
+	"github.com/businessos/backend/internal/modules/suppliers"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
 
 // In-memory fake repository for payments testing
 type fakePaymentRepository struct {
-	mpesaTxs map[string]*MpesaTransaction
-	bankTxs  map[string]*BankTransaction
-	invoices map[string]*invoices.Invoice
-	custs    map[string]*customers.Customer
+	mpesaTxs          map[string]*MpesaTransaction
+	bankTxs           map[string]*BankTransaction
+	invoices          map[string]*invoices.Invoice
+	custs             map[string]*customers.Customer
+	claimErr          error
+	reconciliationErr error
 }
 
 func newFakePaymentRepository() *fakePaymentRepository {
@@ -78,8 +81,48 @@ func (f *fakePaymentRepository) GetMpesaTransactionByReceipt(receipt string) (*M
 	return nil, gorm.ErrRecordNotFound
 }
 
-func (f *fakePaymentRepository) UpdateMpesaTransaction(tx *MpesaTransaction) error {
-	f.mpesaTxs[tx.ID.String()] = tx
+func (f *fakePaymentRepository) ClaimMpesaTransactionStatus(tx *MpesaTransaction, terminal TransactionStatus, allowedFrom ...TransactionStatus) (bool, error) {
+	if f.claimErr != nil {
+		return false, f.claimErr
+	}
+	stored, ok := f.mpesaTxs[tx.ID.String()]
+	if !ok {
+		return false, gorm.ErrRecordNotFound
+	}
+	if len(allowedFrom) == 0 {
+		allowedFrom = []TransactionStatus{StatusPending}
+	}
+	allowed := false
+	for _, status := range allowedFrom {
+		if stored.Status == status {
+			allowed = true
+			break
+		}
+	}
+	if !allowed {
+		return false, nil
+	}
+	stored.Status = terminal
+	stored.ResultCode = tx.ResultCode
+	stored.ResultDesc = tx.ResultDesc
+	stored.RawPayload = tx.RawPayload
+	stored.MpesaReceiptNumber = tx.MpesaReceiptNumber
+	stored.PhoneNumber = tx.PhoneNumber
+	stored.Amount = tx.Amount
+	return true, nil
+}
+
+func (f *fakePaymentRepository) UpdateMpesaReconciliation(tx *MpesaTransaction) error {
+	if f.reconciliationErr != nil {
+		return f.reconciliationErr
+	}
+	stored, ok := f.mpesaTxs[tx.ID.String()]
+	if !ok {
+		return gorm.ErrRecordNotFound
+	}
+	stored.ReconciliationStatus = tx.ReconciliationStatus
+	stored.ReconciledEntityType = tx.ReconciledEntityType
+	stored.ReconciledEntityID = tx.ReconciledEntityID
 	return nil
 }
 
@@ -190,11 +233,12 @@ func (f *fakePaymentRepository) FindCustomerByPhone(businessID uuid.UUID, phone 
 
 // Mock MpesaClient
 type mockMpesaClient struct {
-	stkResp *DarajaSTKPushResponse
-	stkErr  error
-	b2cResp *DarajaB2CResponse
-	b2cErr  error
-	lastReq DarajaSTKPushRequest
+	stkResp    *DarajaSTKPushResponse
+	stkErr     error
+	b2cResp    *DarajaB2CResponse
+	b2cErr     error
+	lastReq    DarajaSTKPushRequest
+	lastB2CReq DarajaB2CRequest
 }
 
 func (m *mockMpesaClient) InitiateSTKPush(ctx context.Context, req DarajaSTKPushRequest) (*DarajaSTKPushResponse, error) {
@@ -203,6 +247,7 @@ func (m *mockMpesaClient) InitiateSTKPush(ctx context.Context, req DarajaSTKPush
 }
 
 func (m *mockMpesaClient) InitiateB2CPayout(ctx context.Context, req DarajaB2CRequest) (*DarajaB2CResponse, error) {
+	m.lastB2CReq = req
 	return m.b2cResp, m.b2cErr
 }
 
@@ -211,6 +256,7 @@ type mockInvoicesService struct {
 	paidInvoiceID uuid.UUID
 	paidAmount    int64
 	recordErr     error
+	payments      []invoices.InvoicePayment
 }
 
 func (m *mockInvoicesService) List(businessID uuid.UUID, filter invoices.ListFilter) ([]invoices.Invoice, int64, error) {
@@ -225,17 +271,31 @@ func (m *mockInvoicesService) RecordPayment(id, businessID uuid.UUID, input invo
 	if m.recordErr != nil {
 		return nil, m.recordErr
 	}
+	m.payments = append(m.payments, invoices.InvoicePayment{
+		ID:         uuid.New(),
+		BusinessID: businessID,
+		InvoiceID:  id,
+		Amount:     input.Amount,
+		Note:       input.Note,
+	})
 	return &invoices.Invoice{ID: id, BusinessID: businessID, AmountPaid: input.Amount, Status: invoices.StatusPaid}, nil
 }
 
 func (m *mockInvoicesService) ListPayments(id, businessID uuid.UUID) ([]invoices.InvoicePayment, error) {
-	return nil, nil
+	var result []invoices.InvoicePayment
+	for _, payment := range m.payments {
+		if payment.InvoiceID == id && payment.BusinessID == businessID {
+			result = append(result, payment)
+		}
+	}
+	return result, nil
 }
 
 // Mock customers service
 type mockCustomersService struct {
 	paidCustID uuid.UUID
 	paidAmount int64
+	payments   []customers.Payment
 }
 
 func (m *mockCustomersService) Create(customers.CreateInput) (*customers.Customer, error) {
@@ -254,10 +314,23 @@ func (m *mockCustomersService) ListAboveBalance(uuid.UUID, int64) ([]customers.C
 func (m *mockCustomersService) RecordPayment(id, businessID uuid.UUID, amount int64, note string) (*customers.Customer, error) {
 	m.paidCustID = id
 	m.paidAmount = amount
+	m.payments = append(m.payments, customers.Payment{
+		ID:         uuid.New(),
+		BusinessID: businessID,
+		CustomerID: id,
+		Amount:     amount,
+		Note:       note,
+	})
 	return &customers.Customer{ID: id, BusinessID: businessID}, nil
 }
-func (m *mockCustomersService) ListPayments(uuid.UUID, uuid.UUID) ([]customers.Payment, error) {
-	return nil, nil
+func (m *mockCustomersService) ListPayments(id, businessID uuid.UUID) ([]customers.Payment, error) {
+	var result []customers.Payment
+	for _, payment := range m.payments {
+		if payment.CustomerID == id && payment.BusinessID == businessID {
+			result = append(result, payment)
+		}
+	}
+	return result, nil
 }
 func (m *mockCustomersService) FindOrCreateByPhone(uuid.UUID, string, string, string) (*customers.Customer, error) {
 	return nil, nil
@@ -266,23 +339,84 @@ func (m *mockCustomersService) ChargeCreditTx(*gorm.DB, uuid.UUID, uuid.UUID, in
 	return nil
 }
 
+// Mock suppliers service
+type mockSuppliersService struct {
+	paidSupplierID uuid.UUID
+	paidAmount     int64
+	recordErr      error
+	payments       []suppliers.Payment
+}
+
+func (m *mockSuppliersService) Create(suppliers.CreateInput) (*suppliers.Supplier, error) {
+	return nil, nil
+}
+func (m *mockSuppliersService) Get(id, businessID uuid.UUID) (*suppliers.Supplier, error) {
+	if m.paidSupplierID == id {
+		return &suppliers.Supplier{ID: id, BusinessID: businessID}, nil
+	}
+	return nil, suppliers.ErrSupplierNotFound
+}
+func (m *mockSuppliersService) List(uuid.UUID, bool) ([]suppliers.Supplier, error) {
+	return nil, nil
+}
+func (m *mockSuppliersService) ListPaginated(uuid.UUID, int, int, string, bool) ([]suppliers.Supplier, int64, error) {
+	return nil, 0, nil
+}
+func (m *mockSuppliersService) GetAging(context.Context, uuid.UUID, time.Time) (*suppliers.AgingReport, error) {
+	return nil, nil
+}
+func (m *mockSuppliersService) Update(uuid.UUID, uuid.UUID, suppliers.UpdateInput) (*suppliers.Supplier, error) {
+	return nil, nil
+}
+func (m *mockSuppliersService) Delete(uuid.UUID, uuid.UUID) error { return nil }
+func (m *mockSuppliersService) Restore(uuid.UUID, uuid.UUID) (*suppliers.Supplier, error) {
+	return nil, nil
+}
+func (m *mockSuppliersService) RecordPayment(id, businessID uuid.UUID, amount int64, note string) (*suppliers.Supplier, error) {
+	if m.recordErr != nil {
+		return nil, m.recordErr
+	}
+	m.paidSupplierID = id
+	m.paidAmount = amount
+	m.payments = append(m.payments, suppliers.Payment{
+		ID:         uuid.New(),
+		BusinessID: businessID,
+		SupplierID: id,
+		Amount:     amount,
+		Note:       note,
+	})
+	return &suppliers.Supplier{ID: id, BusinessID: businessID}, nil
+}
+func (m *mockSuppliersService) ListPayments(id, businessID uuid.UUID) ([]suppliers.Payment, error) {
+	var result []suppliers.Payment
+	for _, payment := range m.payments {
+		if payment.SupplierID == id && payment.BusinessID == businessID {
+			result = append(result, payment)
+		}
+	}
+	return result, nil
+}
+
 // Mock finance service
 type mockFinanceService struct {
 	createdExpense *finance.Expense
+	expenses       []finance.Expense
 }
 
 func (m *mockFinanceService) CreateExpense(in finance.CreateExpenseInput) (*finance.Expense, error) {
 	exp := &finance.Expense{
-		ID:         uuid.New(),
-		BusinessID: in.BusinessID,
-		Category:   in.Category,
-		Amount:     in.Amount,
+		ID:          uuid.New(),
+		BusinessID:  in.BusinessID,
+		Category:    in.Category,
+		Description: in.Description,
+		Amount:      in.Amount,
 	}
 	m.createdExpense = exp
+	m.expenses = append(m.expenses, *exp)
 	return exp, nil
 }
 func (m *mockFinanceService) ListExpenses(uuid.UUID, time.Time, time.Time) ([]finance.Expense, error) {
-	return nil, nil
+	return m.expenses, nil
 }
 func (m *mockFinanceService) DeleteExpense(uuid.UUID, uuid.UUID) error { return nil }
 func (m *mockFinanceService) Summary(uuid.UUID, time.Time, time.Time) (*finance.Summary, error) {
@@ -312,7 +446,7 @@ func TestSTKPushInitiationAndIdempotency(t *testing.T) {
 		MpesaPasskey:        "bfb279f9aa9bdbcf158e97dd71a467cd2e0c893059b10f78e6b72ada1ed2c919",
 		MpesaStkCallbackURL: "https://example.com/callback",
 	}
-	svc := NewService(repo, client, cfg, nil, nil, nil)
+	svc := NewService(repo, client, cfg, nil, nil, nil, nil)
 
 	businessID := uuid.New()
 	input := STKPushInput{
@@ -355,7 +489,7 @@ func TestSTKCallbackSignatureAndDuplicateHandling(t *testing.T) {
 		MpesaCallbackSecret: "super-secret-callback-key",
 	}
 	invSvc := &mockInvoicesService{}
-	svc := NewService(repo, nil, cfg, invSvc, nil, nil)
+	svc := NewService(repo, nil, cfg, invSvc, nil, nil, nil)
 
 	businessID := uuid.New()
 	invID := uuid.New()
@@ -448,7 +582,7 @@ func TestC2BValidationAndConfirmation(t *testing.T) {
 		MpesaCallbackSecret: "c2b-secret",
 	}
 	custSvc := &mockCustomersService{}
-	svc := NewService(repo, nil, cfg, nil, custSvc, nil)
+	svc := NewService(repo, nil, cfg, nil, custSvc, nil, nil)
 
 	businessID := uuid.New()
 	custID := uuid.New()
@@ -506,7 +640,7 @@ func TestC2BValidationAndConfirmation(t *testing.T) {
 func TestBankTransferManualEntry(t *testing.T) {
 	repo := newFakePaymentRepository()
 	finSvc := &mockFinanceService{}
-	svc := NewService(repo, nil, &config.Config{}, nil, nil, finSvc)
+	svc := NewService(repo, nil, &config.Config{}, nil, nil, finSvc, nil)
 
 	businessID := uuid.New()
 	input := BankManualInput{
@@ -543,7 +677,7 @@ func TestBankTransferManualEntry(t *testing.T) {
 func TestBankStatementCSVImport(t *testing.T) {
 	repo := newFakePaymentRepository()
 	invSvc := &mockInvoicesService{}
-	svc := NewService(repo, nil, &config.Config{}, invSvc, nil, nil)
+	svc := NewService(repo, nil, &config.Config{}, invSvc, nil, nil, nil)
 
 	businessID := uuid.New()
 	invID := uuid.New()
@@ -593,7 +727,7 @@ func TestReviewQueueAndManualReconcile(t *testing.T) {
 	repo := newFakePaymentRepository()
 	invSvc := &mockInvoicesService{}
 	finSvc := &mockFinanceService{}
-	svc := NewService(repo, nil, &config.Config{}, invSvc, nil, finSvc)
+	svc := NewService(repo, nil, &config.Config{}, invSvc, nil, finSvc, nil)
 
 	businessID := uuid.New()
 	invID := uuid.New()
@@ -643,5 +777,330 @@ func TestReviewQueueAndManualReconcile(t *testing.T) {
 	err = svc.ReconcileReviewItem(businessID, mpesaTx.ID, recInput)
 	if !errors.Is(err, ErrAlreadyReconciled) {
 		t.Fatalf("expected ErrAlreadyReconciled, got %v", err)
+	}
+}
+
+// Test 7: a failed status claim must not apply the payment. This is the fix for
+// the callback ordering double-apply window.
+func TestSTKCallbackDoesNotApplyPaymentWhenClaimFails(t *testing.T) {
+	repo := newFakePaymentRepository()
+	cfg := &config.Config{MpesaCallbackSecret: "claim-secret"}
+	invSvc := &mockInvoicesService{}
+	svc := NewService(repo, nil, cfg, invSvc, nil, nil, nil)
+
+	businessID := uuid.New()
+	invID := uuid.New()
+	repo.invoices["INV-CLAIM-1"] = &invoices.Invoice{
+		ID:            invID,
+		BusinessID:    businessID,
+		InvoiceNumber: "INV-CLAIM-1",
+		TotalAmount:   10000,
+		Status:        invoices.StatusUnpaid,
+	}
+	tx := &MpesaTransaction{
+		ID:                   uuid.New(),
+		BusinessID:           businessID,
+		TransactionType:      TypeSTKPush,
+		CheckoutRequestID:    "ws_CO_CLAIM_FAILS",
+		AccountReference:     "INV-CLAIM-1",
+		BillRefNumber:        "INV-CLAIM-1",
+		Amount:               10000,
+		Status:               StatusPending,
+		ReconciliationStatus: Unmatched,
+	}
+	_ = repo.CreateMpesaTransaction(tx)
+	repo.claimErr = errors.New("database unavailable")
+
+	body := []byte(`{"Body":{"stkCallback":{"CheckoutRequestID":"ws_CO_CLAIM_FAILS","ResultCode":0,"ResultDesc":"ok","CallbackMetadata":{"Item":[{"Name":"MpesaReceiptNumber","Value":"CLAIM123"}]}}}}`)
+	if err := svc.HandleSTKCallback(computeHMAC(cfg.MpesaCallbackSecret, body), body); err == nil {
+		t.Fatal("expected the failed status claim to be reported")
+	}
+	if invSvc.paidInvoiceID != uuid.Nil {
+		t.Fatal("payment must not be applied when the durable status was not saved")
+	}
+	stored, _ := repo.GetMpesaTransactionByID(tx.ID, businessID)
+	if stored.Status != StatusPending {
+		t.Fatalf("status = %s, want pending", stored.Status)
+	}
+}
+
+// Test 8: when reconciliation fails after the status is saved, the transaction
+// stays completed and unmatched instead of replaying the payment.
+func TestSTKCallbackLeavesCompletedUnmatchedWhenPaymentFails(t *testing.T) {
+	repo := newFakePaymentRepository()
+	cfg := &config.Config{MpesaCallbackSecret: "reconcile-secret"}
+	invSvc := &mockInvoicesService{recordErr: errors.New("invoice already paid")}
+	svc := NewService(repo, nil, cfg, invSvc, nil, nil, nil)
+
+	businessID := uuid.New()
+	repo.invoices["INV-FAIL-1"] = &invoices.Invoice{
+		ID:            uuid.New(),
+		BusinessID:    businessID,
+		InvoiceNumber: "INV-FAIL-1",
+		TotalAmount:   9000,
+		Status:        invoices.StatusUnpaid,
+	}
+	tx := &MpesaTransaction{
+		ID:                   uuid.New(),
+		BusinessID:           businessID,
+		TransactionType:      TypeSTKPush,
+		CheckoutRequestID:    "ws_CO_RECON_FAILS",
+		AccountReference:     "INV-FAIL-1",
+		BillRefNumber:        "INV-FAIL-1",
+		Amount:               9000,
+		Status:               StatusPending,
+		ReconciliationStatus: Unmatched,
+	}
+	_ = repo.CreateMpesaTransaction(tx)
+
+	body := []byte(`{"Body":{"stkCallback":{"CheckoutRequestID":"ws_CO_RECON_FAILS","ResultCode":0,"ResultDesc":"ok","CallbackMetadata":{"Item":[{"Name":"MpesaReceiptNumber","Value":"FAIL123"}]}}}}`)
+	if err := svc.HandleSTKCallback(computeHMAC(cfg.MpesaCallbackSecret, body), body); err != nil {
+		t.Fatalf("callback should be acknowledged after the status is durable: %v", err)
+	}
+	stored, _ := repo.GetMpesaTransactionByID(tx.ID, businessID)
+	if stored.Status != StatusCompleted {
+		t.Fatalf("status = %s, want completed", stored.Status)
+	}
+	if stored.ReconciliationStatus != Unmatched {
+		t.Fatalf("reconciliation = %s, want unmatched for the review queue", stored.ReconciliationStatus)
+	}
+}
+
+// Test 9: callback URLs embed the configured secret when no explicit URL is set.
+func TestCallbackURLsIncludeSecret(t *testing.T) {
+	repo := newFakePaymentRepository()
+	client := &mockMpesaClient{
+		stkResp: &DarajaSTKPushResponse{CheckoutRequestID: "ws_CO_URL_1", ResponseCode: "0"},
+		b2cResp: &DarajaB2CResponse{ConversationID: "CONV-URL-1", ResponseCode: "0"},
+	}
+	cfg := &config.Config{
+		BackendURL:          "https://api.example.com/",
+		MpesaCallbackSecret: "callback-token",
+		MpesaShortCode:      "174379",
+		MpesaPasskey:        "passkey",
+	}
+	svc := NewService(repo, client, cfg, nil, nil, nil, nil)
+
+	if _, err := svc.InitiateSTKPush(context.Background(), uuid.New(), STKPushInput{
+		PhoneNumber: "0712345678",
+		Amount:      1000,
+	}); err != nil {
+		t.Fatalf("InitiateSTKPush failed: %v", err)
+	}
+	if got, want := client.lastReq.CallBackURL, "https://api.example.com/api/v1/payments/mpesa/callback/stk?token=callback-token"; got != want {
+		t.Fatalf("STK callback URL = %q, want %q", got, want)
+	}
+
+	if _, err := svc.InitiateB2C(context.Background(), uuid.New(), B2CPayoutInput{
+		PhoneNumber: "0712345678",
+		Amount:      1000,
+	}); err != nil {
+		t.Fatalf("InitiateB2C failed: %v", err)
+	}
+	if got, want := client.lastB2CReq.ResultURL, "https://api.example.com/api/v1/payments/mpesa/callback/b2c-result?token=callback-token"; got != want {
+		t.Fatalf("B2C result URL = %q, want %q", got, want)
+	}
+	if got, want := client.lastB2CReq.QueueTimeOutURL, "https://api.example.com/api/v1/payments/mpesa/callback/b2c-timeout?token=callback-token"; got != want {
+		t.Fatalf("B2C timeout URL = %q, want %q", got, want)
+	}
+}
+
+// Test 10: a supplier-targeted B2C payout settles the payable rather than
+// booking a generic expense.
+func TestB2CSupplierPayoutSettlesSupplier(t *testing.T) {
+	repo := newFakePaymentRepository()
+	cfg := &config.Config{MpesaCallbackSecret: "b2c-secret"}
+	supSvc := &mockSuppliersService{}
+	finSvc := &mockFinanceService{}
+	client := &mockMpesaClient{
+		b2cResp: &DarajaB2CResponse{ConversationID: "CONV-SUP-1", ResponseCode: "0"},
+	}
+	svc := NewService(repo, client, cfg, nil, nil, finSvc, supSvc)
+
+	businessID := uuid.New()
+	supplierID := uuid.New()
+	supSvc.paidSupplierID = supplierID
+
+	tx, err := svc.InitiateB2C(context.Background(), businessID, B2CPayoutInput{
+		PhoneNumber: "0712345678",
+		Amount:      25000,
+		SupplierID:  supplierID.String(),
+	})
+	if err != nil {
+		t.Fatalf("InitiateB2C failed: %v", err)
+	}
+	if tx.SupplierID == nil || *tx.SupplierID != supplierID {
+		t.Fatalf("supplier target not stored: %+v", tx.SupplierID)
+	}
+
+	body := []byte(`{"Result":{"ResultCode":0,"ResultDesc":"ok","ConversationID":"CONV-SUP-1","TransactionID":"B2C-RCPT-1"}}`)
+	if err := svc.HandleB2CResult(computeHMAC(cfg.MpesaCallbackSecret, body), body); err != nil {
+		t.Fatalf("HandleB2CResult failed: %v", err)
+	}
+	if supSvc.paidAmount != 25000 {
+		t.Fatalf("supplier payment = %d, want 25000", supSvc.paidAmount)
+	}
+	if finSvc.createdExpense != nil {
+		t.Fatal("supplier payout must not also create an operating expense")
+	}
+	stored, _ := repo.GetMpesaTransactionByID(tx.ID, businessID)
+	if stored.Status != StatusCompleted || stored.ReconciledEntityType != EntitySupplierPayment {
+		t.Fatalf("status/reconciliation = %s/%s, want completed/supplier_payment", stored.Status, stored.ReconciledEntityType)
+	}
+}
+
+// Test 11: a timeout is not terminal; a later success resolves it exactly once.
+func TestB2CTimeoutThenResultCompletes(t *testing.T) {
+	repo := newFakePaymentRepository()
+	cfg := &config.Config{MpesaCallbackSecret: "timeout-secret"}
+	finSvc := &mockFinanceService{}
+	svc := NewService(repo, nil, cfg, nil, nil, finSvc, nil)
+
+	businessID := uuid.New()
+	tx := &MpesaTransaction{
+		ID:                   uuid.New(),
+		BusinessID:           businessID,
+		TransactionType:      TypeB2C,
+		CheckoutRequestID:    "CONV-TIMEOUT-1",
+		Amount:               30000,
+		Status:               StatusPending,
+		ReconciliationStatus: Unmatched,
+		ExpenseCategory:      "Utilities",
+	}
+	_ = repo.CreateMpesaTransaction(tx)
+
+	timeoutBody := []byte(`{"Result":{"ConversationID":"CONV-TIMEOUT-1","ResultDesc":"Queue timeout"}}`)
+	if err := svc.HandleB2CTimeout(computeHMAC(cfg.MpesaCallbackSecret, timeoutBody), timeoutBody); err != nil {
+		t.Fatalf("HandleB2CTimeout failed: %v", err)
+	}
+	stored, _ := repo.GetMpesaTransactionByID(tx.ID, businessID)
+	if stored.Status != StatusTimedOut {
+		t.Fatalf("status after timeout = %s, want timed_out", stored.Status)
+	}
+
+	resultBody := []byte(`{"Result":{"ResultCode":0,"ResultDesc":"ok","ConversationID":"CONV-TIMEOUT-1","TransactionID":"B2C-LATE-1"}}`)
+	if err := svc.HandleB2CResult(computeHMAC(cfg.MpesaCallbackSecret, resultBody), resultBody); err != nil {
+		t.Fatalf("HandleB2CResult after timeout failed: %v", err)
+	}
+	stored, _ = repo.GetMpesaTransactionByID(tx.ID, businessID)
+	if stored.Status != StatusCompleted {
+		t.Fatalf("status after late result = %s, want completed", stored.Status)
+	}
+	if finSvc.createdExpense == nil || finSvc.createdExpense.Category != "Utilities" {
+		t.Fatalf("expected one Utilities expense, got %+v", finSvc.createdExpense)
+	}
+	if len(finSvc.expenses) != 1 {
+		t.Fatalf("expenses = %d, want 1", len(finSvc.expenses))
+	}
+
+	// A second delivery must not create another expense.
+	if err := svc.HandleB2CResult(computeHMAC(cfg.MpesaCallbackSecret, resultBody), resultBody); err != nil {
+		t.Fatalf("duplicate HandleB2CResult failed: %v", err)
+	}
+	if len(finSvc.expenses) != 1 {
+		t.Fatalf("expenses after duplicate = %d, want 1", len(finSvc.expenses))
+	}
+}
+
+// Test 12: a timeout must never downgrade an already completed payout.
+func TestB2CTimeoutDoesNotOverwriteCompleted(t *testing.T) {
+	repo := newFakePaymentRepository()
+	cfg := &config.Config{MpesaCallbackSecret: "timeout-secret"}
+	svc := NewService(repo, nil, cfg, nil, nil, &mockFinanceService{}, nil)
+
+	businessID := uuid.New()
+	tx := &MpesaTransaction{
+		ID:                   uuid.New(),
+		BusinessID:           businessID,
+		TransactionType:      TypeB2C,
+		CheckoutRequestID:    "CONV-DONE-1",
+		Amount:               5000,
+		Status:               StatusCompleted,
+		ReconciliationStatus: Reconciled,
+	}
+	_ = repo.CreateMpesaTransaction(tx)
+
+	body := []byte(`{"Result":{"ConversationID":"CONV-DONE-1","ResultDesc":"Queue timeout"}}`)
+	if err := svc.HandleB2CTimeout(computeHMAC(cfg.MpesaCallbackSecret, body), body); err != nil {
+		t.Fatalf("HandleB2CTimeout failed: %v", err)
+	}
+	stored, _ := repo.GetMpesaTransactionByID(tx.ID, businessID)
+	if stored.Status != StatusCompleted {
+		t.Fatalf("status = %s, want completed", stored.Status)
+	}
+}
+
+// Test 13: reconciliation targets are direction-aware.
+func TestReconcileRejectsDirectionMismatch(t *testing.T) {
+	repo := newFakePaymentRepository()
+	finSvc := &mockFinanceService{}
+	svc := NewService(repo, nil, &config.Config{}, nil, nil, finSvc, nil)
+
+	businessID := uuid.New()
+	outflow := &BankTransaction{
+		ID:                   uuid.New(),
+		BusinessID:           businessID,
+		Reference:            "OUT-1",
+		Type:                 BankOutflow,
+		Amount:               12000,
+		ReconciliationStatus: Unmatched,
+		TransactedAt:         time.Now(),
+	}
+	_ = repo.CreateBankTransaction(outflow)
+	inflow := &BankTransaction{
+		ID:                   uuid.New(),
+		BusinessID:           businessID,
+		Reference:            "IN-1",
+		Type:                 BankInflow,
+		Amount:               12000,
+		ReconciliationStatus: Unmatched,
+		TransactedAt:         time.Now(),
+	}
+	_ = repo.CreateBankTransaction(inflow)
+
+	if err := svc.ReconcileReviewItem(businessID, outflow.ID, ReconcileInput{
+		Source: "bank", TargetType: "invoice", TargetID: uuid.New().String(),
+	}); !errors.Is(err, ErrTargetDirectionMismatch) {
+		t.Fatalf("outflow -> invoice error = %v, want ErrTargetDirectionMismatch", err)
+	}
+	if err := svc.ReconcileReviewItem(businessID, inflow.ID, ReconcileInput{
+		Source: "bank", TargetType: "expense",
+	}); !errors.Is(err, ErrTargetDirectionMismatch) {
+		t.Fatalf("inflow -> expense error = %v, want ErrTargetDirectionMismatch", err)
+	}
+
+	if err := svc.ReconcileReviewItem(businessID, outflow.ID, ReconcileInput{
+		Source: "bank", TargetType: "expense", ExpenseCategory: "Transport",
+	}); err != nil {
+		t.Fatalf("outflow -> expense should succeed: %v", err)
+	}
+	stored, _ := repo.GetBankTransactionByID(outflow.ID, businessID)
+	if stored.ReconciliationStatus != Reconciled || stored.ReconciledEntityType != EntityExpense {
+		t.Fatalf("outflow reconciliation = %s/%s, want reconciled/expense", stored.ReconciliationStatus, stored.ReconciledEntityType)
+	}
+}
+
+// Test 14: a B2C payout is an outflow and cannot be reconciled to an invoice.
+func TestReconcileRejectsB2CInvoice(t *testing.T) {
+	repo := newFakePaymentRepository()
+	svc := NewService(repo, nil, &config.Config{}, &mockInvoicesService{}, nil, nil, nil)
+
+	businessID := uuid.New()
+	tx := &MpesaTransaction{
+		ID:                   uuid.New(),
+		BusinessID:           businessID,
+		TransactionType:      TypeB2C,
+		CheckoutRequestID:    "CONV-B2C-REVIEW",
+		MpesaReceiptNumber:   "B2C-REVIEW-1",
+		Amount:               7000,
+		Status:               StatusCompleted,
+		ReconciliationStatus: Unmatched,
+	}
+	_ = repo.CreateMpesaTransaction(tx)
+
+	if err := svc.ReconcileReviewItem(businessID, tx.ID, ReconcileInput{
+		Source: "mpesa", TargetType: "invoice", TargetID: uuid.New().String(),
+	}); !errors.Is(err, ErrTargetDirectionMismatch) {
+		t.Fatalf("B2C -> invoice error = %v, want ErrTargetDirectionMismatch", err)
 	}
 }

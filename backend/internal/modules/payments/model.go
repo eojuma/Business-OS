@@ -21,7 +21,18 @@ const (
 	StatusCompleted TransactionStatus = "completed"
 	StatusFailed    TransactionStatus = "failed"
 	StatusCancelled TransactionStatus = "cancelled"
+	// StatusTimedOut means the provider never answered in time. The payout may
+	// still settle, so this is deliberately distinct from StatusFailed: a late
+	// result callback is allowed to move a timed-out transaction to its final
+	// state.
+	StatusTimedOut TransactionStatus = "timed_out"
 )
+
+// IsTerminal reports whether a status is final and must not be overwritten by a
+// redelivered callback. A timed-out transaction is not terminal.
+func (s TransactionStatus) IsTerminal() bool {
+	return s == StatusCompleted || s == StatusFailed || s == StatusCancelled
+}
 
 type ReconciliationStatus string
 
@@ -67,11 +78,15 @@ type MpesaTransaction struct {
 	BillRefNumber        string               `gorm:"not null;default:''" json:"bill_ref_number"`
 	AccountReference     string               `gorm:"not null;default:''" json:"account_reference"`
 	ReconciliationStatus ReconciliationStatus `gorm:"not null;default:'unmatched'" json:"reconciliation_status"`
-	ReconciledEntityType ReconciledEntityType `json:"reconciled_entity_type,omitempty"`
+	ReconciledEntityType ReconciledEntityType `gorm:"default:null" json:"reconciled_entity_type,omitempty"`
 	ReconciledEntityID   *uuid.UUID           `gorm:"type:uuid" json:"reconciled_entity_id,omitempty"`
-	RawPayload           string               `gorm:"not null;default:''" json:"raw_payload,omitempty"`
-	CreatedAt            time.Time            `json:"created_at"`
-	UpdatedAt            time.Time            `json:"updated_at"`
+	// SupplierID records the intended B2C payout target so the result callback
+	// can settle a supplier payable instead of guessing at an expense.
+	SupplierID      *uuid.UUID `gorm:"type:uuid" json:"supplier_id,omitempty"`
+	ExpenseCategory string     `gorm:"not null;default:''" json:"expense_category,omitempty"`
+	RawPayload      string     `gorm:"not null;default:''" json:"raw_payload,omitempty"`
+	CreatedAt       time.Time  `json:"created_at"`
+	UpdatedAt       time.Time  `json:"updated_at"`
 }
 
 func (MpesaTransaction) TableName() string { return "mpesa_transactions" }
@@ -94,7 +109,7 @@ type BankTransaction struct {
 	Description          string               `gorm:"not null;default:''" json:"description"`
 	TransactedAt         time.Time            `gorm:"not null" json:"transacted_at"`
 	ReconciliationStatus ReconciliationStatus `gorm:"not null;default:'unmatched'" json:"reconciliation_status"`
-	ReconciledEntityType ReconciledEntityType `json:"reconciled_entity_type,omitempty"`
+	ReconciledEntityType ReconciledEntityType `gorm:"default:null" json:"reconciled_entity_type,omitempty"`
 	ReconciledEntityID   *uuid.UUID           `gorm:"type:uuid" json:"reconciled_entity_id,omitempty"`
 	CreatedAt            time.Time            `json:"created_at"`
 	UpdatedAt            time.Time            `json:"updated_at"`

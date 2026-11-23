@@ -22,7 +22,14 @@ type Repository interface {
 	GetMpesaTransactionByIdempotency(businessID uuid.UUID, key string) (*MpesaTransaction, error)
 	GetMpesaTransactionByCheckoutRequestID(checkoutReqID string) (*MpesaTransaction, error)
 	GetMpesaTransactionByReceipt(receipt string) (*MpesaTransaction, error)
-	UpdateMpesaTransaction(tx *MpesaTransaction) error
+	// ClaimMpesaTransactionStatus atomically moves a transaction from one of the
+	// allowed statuses to terminal and persists the callback metadata. It returns
+	// false when another delivery already settled the transaction, which is what
+	// makes callback processing safe to replay.
+	ClaimMpesaTransactionStatus(tx *MpesaTransaction, terminal TransactionStatus, allowedFrom ...TransactionStatus) (bool, error)
+	// UpdateMpesaReconciliation persists reconciliation fields without touching
+	// the transaction status.
+	UpdateMpesaReconciliation(tx *MpesaTransaction) error
 	ListMpesaTransactions(businessID uuid.UUID, limit, offset int) ([]MpesaTransaction, int64, error)
 
 	CreateBankTransaction(tx *BankTransaction) error
@@ -89,9 +96,49 @@ func (r *repository) GetMpesaTransactionByReceipt(receipt string) (*MpesaTransac
 	return &tx, nil
 }
 
-func (r *repository) UpdateMpesaTransaction(tx *MpesaTransaction) error {
-	tx.UpdatedAt = time.Now()
-	return r.db.Save(tx).Error
+// ClaimMpesaTransactionStatus performs a compare-and-set on the transaction
+// status. Only the request that wins the transition may apply the financial
+// side effect, so a redelivered or concurrent callback cannot apply it twice.
+func (r *repository) ClaimMpesaTransactionStatus(tx *MpesaTransaction, terminal TransactionStatus, allowedFrom ...TransactionStatus) (bool, error) {
+	if len(allowedFrom) == 0 {
+		allowedFrom = []TransactionStatus{StatusPending}
+	}
+	updates := map[string]any{
+		"status":               terminal,
+		"result_code":          tx.ResultCode,
+		"result_desc":          tx.ResultDesc,
+		"raw_payload":          tx.RawPayload,
+		"mpesa_receipt_number": tx.MpesaReceiptNumber,
+		"phone_number":         tx.PhoneNumber,
+		"amount":               tx.Amount,
+		"updated_at":           time.Now(),
+	}
+	result := r.db.Model(&MpesaTransaction{}).
+		Where("id = ? AND status IN ?", tx.ID, allowedFrom).
+		Updates(updates)
+	if result.Error != nil {
+		return false, result.Error
+	}
+	return result.RowsAffected == 1, nil
+}
+
+func (r *repository) UpdateMpesaReconciliation(tx *MpesaTransaction) error {
+	updates := map[string]any{
+		"reconciliation_status":  tx.ReconciliationStatus,
+		"reconciled_entity_type": nullableEntityType(tx.ReconciledEntityType),
+		"reconciled_entity_id":   tx.ReconciledEntityID,
+		"updated_at":             time.Now(),
+	}
+	return r.db.Model(&MpesaTransaction{}).Where("id = ?", tx.ID).Updates(updates).Error
+}
+
+// nullableEntityType stores an unset entity type as NULL so it satisfies the
+// column check constraint.
+func nullableEntityType(entity ReconciledEntityType) any {
+	if entity == "" {
+		return nil
+	}
+	return entity
 }
 
 func (r *repository) ListMpesaTransactions(businessID uuid.UUID, limit, offset int) ([]MpesaTransaction, int64, error) {
@@ -148,7 +195,12 @@ func (r *repository) ListBankTransactions(businessID uuid.UUID, txType string, s
 
 func (r *repository) UpdateBankTransaction(tx *BankTransaction) error {
 	tx.UpdatedAt = time.Now()
-	return r.db.Save(tx).Error
+	return r.db.Model(&BankTransaction{}).Where("id = ?", tx.ID).Updates(map[string]any{
+		"reconciliation_status":  tx.ReconciliationStatus,
+		"reconciled_entity_type": nullableEntityType(tx.ReconciledEntityType),
+		"reconciled_entity_id":   tx.ReconciledEntityID,
+		"updated_at":             tx.UpdatedAt,
+	}).Error
 }
 
 func (r *repository) ListReviewQueue(businessID uuid.UUID, source string, limit, offset int) ([]ReviewQueueItem, int64, error) {

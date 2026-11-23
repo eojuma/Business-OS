@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -15,6 +17,7 @@ import (
 	"github.com/businessos/backend/internal/modules/customers"
 	"github.com/businessos/backend/internal/modules/finance"
 	"github.com/businessos/backend/internal/modules/invoices"
+	"github.com/businessos/backend/internal/modules/suppliers"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
@@ -26,7 +29,14 @@ var (
 	ErrAlreadyReconciled       = errors.New("transaction has already been reconciled")
 	ErrTransactionNotCompleted = errors.New("only completed m-pesa transactions can be reconciled")
 	ErrInvalidTarget           = errors.New("invalid reconciliation target")
+	ErrTargetDirectionMismatch = errors.New("this reconciliation target does not match the payment direction")
+	ErrSupplierNotFound        = errors.New("supplier not found")
 	ErrInvalidStatementFile    = errors.New("statement file could not be parsed")
+)
+
+const (
+	defaultExpenseCategory  = "Operations"
+	queueTimeoutDescription = "Queue timeout - awaiting final result"
 )
 
 type Service interface {
@@ -54,6 +64,7 @@ type service struct {
 	invoicesSvc  invoices.Service
 	customersSvc customers.Service
 	financeSvc   finance.Service
+	suppliersSvc suppliers.Service
 }
 
 func NewService(
@@ -63,6 +74,7 @@ func NewService(
 	invoicesSvc invoices.Service,
 	customersSvc customers.Service,
 	financeSvc finance.Service,
+	suppliersSvc suppliers.Service,
 ) Service {
 	return &service{
 		repo:         repo,
@@ -71,7 +83,45 @@ func NewService(
 		invoicesSvc:  invoicesSvc,
 		customersSvc: customersSvc,
 		financeSvc:   financeSvc,
+		suppliersSvc: suppliersSvc,
 	}
+}
+
+// backendOrigin is the public origin used to build provider callback URLs when
+// no explicit URL is configured. BACKEND_URL wins over FRONTEND_URL so an API
+// deployed on its own host still receives callbacks.
+func (s *service) backendOrigin() string {
+	if s.cfg == nil {
+		return ""
+	}
+	base := strings.TrimSpace(s.cfg.BackendURL)
+	if base == "" {
+		base = strings.TrimSpace(s.cfg.FrontendURL)
+	}
+	if idx := strings.Index(base, ","); idx >= 0 {
+		base = strings.TrimSpace(base[:idx])
+	}
+	return strings.TrimRight(base, "/")
+}
+
+// callbackURL returns the configured callback URL, or builds one from the API
+// origin. When a callback secret is configured, the token is embedded in the
+// query string because Daraja cannot send custom headers.
+func (s *service) callbackURL(configured, path string) string {
+	raw := strings.TrimSpace(configured)
+	if raw == "" {
+		raw = s.backendOrigin() + path
+	}
+	parsed, err := url.Parse(raw)
+	if err != nil || s.cfg == nil || s.cfg.MpesaCallbackSecret == "" {
+		return raw
+	}
+	query := parsed.Query()
+	if query.Get("token") == "" {
+		query.Set("token", s.cfg.MpesaCallbackSecret)
+	}
+	parsed.RawQuery = query.Encode()
+	return parsed.String()
 }
 
 // InitiateSTKPush starts an M-Pesa STK push prompt with idempotency protection.
@@ -114,10 +164,7 @@ func (s *service) InitiateSTKPush(ctx context.Context, businessID uuid.UUID, inp
 		desc = "Invoice Payment"
 	}
 
-	callBackURL := s.cfg.MpesaStkCallbackURL
-	if callBackURL == "" {
-		callBackURL = fmt.Sprintf("%s/api/v1/payments/mpesa/callback/stk", s.cfg.FrontendURL)
-	}
+	callBackURL := s.callbackURL(s.cfg.MpesaStkCallbackURL, "/api/v1/payments/mpesa/callback/stk")
 
 	darajaReq := DarajaSTKPushRequest{
 		BusinessShortCode: shortCode,
@@ -187,8 +234,9 @@ func (s *service) HandleSTKCallback(signatureHeader string, body []byte) error {
 		return fmt.Errorf("transaction not found for checkout %s: %w", cb.CheckoutRequestID, err)
 	}
 
-	// Idempotency: skip if already settled
-	if tx.Status == StatusCompleted || tx.Status == StatusFailed || tx.Status == StatusCancelled {
+	// Idempotency: a terminal status means another delivery already settled
+	// this transaction, so replaying the financial effect is never safe.
+	if tx.Status.IsTerminal() {
 		return nil
 	}
 
@@ -196,41 +244,63 @@ func (s *service) HandleSTKCallback(signatureHeader string, body []byte) error {
 	tx.ResultDesc = cb.ResultDesc
 	tx.RawPayload = string(body)
 
+	terminal := StatusCompleted
 	if cb.ResultCode != 0 {
+		terminal = StatusFailed
 		if cb.ResultCode == 1032 { // Cancelled by user
-			tx.Status = StatusCancelled
-		} else {
-			tx.Status = StatusFailed
+			terminal = StatusCancelled
 		}
-		tx.ReconciliationStatus = Ignored
-		return s.repo.UpdateMpesaTransaction(tx)
 	}
 
-	tx.Status = StatusCompleted
-
-	// Extract receipt and metadata
-	if cb.CallbackMetadata != nil {
-		for _, item := range cb.CallbackMetadata.Item {
-			switch item.Name {
-			case "MpesaReceiptNumber":
-				if val, ok := item.Value.(string); ok {
-					tx.MpesaReceiptNumber = val
-				}
-			case "PhoneNumber":
-				tx.PhoneNumber = fmt.Sprintf("%v", item.Value)
-			case "Amount":
-				// If returned as float/int, ensure correct cents amount
-				if f, ok := item.Value.(float64); ok {
-					tx.Amount = int64(f * 100)
+	if terminal == StatusCompleted {
+		// Extract receipt and metadata before claiming so the durable row has
+		// everything needed to reconcile later.
+		if cb.CallbackMetadata != nil {
+			for _, item := range cb.CallbackMetadata.Item {
+				switch item.Name {
+				case "MpesaReceiptNumber":
+					if val, ok := item.Value.(string); ok {
+						tx.MpesaReceiptNumber = val
+					}
+				case "PhoneNumber":
+					tx.PhoneNumber = fmt.Sprintf("%v", item.Value)
+				case "Amount":
+					// If returned as float/int, ensure correct cents amount
+					if f, ok := item.Value.(float64); ok {
+						tx.Amount = int64(f * 100)
+					}
 				}
 			}
 		}
 	}
 
-	// Automatic reconciliation: match to invoice or customer credit
-	s.autoReconcileMpesa(tx)
+	// Persist the terminal status before touching invoices or customer credit.
+	// This is the compare-and-set that makes a redelivered callback a no-op and
+	// closes the double-apply window reported on the original ordering.
+	claimed, err := s.repo.ClaimMpesaTransactionStatus(tx, terminal, StatusPending)
+	if err != nil {
+		return fmt.Errorf("save callback status: %w", err)
+	}
+	if !claimed {
+		// A concurrent delivery won the transition and owns the side effect.
+		return nil
+	}
 
-	return s.repo.UpdateMpesaTransaction(tx)
+	tx.Status = terminal
+	if terminal != StatusCompleted {
+		tx.ReconciliationStatus = Ignored
+		return s.repo.UpdateMpesaReconciliation(tx)
+	}
+
+	// Automatic reconciliation: match to invoice or customer credit. A failure
+	// here leaves the transaction completed and unmatched, so it surfaces in the
+	// review queue without ever replaying the payment.
+	if err := s.autoReconcileMpesa(tx); err != nil {
+		log.Printf("payments: stk reconciliation for transaction %s failed: %v", tx.ID, err)
+		return nil
+	}
+
+	return s.repo.UpdateMpesaReconciliation(tx)
 }
 
 // HandleC2BValidation validates incoming C2B payment before acceptance.
@@ -281,6 +351,9 @@ func (s *service) HandleC2BConfirmation(signatureHeader string, req C2BConfirmat
 			businessID = cust.BusinessID
 		}
 	}
+	if businessID == uuid.Nil {
+		return C2BConfirmationResponse{ResultCode: 1, ResultDesc: "Could not resolve business"}, fmt.Errorf("resolve business for c2b payment %s: %w", req.TransID, ErrTransactionNotFound)
+	}
 
 	raw, _ := json.Marshal(req)
 	tx := &MpesaTransaction{
@@ -296,12 +369,19 @@ func (s *service) HandleC2BConfirmation(signatureHeader string, req C2BConfirmat
 		RawPayload:           string(raw),
 	}
 
-	if businessID != uuid.Nil {
-		s.autoReconcileMpesa(tx)
-	}
-
+	// Persist the receipt before applying the payment. The unique receipt lookup
+	// above then makes a redelivered C2B confirmation a no-op even if
+	// reconciliation failed on the first attempt.
 	if err := s.repo.CreateMpesaTransaction(tx); err != nil {
 		return C2BConfirmationResponse{ResultCode: 1, ResultDesc: "Failed to persist"}, err
+	}
+
+	if err := s.autoReconcileMpesa(tx); err != nil {
+		log.Printf("payments: c2b reconciliation for transaction %s failed: %v", tx.ID, err)
+		return C2BConfirmationResponse{ResultCode: 0, ResultDesc: DescAccepted}, nil
+	}
+	if err := s.repo.UpdateMpesaReconciliation(tx); err != nil {
+		log.Printf("payments: could not save c2b reconciliation for transaction %s: %v", tx.ID, err)
 	}
 
 	return C2BConfirmationResponse{ResultCode: 0, ResultDesc: DescAccepted}, nil
@@ -323,6 +403,31 @@ func (s *service) InitiateB2C(ctx context.Context, businessID uuid.UUID, input B
 		}
 	}
 
+	// A payout to a supplier must remember its target so the result callback
+	// settles the payable instead of recording a generic expense.
+	var supplierID *uuid.UUID
+	if raw := strings.TrimSpace(input.SupplierID); raw != "" {
+		parsed, err := uuid.Parse(raw)
+		if err != nil {
+			return nil, ErrInvalidTarget
+		}
+		if s.suppliersSvc == nil {
+			return nil, errors.New("supplier service not configured")
+		}
+		if _, err := s.suppliersSvc.Get(parsed, businessID); err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) || errors.Is(err, suppliers.ErrSupplierNotFound) {
+				return nil, ErrSupplierNotFound
+			}
+			return nil, err
+		}
+		supplierID = &parsed
+	}
+
+	expenseCategory := strings.TrimSpace(input.ExpenseCat)
+	if expenseCategory == "" {
+		expenseCategory = defaultExpenseCategory
+	}
+
 	shortCode := s.cfg.MpesaB2CShortCode
 	if shortCode == "" {
 		shortCode = s.cfg.MpesaShortCode
@@ -340,8 +445,8 @@ func (s *service) InitiateB2C(ctx context.Context, businessID uuid.UUID, input B
 		PartyA:             shortCode,
 		PartyB:             phone,
 		Remarks:            input.Remarks,
-		QueueTimeOutURL:    s.cfg.MpesaB2CTimeoutURL,
-		ResultURL:          s.cfg.MpesaB2CResultURL,
+		QueueTimeOutURL:    s.callbackURL(s.cfg.MpesaB2CTimeoutURL, "/api/v1/payments/mpesa/callback/b2c-timeout"),
+		ResultURL:          s.callbackURL(s.cfg.MpesaB2CResultURL, "/api/v1/payments/mpesa/callback/b2c-result"),
 		Occasion:           input.Occasion,
 	}
 
@@ -354,6 +459,8 @@ func (s *service) InitiateB2C(ctx context.Context, businessID uuid.UUID, input B
 		IdempotencyKey:       input.IdempotencyKey,
 		AccountReference:     input.Remarks,
 		ReconciliationStatus: Unmatched,
+		SupplierID:           supplierID,
+		ExpenseCategory:      expenseCategory,
 	}
 
 	resp, err := s.mpesaClient.InitiateB2CPayout(ctx, darajaReq)
@@ -401,7 +508,7 @@ func (s *service) HandleB2CResult(signatureHeader string, body []byte) error {
 		return fmt.Errorf("transaction not found for conversation %s: %w", res.ConversationID, err)
 	}
 
-	if tx.Status == StatusCompleted || tx.Status == StatusFailed {
+	if tx.Status.IsTerminal() {
 		return nil
 	}
 
@@ -409,33 +516,98 @@ func (s *service) HandleB2CResult(signatureHeader string, body []byte) error {
 	tx.ResultDesc = res.ResultDesc
 	tx.RawPayload = string(body)
 
-	if res.ResultCode != 0 {
-		tx.Status = StatusFailed
-		tx.ReconciliationStatus = Ignored
-	} else {
-		tx.Status = StatusCompleted
+	terminal := StatusFailed
+	if res.ResultCode == 0 {
+		terminal = StatusCompleted
 		tx.MpesaReceiptNumber = res.TransactionID
-		// Automatically reconcile as operating expense or supplier payment
-		if s.financeSvc != nil {
-			exp, err := s.financeSvc.CreateExpense(finance.CreateExpenseInput{
-				BusinessID:  tx.BusinessID,
-				Category:    "Operations",
-				Description: fmt.Sprintf("B2C payout %s (%s)", res.TransactionID, tx.PhoneNumber),
-				Amount:      tx.Amount,
-				IncurredAt:  time.Now(),
-			})
-			if err == nil && exp != nil {
-				tx.ReconciliationStatus = Reconciled
-				tx.ReconciledEntityType = EntityExpense
-				tx.ReconciledEntityID = &exp.ID
-			}
-		}
 	}
 
-	return s.repo.UpdateMpesaTransaction(tx)
+	// A queue timeout is not final, so a real result may resolve it. Only a
+	// pending or timed-out transaction can be claimed; a completed payout is
+	// never downgraded by a late timeout or duplicate result.
+	claimed, err := s.repo.ClaimMpesaTransactionStatus(tx, terminal, StatusPending, StatusTimedOut)
+	if err != nil {
+		return fmt.Errorf("save b2c result: %w", err)
+	}
+	if !claimed {
+		return nil
+	}
+
+	tx.Status = terminal
+	if terminal == StatusFailed {
+		tx.ReconciliationStatus = Ignored
+		return s.repo.UpdateMpesaReconciliation(tx)
+	}
+
+	// Claiming completion before creating the expense or supplier payment means
+	// a redelivered callback cannot pay the same supplier twice.
+	if err := s.applyB2CPayout(tx); err != nil {
+		log.Printf("payments: b2c reconciliation for transaction %s failed: %v", tx.ID, err)
+		return nil
+	}
+
+	return s.repo.UpdateMpesaReconciliation(tx)
 }
 
-// HandleB2CTimeout processes queue timeout for B2C transactions.
+// applyB2CPayout records the financial effect of a completed B2C payout. It
+// settles the supplier payable when the payout had a supplier target, and
+// otherwise records an operating expense.
+func (s *service) applyB2CPayout(tx *MpesaTransaction) error {
+	marker := mpesaMarker(tx)
+
+	if tx.SupplierID != nil {
+		if s.suppliersSvc == nil {
+			return errors.New("supplier service not configured")
+		}
+		if s.supplierPaymentExists(*tx.SupplierID, tx.BusinessID, marker) {
+			tx.ReconciliationStatus = Reconciled
+			tx.ReconciledEntityType = EntitySupplierPayment
+			tx.ReconciledEntityID = tx.SupplierID
+			return nil
+		}
+		if _, err := s.suppliersSvc.RecordPayment(*tx.SupplierID, tx.BusinessID, tx.Amount, marker+" supplier payout"); err != nil {
+			return fmt.Errorf("record supplier payment: %w", err)
+		}
+		tx.ReconciliationStatus = Reconciled
+		tx.ReconciledEntityType = EntitySupplierPayment
+		tx.ReconciledEntityID = tx.SupplierID
+		return nil
+	}
+
+	if s.financeSvc == nil {
+		return errors.New("finance service not configured")
+	}
+	if existing := s.findMpesaExpense(tx, marker); existing != nil {
+		tx.ReconciliationStatus = Reconciled
+		tx.ReconciledEntityType = EntityExpense
+		tx.ReconciledEntityID = &existing.ID
+		return nil
+	}
+	category := strings.TrimSpace(tx.ExpenseCategory)
+	if category == "" {
+		category = defaultExpenseCategory
+	}
+	exp, err := s.financeSvc.CreateExpense(finance.CreateExpenseInput{
+		BusinessID:  tx.BusinessID,
+		Category:    category,
+		Description: fmt.Sprintf("%s payout (%s)", marker, tx.PhoneNumber),
+		Amount:      tx.Amount,
+		IncurredAt:  time.Now(),
+	})
+	if err != nil {
+		return fmt.Errorf("create expense: %w", err)
+	}
+	if exp != nil {
+		tx.ReconciliationStatus = Reconciled
+		tx.ReconciledEntityType = EntityExpense
+		tx.ReconciledEntityID = &exp.ID
+	}
+	return nil
+}
+
+// HandleB2CTimeout processes queue timeout for B2C transactions. A timeout is
+// ambiguous, so it becomes StatusTimedOut and never overwrites a completed
+// payout. Any later result callback may still settle the transaction.
 func (s *service) HandleB2CTimeout(signatureHeader string, body []byte) error {
 	if !ValidateCallbackSignature(s.cfg.MpesaCallbackSecret, body, signatureHeader) {
 		return ErrInvalidSignature
@@ -447,20 +619,40 @@ func (s *service) HandleB2CTimeout(signatureHeader string, body []byte) error {
 			ResultDesc     string `json:"ResultDesc"`
 		} `json:"Result"`
 	}
-	_ = json.Unmarshal(body, &payload)
-	if payload.Result.ConversationID != "" {
-		if tx, err := s.repo.GetMpesaTransactionByCheckoutRequestID(payload.Result.ConversationID); err == nil && tx != nil {
-			tx.Status = StatusFailed
-			tx.ResultDesc = "Queue Timeout"
-			tx.ReconciliationStatus = Ignored
-			_ = s.repo.UpdateMpesaTransaction(tx)
-		}
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return fmt.Errorf("decode b2c timeout body: %w", err)
 	}
+	if strings.TrimSpace(payload.Result.ConversationID) == "" {
+		return fmt.Errorf("b2c timeout: missing conversation id: %w", ErrMissingReference)
+	}
+
+	tx, err := s.repo.GetMpesaTransactionByCheckoutRequestID(payload.Result.ConversationID)
+	if err != nil {
+		return fmt.Errorf("transaction not found for conversation %s: %w", payload.Result.ConversationID, err)
+	}
+
+	tx.ResultCode = nil
+	tx.ResultDesc = queueTimeoutDescription
+	tx.RawPayload = string(body)
+
+	claimed, err := s.repo.ClaimMpesaTransactionStatus(tx, StatusTimedOut, StatusPending)
+	if err != nil {
+		return fmt.Errorf("save b2c timeout: %w", err)
+	}
+	if !claimed {
+		// The transaction already reached a final state (or timed out twice).
+		return nil
+	}
+	tx.Status = StatusTimedOut
 	return nil
 }
 
-// autoReconcileMpesa attempts automatic matching against Invoices or Customer credit.
-func (s *service) autoReconcileMpesa(tx *MpesaTransaction) {
+// autoReconcileMpesa attempts automatic matching against invoices or customer
+// credit. It returns an error when a match was found but the payment could not
+// be recorded, leaving the caller to surface the transaction for review.
+func (s *service) autoReconcileMpesa(tx *MpesaTransaction) error {
+	marker := mpesaMarker(tx)
+
 	// 1. Try matching Invoice by AccountReference or BillRefNumber
 	ref := strings.TrimSpace(tx.BillRefNumber)
 	if ref == "" {
@@ -468,59 +660,122 @@ func (s *service) autoReconcileMpesa(tx *MpesaTransaction) {
 	}
 	if ref != "" && s.invoicesSvc != nil {
 		if inv, err := s.repo.FindInvoiceByNumber(tx.BusinessID, ref); err == nil && inv != nil && inv.Status != invoices.StatusPaid {
-			note := fmt.Sprintf("M-Pesa payment %s", tx.MpesaReceiptNumber)
-			alreadyApplied := false
-			if payments, err := s.invoicesSvc.ListPayments(inv.ID, tx.BusinessID); err == nil {
-				for _, payment := range payments {
-					if payment.Note == note {
-						alreadyApplied = true
-						break
-					}
-				}
-			}
-			if !alreadyApplied {
+			if !s.invoicePaymentExists(inv.ID, tx.BusinessID, marker) {
 				_, err := s.invoicesSvc.RecordPayment(inv.ID, tx.BusinessID, invoices.RecordPaymentInput{
 					Amount: tx.Amount,
-					Note:   note,
+					Note:   marker + " invoice payment",
 				})
 				if err != nil {
-					return
+					return err
 				}
 			}
 			tx.ReconciliationStatus = Reconciled
 			tx.ReconciledEntityType = EntityInvoice
 			tx.ReconciledEntityID = &inv.ID
-			return
+			return nil
 		}
 	}
 
 	// 2. Try matching Customer by Phone Number
 	if tx.PhoneNumber != "" && s.customersSvc != nil {
 		if cust, err := s.repo.FindCustomerByPhone(tx.BusinessID, tx.PhoneNumber); err == nil && cust != nil {
-			note := fmt.Sprintf("M-Pesa receipt %s", tx.MpesaReceiptNumber)
-			alreadyApplied := false
-			if payments, err := s.customersSvc.ListPayments(cust.ID, tx.BusinessID); err == nil {
-				for _, payment := range payments {
-					if payment.Note == note {
-						alreadyApplied = true
-						break
-					}
-				}
-			}
-			if !alreadyApplied {
-				if _, err := s.customersSvc.RecordPayment(cust.ID, tx.BusinessID, tx.Amount, note); err != nil {
-					return
+			if !s.customerPaymentExists(cust.ID, tx.BusinessID, marker) {
+				if _, err := s.customersSvc.RecordPayment(cust.ID, tx.BusinessID, tx.Amount, marker+" customer payment"); err != nil {
+					return err
 				}
 			}
 			tx.ReconciliationStatus = Reconciled
 			tx.ReconciledEntityType = EntityCustomerCredit
 			tx.ReconciledEntityID = &cust.ID
-			return
+			return nil
 		}
 	}
 
 	// Fallback: remains Unmatched and enters Review Queue
 	tx.ReconciliationStatus = Unmatched
+	return nil
+}
+
+// mpesaMarker is the stable prefix that identifies payments applied for one
+// M-Pesa transaction. Dedupe checks use it so a retried reconciliation can
+// never record the same money twice.
+func mpesaMarker(tx *MpesaTransaction) string {
+	ref := strings.TrimSpace(tx.MpesaReceiptNumber)
+	if ref == "" {
+		ref = tx.ID.String()
+	}
+	return "M-Pesa " + ref
+}
+
+func (s *service) invoicePaymentExists(invoiceID, businessID uuid.UUID, marker string) bool {
+	if s.invoicesSvc == nil {
+		return false
+	}
+	payments, err := s.invoicesSvc.ListPayments(invoiceID, businessID)
+	if err != nil {
+		return false
+	}
+	for _, payment := range payments {
+		if strings.HasPrefix(payment.Note, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *service) customerPaymentExists(customerID, businessID uuid.UUID, marker string) bool {
+	if s.customersSvc == nil {
+		return false
+	}
+	payments, err := s.customersSvc.ListPayments(customerID, businessID)
+	if err != nil {
+		return false
+	}
+	for _, payment := range payments {
+		if strings.HasPrefix(payment.Note, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *service) supplierPaymentExists(supplierID, businessID uuid.UUID, marker string) bool {
+	if s.suppliersSvc == nil {
+		return false
+	}
+	payments, err := s.suppliersSvc.ListPayments(supplierID, businessID)
+	if err != nil {
+		return false
+	}
+	for _, payment := range payments {
+		if strings.HasPrefix(payment.Note, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+// findMpesaExpense checks a bounded window around the transaction for an
+// expense already created for this payout.
+func (s *service) findMpesaExpense(tx *MpesaTransaction, marker string) *finance.Expense {
+	if s.financeSvc == nil {
+		return nil
+	}
+	from := tx.CreatedAt.Add(-24 * time.Hour)
+	to := time.Now().Add(24 * time.Hour)
+	if tx.CreatedAt.IsZero() {
+		from = time.Now().Add(-365 * 24 * time.Hour)
+	}
+	expenses, err := s.financeSvc.ListExpenses(tx.BusinessID, from, to)
+	if err != nil {
+		return nil
+	}
+	for i := range expenses {
+		if strings.HasPrefix(expenses[i].Description, marker) {
+			return &expenses[i]
+		}
+	}
+	return nil
 }
 
 // RecordManualBankTransfer records a single bank transfer and attempts auto-reconciliation.
@@ -805,11 +1060,13 @@ func (s *service) ListReviewQueue(businessID uuid.UUID, source string, page, lim
 	return s.repo.ListReviewQueue(businessID, source, limit, offset)
 }
 
-// ReconcileReviewItem manually settles an unmatched transaction to an invoice, customer, or expense.
+// ReconcileReviewItem manually settles an unmatched transaction. Inflows may
+// only settle invoices or customer credit; outflows may only record an expense.
 func (s *service) ReconcileReviewItem(businessID uuid.UUID, itemID uuid.UUID, input ReconcileInput) error {
 	var (
 		amount    int64
 		refString string
+		direction string
 	)
 
 	// Fetch item according to source
@@ -831,6 +1088,10 @@ func (s *service) ReconcileReviewItem(businessID uuid.UUID, itemID uuid.UUID, in
 		mpesaTx = tx
 		amount = tx.Amount
 		refString = tx.MpesaReceiptNumber
+		direction = string(BankInflow)
+		if tx.TransactionType == TypeB2C {
+			direction = string(BankOutflow)
+		}
 	case "bank":
 		tx, err := s.repo.GetBankTransactionByID(itemID, businessID)
 		if err != nil {
@@ -842,8 +1103,22 @@ func (s *service) ReconcileReviewItem(businessID uuid.UUID, itemID uuid.UUID, in
 		bankTx = tx
 		amount = tx.Amount
 		refString = tx.Reference
+		direction = string(tx.Type)
 	default:
 		return ErrInvalidTarget
+	}
+
+	// Money that left the business cannot settle a receivable, and money that
+	// arrived cannot be booked as an expense.
+	switch input.TargetType {
+	case "invoice", "customer_credit":
+		if direction == string(BankOutflow) {
+			return ErrTargetDirectionMismatch
+		}
+	case "expense":
+		if direction == string(BankInflow) {
+			return ErrTargetDirectionMismatch
+		}
 	}
 
 	note := input.Note
@@ -860,9 +1135,21 @@ func (s *service) ReconcileReviewItem(businessID uuid.UUID, itemID uuid.UUID, in
 		if s.invoicesSvc == nil {
 			return errors.New("invoice service not configured")
 		}
-		if _, err := s.invoicesSvc.RecordPayment(targetUUID, businessID, invoices.RecordPaymentInput{
+		paymentNote := note
+		if mpesaTx != nil {
+			marker := mpesaMarker(mpesaTx)
+			paymentNote = marker + " invoice payment: " + note
+			if !s.invoicePaymentExists(targetUUID, businessID, marker) {
+				if _, err := s.invoicesSvc.RecordPayment(targetUUID, businessID, invoices.RecordPaymentInput{
+					Amount: amount,
+					Note:   paymentNote,
+				}); err != nil {
+					return fmt.Errorf("record invoice payment: %w", err)
+				}
+			}
+		} else if _, err := s.invoicesSvc.RecordPayment(targetUUID, businessID, invoices.RecordPaymentInput{
 			Amount: amount,
-			Note:   note,
+			Note:   paymentNote,
 		}); err != nil {
 			return fmt.Errorf("record invoice payment: %w", err)
 		}
@@ -870,7 +1157,7 @@ func (s *service) ReconcileReviewItem(businessID uuid.UUID, itemID uuid.UUID, in
 			mpesaTx.ReconciliationStatus = Reconciled
 			mpesaTx.ReconciledEntityType = EntityInvoice
 			mpesaTx.ReconciledEntityID = &targetUUID
-			return s.repo.UpdateMpesaTransaction(mpesaTx)
+			return s.repo.UpdateMpesaReconciliation(mpesaTx)
 		}
 		if bankTx != nil {
 			bankTx.ReconciliationStatus = Reconciled
@@ -887,14 +1174,23 @@ func (s *service) ReconcileReviewItem(businessID uuid.UUID, itemID uuid.UUID, in
 		if s.customersSvc == nil {
 			return errors.New("customer service not configured")
 		}
-		if _, err := s.customersSvc.RecordPayment(targetUUID, businessID, amount, note); err != nil {
+		paymentNote := note
+		if mpesaTx != nil {
+			marker := mpesaMarker(mpesaTx)
+			paymentNote = marker + " customer payment: " + note
+			if !s.customerPaymentExists(targetUUID, businessID, marker) {
+				if _, err := s.customersSvc.RecordPayment(targetUUID, businessID, amount, paymentNote); err != nil {
+					return fmt.Errorf("record customer payment: %w", err)
+				}
+			}
+		} else if _, err := s.customersSvc.RecordPayment(targetUUID, businessID, amount, paymentNote); err != nil {
 			return fmt.Errorf("record customer payment: %w", err)
 		}
 		if mpesaTx != nil {
 			mpesaTx.ReconciliationStatus = Reconciled
 			mpesaTx.ReconciledEntityType = EntityCustomerCredit
 			mpesaTx.ReconciledEntityID = &targetUUID
-			return s.repo.UpdateMpesaTransaction(mpesaTx)
+			return s.repo.UpdateMpesaReconciliation(mpesaTx)
 		}
 		if bankTx != nil {
 			bankTx.ReconciliationStatus = Reconciled
@@ -906,38 +1202,51 @@ func (s *service) ReconcileReviewItem(businessID uuid.UUID, itemID uuid.UUID, in
 	case "expense":
 		cat := strings.TrimSpace(input.ExpenseCategory)
 		if cat == "" {
-			cat = "Operations"
+			cat = defaultExpenseCategory
 		}
 		if s.financeSvc == nil {
 			return errors.New("finance service not configured")
 		}
-		exp, err := s.financeSvc.CreateExpense(finance.CreateExpenseInput{
-			BusinessID:  businessID,
-			Category:    cat,
-			Description: note,
-			Amount:      amount,
-			IncurredAt:  time.Now(),
-		})
-		if err != nil {
-			return fmt.Errorf("create expense: %w", err)
+		description := note
+		var existing *finance.Expense
+		if mpesaTx != nil {
+			marker := mpesaMarker(mpesaTx)
+			description = marker + " payout: " + note
+			existing = s.findMpesaExpense(mpesaTx, marker)
+		}
+		var expenseID uuid.UUID
+		if existing != nil {
+			expenseID = existing.ID
+		} else {
+			exp, err := s.financeSvc.CreateExpense(finance.CreateExpenseInput{
+				BusinessID:  businessID,
+				Category:    cat,
+				Description: description,
+				Amount:      amount,
+				IncurredAt:  time.Now(),
+			})
+			if err != nil {
+				return fmt.Errorf("create expense: %w", err)
+			}
+			expenseID = exp.ID
 		}
 		if mpesaTx != nil {
 			mpesaTx.ReconciliationStatus = Reconciled
 			mpesaTx.ReconciledEntityType = EntityExpense
-			mpesaTx.ReconciledEntityID = &exp.ID
-			return s.repo.UpdateMpesaTransaction(mpesaTx)
+			mpesaTx.ReconciledEntityID = &expenseID
+			return s.repo.UpdateMpesaReconciliation(mpesaTx)
 		}
 		if bankTx != nil {
 			bankTx.ReconciliationStatus = Reconciled
 			bankTx.ReconciledEntityType = EntityExpense
-			bankTx.ReconciledEntityID = &exp.ID
+			bankTx.ReconciledEntityID = &expenseID
 			return s.repo.UpdateBankTransaction(bankTx)
 		}
 
 	case "dismiss":
 		if mpesaTx != nil {
 			mpesaTx.ReconciliationStatus = Manual
-			return s.repo.UpdateMpesaTransaction(mpesaTx)
+			return s.repo.UpdateMpesaReconciliation(mpesaTx)
 		}
 		if bankTx != nil {
 			bankTx.ReconciliationStatus = Manual

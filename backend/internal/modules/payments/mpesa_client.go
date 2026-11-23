@@ -129,6 +129,9 @@ func (c *mpesaClient) InitiateSTKPush(ctx context.Context, req DarajaSTKPushRequ
 	if resp.StatusCode >= 400 || (stkResp.ResponseCode != "" && stkResp.ResponseCode != "0") {
 		return &stkResp, fmt.Errorf("%w: code %s, desc %s", ErrTransactionFailed, stkResp.ResponseCode, stkResp.ResponseDescription)
 	}
+	if stkResp.CheckoutRequestID == "" {
+		return &stkResp, fmt.Errorf("%w: response lacks CheckoutRequestID", ErrTransactionFailed)
+	}
 
 	return &stkResp, nil
 }
@@ -172,6 +175,9 @@ func (c *mpesaClient) InitiateB2CPayout(ctx context.Context, req DarajaB2CReques
 
 	if resp.StatusCode >= 400 || (b2cResp.ResponseCode != "" && b2cResp.ResponseCode != "0") {
 		return &b2cResp, fmt.Errorf("%w: code %s, desc %s", ErrTransactionFailed, b2cResp.ResponseCode, b2cResp.ResponseDescription)
+	}
+	if b2cResp.ConversationID == "" {
+		return &b2cResp, fmt.Errorf("%w: response lacks ConversationID", ErrTransactionFailed)
 	}
 
 	return &b2cResp, nil

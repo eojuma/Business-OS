@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"net/url"
 	"strconv"
 	"strings"
@@ -265,9 +266,11 @@ func (s *service) HandleSTKCallback(signatureHeader string, body []byte) error {
 				case "PhoneNumber":
 					tx.PhoneNumber = fmt.Sprintf("%v", item.Value)
 				case "Amount":
-					// If returned as float/int, ensure correct cents amount
-					if f, ok := item.Value.(float64); ok {
-						tx.Amount = int64(f * 100)
+					// Round half away from zero so 0.29 -> 29 cents (not 28 via
+					// float truncation). M-Pesa may return the value as a number
+					// or string depending on the callback type.
+					if cents, err := parseMoneyCents(item.Value); err == nil {
+						tx.Amount = cents
 					}
 				}
 			}
@@ -309,7 +312,7 @@ func (s *service) HandleC2BValidation(signatureHeader string, req C2BValidationR
 		return C2BValidationResponse{ResultCode: 1, ResultDesc: DescInvalidSignature}, ErrInvalidSignature
 	}
 
-	amount, err := strconv.ParseFloat(req.TransAmount, 64)
+	amount, err := parseMoneyString(req.TransAmount)
 	if err != nil || amount <= 0 {
 		return C2BValidationResponse{ResultCode: 1, ResultDesc: "Invalid amount"}, nil
 	}
@@ -328,8 +331,10 @@ func (s *service) HandleC2BConfirmation(signatureHeader string, req C2BConfirmat
 		return C2BConfirmationResponse{ResultCode: 0, ResultDesc: DescAccepted}, nil
 	}
 
-	amountFloat, _ := strconv.ParseFloat(req.TransAmount, 64)
-	amountCents := int64(amountFloat * 100)
+	amountCents, err := parseMoneyString(req.TransAmount)
+	if err != nil || amountCents <= 0 {
+		return C2BConfirmationResponse{ResultCode: 1, ResultDesc: "Invalid amount"}, nil
+	}
 
 	phone := NormalizePhone(req.MSISDN)
 	billRef := strings.TrimSpace(req.BillRefNumber)
@@ -1017,11 +1022,90 @@ func parseMoneyString(s string) (int64, error) {
 	s = strings.ReplaceAll(s, "KSh", "")
 	s = strings.ReplaceAll(s, "KES", "")
 	s = strings.TrimSpace(s)
-	f, err := strconv.ParseFloat(s, 64)
-	if err != nil {
-		return 0, err
+	if s == "" {
+		return 0, errors.New("empty amount")
 	}
-	return int64(f * 100), nil
+
+	negative := false
+	if len(s) > 0 && (s[0] == '-' || s[0] == '+') {
+		negative = s[0] == '-'
+		s = s[1:]
+	}
+
+	var intPart, fracPart string
+	if dot := strings.IndexByte(s, '.'); dot >= 0 {
+		intPart = s[:dot]
+		fracPart = s[dot+1:]
+	} else {
+		intPart = s
+	}
+
+	intCents := int64(0)
+	if intPart != "" {
+		n, err := strconv.ParseInt(intPart, 10, 64)
+		if err != nil {
+			return 0, err
+		}
+		intCents = n * 100
+	}
+
+	// Parse the fractional part without floating point so 0.29 -> 29 cents
+	// (not 28 via int64(0.29*100)). Keep up to 3 digits: 2 for cents, 1 for
+	// round-half-away-from-zero.
+	fracCents := int64(0)
+	if fracPart != "" {
+		digits := fracPart
+		if len(digits) > 3 {
+			digits = digits[:3]
+		}
+		for len(digits) < 3 {
+			digits += "0"
+		}
+		centsDigits := digits[:2]
+		roundDigit := digits[2]
+		cents, err := strconv.ParseInt(centsDigits, 10, 64)
+		if err != nil {
+			return 0, err
+		}
+		if roundDigit >= '5' {
+			cents++
+		}
+		fracCents = cents
+	}
+
+	total := intCents + fracCents
+	if negative {
+		total = -total
+	}
+	return total, nil
+}
+
+// parseMoneyCents converts an M-Pesa callback metadata value (float64, int,
+// string, or json.Number) to cents without floating-point truncation.
+func parseMoneyCents(v any) (int64, error) {
+	switch val := v.(type) {
+	case string:
+		return parseMoneyString(val)
+	case float64:
+		if val < 0 {
+			return -float64ToCents(-val), nil
+		}
+		return float64ToCents(val), nil
+	case int:
+		return int64(val) * 100, nil
+	case int64:
+		return val * 100, nil
+	case json.Number:
+		return parseMoneyString(val.String())
+	default:
+		return 0, fmt.Errorf("unsupported amount type %T", v)
+	}
+}
+
+// float64ToCents converts a float64 amount to cents rounding half away from
+// zero, avoiding the float truncation bug where int64(0.29*100) == 28.
+func float64ToCents(f float64) int64 {
+	return int64(math.Floor(f*100 + 0.5))
 }
 
 // ListBankTransactions returns paginated bank transactions.

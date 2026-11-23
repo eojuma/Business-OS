@@ -212,30 +212,33 @@ func (r *repository) ListReviewQueue(businessID uuid.UUID, source string, limit,
 		var mpesaList []MpesaTransaction
 		var mpesaCount int64
 		mq := r.db.Model(&MpesaTransaction{}).Where("business_id = ? AND status = ? AND reconciliation_status = ?", businessID, StatusCompleted, Unmatched)
-		_ = mq.Count(&mpesaCount)
+		if err := mq.Count(&mpesaCount).Error; err != nil {
+			return nil, 0, err
+		}
 		total += mpesaCount
-		if err := mq.Order("created_at DESC").Find(&mpesaList).Error; err == nil {
-			for _, m := range mpesaList {
-				ref := m.MpesaReceiptNumber
-				if ref == "" {
-					ref = m.CheckoutRequestID
-				}
-				itemType := "inflow"
-				if m.TransactionType == TypeB2C {
-					itemType = "outflow"
-				}
-				items = append(items, ReviewQueueItem{
-					ID:           m.ID,
-					Source:       "mpesa",
-					Reference:    ref,
-					Counterparty: m.PhoneNumber,
-					Amount:       m.Amount,
-					Type:         itemType,
-					Description:  m.AccountReference + " " + m.BillRefNumber,
-					TransactedAt: m.CreatedAt,
-					Status:       string(m.ReconciliationStatus),
-				})
+		if err := mq.Order("created_at DESC").Find(&mpesaList).Error; err != nil {
+			return nil, 0, err
+		}
+		for _, m := range mpesaList {
+			ref := m.MpesaReceiptNumber
+			if ref == "" {
+				ref = m.CheckoutRequestID
 			}
+			itemType := "inflow"
+			if m.TransactionType == TypeB2C {
+				itemType = "outflow"
+			}
+			items = append(items, ReviewQueueItem{
+				ID:           m.ID,
+				Source:       "mpesa",
+				Reference:    ref,
+				Counterparty: m.PhoneNumber,
+				Amount:       m.Amount,
+				Type:         itemType,
+				Description:  m.AccountReference + " " + m.BillRefNumber,
+				TransactedAt: m.CreatedAt,
+				Status:       string(m.ReconciliationStatus),
+			})
 		}
 	}
 
@@ -244,22 +247,25 @@ func (r *repository) ListReviewQueue(businessID uuid.UUID, source string, limit,
 		var bankList []BankTransaction
 		var bankCount int64
 		bq := r.db.Model(&BankTransaction{}).Where("business_id = ? AND reconciliation_status = ?", businessID, Unmatched)
-		_ = bq.Count(&bankCount)
+		if err := bq.Count(&bankCount).Error; err != nil {
+			return nil, 0, err
+		}
 		total += bankCount
-		if err := bq.Order("transacted_at DESC").Find(&bankList).Error; err == nil {
-			for _, b := range bankList {
-				items = append(items, ReviewQueueItem{
-					ID:           b.ID,
-					Source:       "bank",
-					Reference:    b.Reference,
-					Counterparty: b.BankName,
-					Amount:       b.Amount,
-					Type:         string(b.Type),
-					Description:  b.Description,
-					TransactedAt: b.TransactedAt,
-					Status:       string(b.ReconciliationStatus),
-				})
-			}
+		if err := bq.Order("transacted_at DESC").Find(&bankList).Error; err != nil {
+			return nil, 0, err
+		}
+		for _, b := range bankList {
+			items = append(items, ReviewQueueItem{
+				ID:           b.ID,
+				Source:       "bank",
+				Reference:    b.Reference,
+				Counterparty: b.BankName,
+				Amount:       b.Amount,
+				Type:         string(b.Type),
+				Description:  b.Description,
+				TransactedAt: b.TransactedAt,
+				Status:       string(b.ReconciliationStatus),
+			})
 		}
 	}
 

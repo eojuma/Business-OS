@@ -113,7 +113,11 @@ func (h *Handler) HandleB2CResult(c *gin.Context) {
 
 func (h *Handler) HandleB2CTimeout(c *gin.Context) {
 	sig := extractSignature(c)
-	body, _ := c.GetRawData()
+	body, err := c.GetRawData()
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{ResultCodeKey: 1, ResultDescKey: DescInvalidPayload})
+		return
+	}
 	if err := h.service.HandleB2CTimeout(sig, body); err != nil {
 		if errors.Is(err, ErrInvalidSignature) {
 			c.JSON(http.StatusUnauthorized, gin.H{ResultCodeKey: 1, ResultDescKey: DescInvalidSignature})

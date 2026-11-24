@@ -24,7 +24,7 @@ describe("navigation groups", () => {
     }));
 
     expect(shape).toEqual([
-      { label: "Sales", items: ["Overview", "Sales", "Invoices", "Purchases"] },
+      { label: "Sales", items: ["Overview", "Sales", "Invoices", "Purchases", "Deliveries"] },
       { label: "Inventory", items: ["Products", "Inventory", "Receipt OCR"] },
       { label: "Finance", items: ["Finance", "Reports", "Analytics"] },
       { label: "People", items: ["Customers", "Suppliers"] },
@@ -50,6 +50,7 @@ describe("navigation groups", () => {
       "/dashboard/sales",
       "/dashboard/invoices",
       "/dashboard/purchases",
+      "/dashboard/deliveries",
       "/dashboard/products",
       "/dashboard/inventory",
       "/dashboard/receipts",

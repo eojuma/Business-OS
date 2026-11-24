@@ -42,6 +42,7 @@ export const NAV_GROUPS: NavGroup[] = [
       { href: "/dashboard/sales", label: "Sales", icon: ShoppingCart, permission: PERMISSIONS.salesCreate },
       { href: "/dashboard/invoices", label: "Invoices", icon: FileText, permission: PERMISSIONS.invoicesRead },
       { href: "/dashboard/purchases", label: "Purchases", icon: ClipboardList, permission: PERMISSIONS.purchasesRead },
+      { href: "/dashboard/deliveries", label: "Deliveries", icon: Truck, permission: PERMISSIONS.deliveriesRead },
     ],
   },
   {

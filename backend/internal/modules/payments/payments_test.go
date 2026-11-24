@@ -34,8 +34,8 @@ func newFakePaymentRepository() *fakePaymentRepository {
 	return &fakePaymentRepository{
 		mpesaTxs:     make(map[string]*MpesaTransaction),
 		bankTxs:      make(map[string]*BankTransaction),
-		invoices:    make(map[string]*invoices.Invoice),
-		custs:       make(map[string]*customers.Customer),
+		invoices:     make(map[string]*invoices.Invoice),
+		custs:        make(map[string]*customers.Customer),
 		paymentNotes: make([]string, 0),
 	}
 }

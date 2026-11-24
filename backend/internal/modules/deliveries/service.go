@@ -92,6 +92,7 @@ func (s *service) Transition(businessID, actorID, id uuid.UUID, input Transition
 	}
 	now := time.Now()
 	from := d.Status
+	//nolint:exhaustive // StatusPending records no timestamp
 	switch to {
 	case StatusDispatched:
 		if d.DispatchedAt == nil {

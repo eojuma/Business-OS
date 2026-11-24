@@ -122,7 +122,7 @@ func TestTransitionAllowed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, st := range []string{"dispatched", "in_transit", "delivered"} {
+	for _, st := range []string{string(StatusDispatched), string(StatusInTransit), string(StatusDelivered)} {
 		got, err := svc.Transition(bid, actor, d.ID, TransitionInput{Status: st})
 		if err != nil {
 			t.Fatalf("transition to %s: %v", st, err)
@@ -151,7 +151,7 @@ func TestTransitionInvalid(t *testing.T) {
 		}{{ProductID: uuid.New().String(), Quantity: 1}},
 	})
 	// pending -> delivered is not allowed
-	if _, err := svc.Transition(bid, actor, d.ID, TransitionInput{Status: "delivered"}); err == nil {
+	if _, err := svc.Transition(bid, actor, d.ID, TransitionInput{Status: string(StatusDelivered)}); err == nil {
 		t.Fatal("expected error for invalid transition")
 	}
 	// unknown status
@@ -173,10 +173,10 @@ func TestFailedDeliveryPath(t *testing.T) {
 			Quantity  int64  `json:"quantity" binding:"required,gt=0"`
 		}{{ProductID: uuid.New().String(), Quantity: 3}},
 	})
-	if _, err := svc.Transition(bid, actor, d.ID, TransitionInput{Status: "dispatched"}); err != nil {
+	if _, err := svc.Transition(bid, actor, d.ID, TransitionInput{Status: string(StatusDispatched)}); err != nil {
 		t.Fatal(err)
 	}
-	got, err := svc.Transition(bid, actor, d.ID, TransitionInput{Status: "failed", Note: "customer refused"})
+	got, err := svc.Transition(bid, actor, d.ID, TransitionInput{Status: string(StatusFailed), Note: "customer refused"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -190,7 +190,7 @@ func TestFailedDeliveryPath(t *testing.T) {
 		t.Fatal("failed_at not set")
 	}
 	// retry: failed -> dispatched
-	if _, err := svc.Transition(bid, actor, d.ID, TransitionInput{Status: "dispatched"}); err != nil {
+	if _, err := svc.Transition(bid, actor, d.ID, TransitionInput{Status: string(StatusDispatched)}); err != nil {
 		t.Fatalf("retry failed: %v", err)
 	}
 }
@@ -208,10 +208,10 @@ func TestDeliveredTerminal(t *testing.T) {
 			Quantity  int64  `json:"quantity" binding:"required,gt=0"`
 		}{{ProductID: uuid.New().String(), Quantity: 1}},
 	})
-	_, _ = svc.Transition(bid, actor, d.ID, TransitionInput{Status: "dispatched"})
-	_, _ = svc.Transition(bid, actor, d.ID, TransitionInput{Status: "delivered"})
+	_, _ = svc.Transition(bid, actor, d.ID, TransitionInput{Status: string(StatusDispatched)})
+	_, _ = svc.Transition(bid, actor, d.ID, TransitionInput{Status: string(StatusDelivered)})
 	// delivered is terminal: cannot transition further (except? no)
-	if _, err := svc.Transition(bid, actor, d.ID, TransitionInput{Status: "dispatched"}); err == nil {
+	if _, err := svc.Transition(bid, actor, d.ID, TransitionInput{Status: string(StatusDispatched)}); err == nil {
 		t.Fatal("expected error transitioning from delivered")
 	}
 }

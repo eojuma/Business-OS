@@ -87,9 +87,6 @@ func (s *service) Transition(businessID, actorID, id uuid.UUID, input Transition
 	if err != nil {
 		return nil, err
 	}
-	if d.Status.IsTerminal() && to != StatusFailed {
-		// delivered is terminal
-	}
 	if !CanTransition(d.Status, to) {
 		return nil, errors.New("invalid status transition")
 	}
@@ -113,6 +110,7 @@ func (s *service) Transition(businessID, actorID, id uuid.UUID, input Transition
 			d.FailedAt = &now
 		}
 		d.FailureReason = input.Note
+	default:
 	}
 	d.Status = to
 	if err := s.repo.Update(d); err != nil {

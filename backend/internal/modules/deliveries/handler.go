@@ -112,9 +112,6 @@ func (h *Handler) List(c *gin.Context) {
 	}
 	limit := 50
 	offset := 0
-	if v := c.Query("limit"); v != "" {
-		// ignore parse errors, keep default
-	}
 	items, total, err := h.service.List(businessID, sourceType, sourceID, status, limit, offset)
 	if err != nil {
 		response.Error(c, http.StatusInternalServerError, err.Error())

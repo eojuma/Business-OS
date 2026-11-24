@@ -53,7 +53,7 @@ var routePermissions = map[string]Permission{
 	"POST /api/v1/purchases/:id/receive":         PurchaseReceive,
 	"POST /api/v1/deliveries":                    DeliveryCreate,
 	"GET /api/v1/deliveries":                     DeliveryRead,
-	"GET /api/v1/deliveries/:id":                DeliveryRead,
+	"GET /api/v1/deliveries/:id":                 DeliveryRead,
 	"DELETE /api/v1/deliveries/:id":              DeliveryDelete,
 	"POST /api/v1/deliveries/:id/transition":     DeliveryUpdate,
 	"GET /api/v1/deliveries/:id/history":         DeliveryRead,

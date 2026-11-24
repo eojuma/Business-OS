@@ -57,6 +57,15 @@ export function paymentTypeLabel(type: string): string {
   }
 }
 
+/** Returns a human-readable bank-transfer message based on reconciliation state. */
+export function bankTransferMessage(amount: number, reconciliationStatus: string): string {
+  const amountLabel = `Bank transfer of ${amount.toLocaleString("en-KE", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  if (reconciliationStatus.toLowerCase() === "reconciled") {
+    return `${amountLabel} recorded and reconciled.`;
+  }
+  return `${amountLabel} recorded and queued for manual reconciliation.`;
+}
+
 /** Returns styling classes for reconciliation status badges. */
 export function reconciliationStatusClass(status: string): string {
   switch (status.toLowerCase()) {

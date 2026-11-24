@@ -13,6 +13,7 @@ import {
   invoiceDate,
   invoiceStatusClass,
   invoiceStatusLabel,
+  shouldKeepPollingInvoicePayment,
   type Invoice,
 } from "@/lib/invoices";
 
@@ -42,7 +43,7 @@ export default function InvoiceDetailPage() {
 
   /** Loads the invoice and resets the payment amount to the remainder. */
   const loadInvoice = useCallback(async () => {
-    if (!id) return;
+    if (!id) return null;
     setLoading(true);
     setError("");
     try {
@@ -58,9 +59,11 @@ export default function InvoiceDetailPage() {
       } else {
         setAmount("");
       }
+      return next;
     } catch (e) {
       setInvoice(null);
       setError(errorMessage(e, "Failed to load invoice"));
+      return null;
     } finally {
       setLoading(false);
     }
@@ -132,20 +135,20 @@ export default function InvoiceDetailPage() {
         idempotency_key: `stk-${invoice.id}`,
       });
       setStkSuccess("M-Pesa STK push prompt sent! Payment will automatically reconcile upon confirmation.");
-      // Poll up to three times with two-second gaps so a pending callback
-      // has time to arrive before the UI falls back to manual refresh.
-      let attempts = 0;
-      const maxAttempts = 3;
-      function tick() {
+      // Refresh after the callback window and keep polling only while the
+      // invoice still has a balance. That avoids leaving the page with stale
+      // status once the transaction settles.
+      if (pollTimer) clearTimeout(pollTimer);
+      const poll = async () => {
         const timer = setTimeout(async () => {
-          attempts += 1;
-          if (attempts >= maxAttempts) return;
-          await loadInvoice();
-          tick();
+          const next = await loadInvoice();
+          if (next && shouldKeepPollingInvoicePayment(next)) {
+            void poll();
+          }
         }, 2000);
         setPollTimer(timer);
-      }
-      void tick();
+      };
+      void poll();
     } catch (e) {
       setPaymentError(errorMessage(e, "Failed to send STK push"));
     } finally {

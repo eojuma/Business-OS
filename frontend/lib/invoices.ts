@@ -58,6 +58,11 @@ export function invoiceStatusClass(status: string, overdue = false): string {
   }
 }
 
+/** Keeps polling after an STK push until the invoice is settled or no balance remains. */
+export function shouldKeepPollingInvoicePayment(invoice: Pick<Invoice, "remaining_balance" | "status">): boolean {
+  return invoice.status !== "paid" && invoice.remaining_balance > 0;
+}
+
 /** Returns the invoice customer name or the walk-in fallback. */
 export function invoiceCustomerName(invoice: Pick<Invoice, "customer">): string {
   return invoice.customer?.name || "Walk-in customer";

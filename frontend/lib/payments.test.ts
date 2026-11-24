@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatPhone, paymentTypeLabel, reconciliationStatusClass } from "./payments";
+import { bankTransferMessage, formatPhone, paymentTypeLabel, reconciliationStatusClass } from "./payments";
 
 describe("payments presentation helpers", () => {
   it("formats payment and transaction type labels", () => {
@@ -16,6 +16,13 @@ describe("payments presentation helpers", () => {
     expect(reconciliationStatusClass("unmatched")).toContain("warning");
     expect(reconciliationStatusClass("manual")).toContain("primary");
     expect(reconciliationStatusClass("ignored")).toContain("surface-muted");
+  });
+
+  it("describes bank transfers using the reconciliation status", () => {
+    expect(bankTransferMessage(1200, "reconciled")).toBe("Bank transfer of 1,200.00 recorded and reconciled.");
+    expect(bankTransferMessage(1200, "manual")).toBe(
+      "Bank transfer of 1,200.00 recorded and queued for manual reconciliation.",
+    );
   });
 
   it("formats Kenyan phone numbers into readable groups", () => {

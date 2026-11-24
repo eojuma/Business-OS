@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import { PageHeader, StatCard, formatMoney } from "@/components/app-shell";
+import { bankTransferMessage } from "@/lib/payments";
 import { usePermissions } from "@/hooks/usePermissions";
 import { PERMISSIONS } from "@/lib/permissions";
 import {
@@ -236,7 +237,7 @@ export default function FinancePage() {
       return;
     }
     try {
-      await api.post("/payments/bank/manual", {
+      const res = await api.post("/payments/bank/manual", {
         bank_name: bankName,
         reference: bankRef,
         type: bankType,
@@ -247,7 +248,8 @@ export default function FinancePage() {
       setBankRef("");
       setBankAmount("");
       setBankDesc("");
-      setMessage(`Bank transfer of ${formatMoney(cents)} recorded and reconciled.`);
+      const tx = res.data.data as BankTx;
+      setMessage(bankTransferMessage(tx.amount, tx.reconciliation_status));
       await loadData();
     } catch (e: any) {
       setError(e.response?.data?.error || "Failed to record bank transfer");

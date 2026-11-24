@@ -4,6 +4,7 @@ import {
   invoiceDate,
   invoiceStatusClass,
   invoiceStatusLabel,
+  shouldKeepPollingInvoicePayment,
 } from "./invoices";
 
 describe("invoice presentation", () => {
@@ -19,6 +20,13 @@ describe("invoice presentation", () => {
     expect(invoiceStatusClass("partial", true)).toContain("danger");
     expect(invoiceStatusClass("paid", true)).toContain("primary");
     expect(invoiceStatusClass("unpaid")).toContain("surface-muted");
+  });
+
+  it("keeps polling only while an invoice still has a balance and is unpaid", () => {
+    expect(shouldKeepPollingInvoicePayment({ status: "unpaid", remaining_balance: 1500 })).toBe(true);
+    expect(shouldKeepPollingInvoicePayment({ status: "partial", remaining_balance: 1500 })).toBe(true);
+    expect(shouldKeepPollingInvoicePayment({ status: "paid", remaining_balance: 1500 })).toBe(false);
+    expect(shouldKeepPollingInvoicePayment({ status: "unpaid", remaining_balance: 0 })).toBe(false);
   });
 
   it("falls back to a walk-in label when no customer is linked", () => {

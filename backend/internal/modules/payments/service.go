@@ -1303,54 +1303,97 @@ func (s *service) ListReviewQueue(businessID uuid.UUID, source string, page, lim
 // ReconcileReviewItem manually settles an unmatched transaction. Inflows may
 // only settle invoices or customer credit; outflows may only record an expense.
 func (s *service) ReconcileReviewItem(businessID uuid.UUID, itemID uuid.UUID, input ReconcileInput) error {
-	var (
-		amount    int64
-		refString string
-		direction string
-	)
+	ctx, err := s.loadReviewReconcileContext(businessID, itemID, input)
+	if err != nil {
+		return err
+	}
 
-	// Fetch item according to source
-	var mpesaTx *MpesaTransaction
-	var bankTx *BankTransaction
+	if err := s.ensureReviewDirectionAllowed(ctx.direction, input.TargetType); err != nil {
+		return err
+	}
+
+	// One M-Pesa receipt must settle exactly one target. The callback path
+	// claims the transaction before applying its effect, but if that save
+	// fails the receipt can remain unmatched and be applied again here. Check
+	// the receipt against every payment table, not just the selected target.
+	if ctx.mpesaTx != nil && ctx.mpesaTx.MpesaReceiptNumber != "" {
+		if s.receiptAlreadyApplied(ctx.mpesaTx.MpesaReceiptNumber, businessID) {
+			return ErrAlreadyReconciled
+		}
+	}
+
+	note := input.Note
+	if note == "" {
+		note = fmt.Sprintf("Reconciled from %s (%s)", input.Source, ctx.refString)
+	}
+
+	switch input.TargetType {
+	case "invoice":
+		return s.reconcileReviewInvoice(businessID, ctx, input, note)
+	case "customer_credit":
+		return s.reconcileReviewCustomerCredit(businessID, ctx, input, note)
+	case "expense":
+		return s.reconcileReviewExpense(businessID, ctx, input, note)
+	case "supplier_payment":
+		return s.reconcileReviewSupplierPayment(businessID, ctx, input, note)
+	case "dismiss":
+		return s.reconcileReviewDismiss(ctx)
+	default:
+		return ErrInvalidTarget
+	}
+}
+
+type reviewReconcileContext struct {
+	amount    int64
+	refString string
+	direction string
+	mpesaTx   *MpesaTransaction
+	bankTx    *BankTransaction
+}
+
+func (s *service) loadReviewReconcileContext(businessID uuid.UUID, itemID uuid.UUID, input ReconcileInput) (*reviewReconcileContext, error) {
+	ctx := &reviewReconcileContext{}
 
 	switch input.Source {
 	case "mpesa":
 		tx, err := s.repo.GetMpesaTransactionByID(itemID, businessID)
 		if err != nil {
-			return ErrTransactionNotFound
+			return nil, ErrTransactionNotFound
 		}
 		if tx.ReconciliationStatus == Reconciled {
-			return ErrAlreadyReconciled
+			return nil, ErrAlreadyReconciled
 		}
 		if tx.Status != StatusCompleted {
-			return ErrTransactionNotCompleted
+			return nil, ErrTransactionNotCompleted
 		}
-		mpesaTx = tx
-		amount = tx.Amount
-		refString = tx.MpesaReceiptNumber
-		direction = string(BankInflow)
+		ctx.mpesaTx = tx
+		ctx.amount = tx.Amount
+		ctx.refString = tx.MpesaReceiptNumber
+		ctx.direction = string(BankInflow)
 		if tx.TransactionType == TypeB2C {
-			direction = string(BankOutflow)
+			ctx.direction = string(BankOutflow)
 		}
 	case "bank":
 		tx, err := s.repo.GetBankTransactionByID(itemID, businessID)
 		if err != nil {
-			return ErrTransactionNotFound
+			return nil, ErrTransactionNotFound
 		}
 		if tx.ReconciliationStatus == Reconciled {
-			return ErrAlreadyReconciled
+			return nil, ErrAlreadyReconciled
 		}
-		bankTx = tx
-		amount = tx.Amount
-		refString = tx.Reference
-		direction = string(tx.Type)
+		ctx.bankTx = tx
+		ctx.amount = tx.Amount
+		ctx.refString = tx.Reference
+		ctx.direction = string(tx.Type)
 	default:
-		return ErrInvalidTarget
+		return nil, ErrInvalidTarget
 	}
 
-	// Money that left the business cannot settle a receivable, and money that
-	// arrived cannot be booked as an expense.
-	switch input.TargetType {
+	return ctx, nil
+}
+
+func (s *service) ensureReviewDirectionAllowed(direction, targetType string) error {
+	switch targetType {
 	case "invoice", "customer_credit":
 		if direction == string(BankOutflow) {
 			return ErrTargetDirectionMismatch
@@ -1360,127 +1403,119 @@ func (s *service) ReconcileReviewItem(businessID uuid.UUID, itemID uuid.UUID, in
 			return ErrTargetDirectionMismatch
 		}
 	}
+	return nil
+}
 
-	// One M-Pesa receipt must settle exactly one target. The callback path
-	// claims the transaction before applying its effect, but if that save
-	// fails the receipt can remain unmatched and be applied again here. Check
-	// the receipt against every payment table, not just the selected target.
-	if mpesaTx != nil && mpesaTx.MpesaReceiptNumber != "" {
-		if s.receiptAlreadyApplied(mpesaTx.MpesaReceiptNumber, businessID) {
-			return ErrAlreadyReconciled
-		}
+func (s *service) finalizeMpesaReconciliation(tx *MpesaTransaction, entityType ReconciledEntityType, entityID uuid.UUID) error {
+	entityIDCopy := entityID
+	tx.ReconciliationStatus = Reconciled
+	tx.ReconciledEntityType = entityType
+	tx.ReconciledEntityID = &entityIDCopy
+	return s.repo.UpdateMpesaReconciliation(tx)
+}
+
+func (s *service) finalizeBankReconciliation(tx *BankTransaction, entityType ReconciledEntityType, entityID uuid.UUID) error {
+	entityIDCopy := entityID
+	tx.ReconciliationStatus = Reconciled
+	tx.ReconciledEntityType = entityType
+	tx.ReconciledEntityID = &entityIDCopy
+	return s.repo.UpdateBankTransaction(tx)
+}
+
+func (s *service) reconcileReviewInvoice(businessID uuid.UUID, ctx *reviewReconcileContext, input ReconcileInput, note string) error {
+	targetUUID, err := uuid.Parse(input.TargetID)
+	if err != nil {
+		return fmt.Errorf("invalid invoice id: %w", err)
+	}
+	if s.invoicesSvc == nil {
+		return errors.New("invoice service not configured")
 	}
 
-	note := input.Note
-	if note == "" {
-		note = fmt.Sprintf("Reconciled from %s (%s)", input.Source, refString)
+	paymentNote := note
+	if ctx.mpesaTx != nil {
+		marker := mpesaMarker(ctx.mpesaTx)
+		paymentNote = marker + " invoice payment: " + note
+		exists, err := s.invoicePaymentExists(targetUUID, businessID, marker)
+		if err != nil {
+			return err
+		}
+		if !exists {
+			if _, err := s.invoicesSvc.RecordPayment(targetUUID, businessID, invoices.RecordPaymentInput{
+				Amount: ctx.amount,
+				Note:   paymentNote,
+			}); err != nil {
+				return fmt.Errorf("record invoice payment: %w", err)
+			}
+		}
+	} else if _, err := s.invoicesSvc.RecordPayment(targetUUID, businessID, invoices.RecordPaymentInput{
+		Amount: ctx.amount,
+		Note:   paymentNote,
+	}); err != nil {
+		return fmt.Errorf("record invoice payment: %w", err)
 	}
 
-	switch input.TargetType {
-	case "invoice":
-		targetUUID, err := uuid.Parse(input.TargetID)
-		if err != nil {
-			return fmt.Errorf("invalid invoice id: %w", err)
-		}
-		if s.invoicesSvc == nil {
-			return errors.New("invoice service not configured")
-		}
-		paymentNote := note
-		if mpesaTx != nil {
-			marker := mpesaMarker(mpesaTx)
-			paymentNote = marker + " invoice payment: " + note
-			exists, err := s.invoicePaymentExists(targetUUID, businessID, marker)
-			if err != nil {
-				return err
-			}
-			if !exists {
-				if _, err := s.invoicesSvc.RecordPayment(targetUUID, businessID, invoices.RecordPaymentInput{
-					Amount: amount,
-					Note:   paymentNote,
-				}); err != nil {
-					return fmt.Errorf("record invoice payment: %w", err)
-				}
-			}
-		} else if _, err := s.invoicesSvc.RecordPayment(targetUUID, businessID, invoices.RecordPaymentInput{
-			Amount: amount,
-			Note:   paymentNote,
-		}); err != nil {
-			return fmt.Errorf("record invoice payment: %w", err)
-		}
-		if mpesaTx != nil {
-			mpesaTx.ReconciliationStatus = Reconciled
-			mpesaTx.ReconciledEntityType = EntityInvoice
-			mpesaTx.ReconciledEntityID = &targetUUID
-			return s.repo.UpdateMpesaReconciliation(mpesaTx)
-		}
-		if bankTx != nil {
-			bankTx.ReconciliationStatus = Reconciled
-			bankTx.ReconciledEntityType = EntityInvoice
-			bankTx.ReconciledEntityID = &targetUUID
-			return s.repo.UpdateBankTransaction(bankTx)
-		}
+	if ctx.mpesaTx != nil {
+		return s.finalizeMpesaReconciliation(ctx.mpesaTx, EntityInvoice, targetUUID)
+	}
+	if ctx.bankTx != nil {
+		return s.finalizeBankReconciliation(ctx.bankTx, EntityInvoice, targetUUID)
+	}
+	return nil
+}
 
-	case "customer_credit":
-		targetUUID, err := uuid.Parse(input.TargetID)
-		if err != nil {
-			return fmt.Errorf("invalid customer id: %w", err)
-		}
-		if s.customersSvc == nil {
-			return errors.New("customer service not configured")
-		}
-		paymentNote := note
-		if mpesaTx != nil {
-			marker := mpesaMarker(mpesaTx)
-			paymentNote = marker + " customer payment: " + note
-			exists, err := s.customerPaymentExists(targetUUID, businessID, marker)
-			if err != nil {
-				return err
-			}
-			if !exists {
-				if _, err := s.customersSvc.RecordPayment(targetUUID, businessID, amount, paymentNote); err != nil {
-					return fmt.Errorf("record customer payment: %w", err)
-				}
-			}
-		} else if _, err := s.customersSvc.RecordPayment(targetUUID, businessID, amount, paymentNote); err != nil {
-			return fmt.Errorf("record customer payment: %w", err)
-		}
-		if mpesaTx != nil {
-			mpesaTx.ReconciliationStatus = Reconciled
-			mpesaTx.ReconciledEntityType = EntityCustomerCredit
-			mpesaTx.ReconciledEntityID = &targetUUID
-			return s.repo.UpdateMpesaReconciliation(mpesaTx)
-		}
-		if bankTx != nil {
-			bankTx.ReconciliationStatus = Reconciled
-			bankTx.ReconciledEntityType = EntityCustomerCredit
-			bankTx.ReconciledEntityID = &targetUUID
-			return s.repo.UpdateBankTransaction(bankTx)
-		}
+func (s *service) reconcileReviewCustomerCredit(businessID uuid.UUID, ctx *reviewReconcileContext, input ReconcileInput, note string) error {
+	targetUUID, err := uuid.Parse(input.TargetID)
+	if err != nil {
+		return fmt.Errorf("invalid customer id: %w", err)
+	}
+	if s.customersSvc == nil {
+		return errors.New("customer service not configured")
+	}
 
-	case "expense":
-		cat := strings.TrimSpace(input.ExpenseCategory)
-		if cat == "" {
-			cat = defaultExpenseCategory
+	paymentNote := note
+	if ctx.mpesaTx != nil {
+		marker := mpesaMarker(ctx.mpesaTx)
+		paymentNote = marker + " customer payment: " + note
+		exists, err := s.customerPaymentExists(targetUUID, businessID, marker)
+		if err != nil {
+			return err
 		}
-		if s.financeSvc == nil {
-			return errors.New("finance service not configured")
+		if !exists {
+			if _, err := s.customersSvc.RecordPayment(targetUUID, businessID, ctx.amount, paymentNote); err != nil {
+				return fmt.Errorf("record customer payment: %w", err)
+			}
 		}
-		description := note
-		var existing *finance.Expense
-		if mpesaTx != nil {
-			marker := mpesaMarker(mpesaTx)
-			description = marker + " payout: " + note
-			existing = s.findMpesaExpense(mpesaTx, marker)
-		}
-		var expenseID uuid.UUID
-		if existing != nil {
+	} else if _, err := s.customersSvc.RecordPayment(targetUUID, businessID, ctx.amount, paymentNote); err != nil {
+		return fmt.Errorf("record customer payment: %w", err)
+	}
+
+	if ctx.mpesaTx != nil {
+		return s.finalizeMpesaReconciliation(ctx.mpesaTx, EntityCustomerCredit, targetUUID)
+	}
+	if ctx.bankTx != nil {
+		return s.finalizeBankReconciliation(ctx.bankTx, EntityCustomerCredit, targetUUID)
+	}
+	return nil
+}
+
+func (s *service) reconcileReviewExpense(businessID uuid.UUID, ctx *reviewReconcileContext, input ReconcileInput, note string) error {
+	if s.financeSvc == nil {
+		return errors.New("finance service not configured")
+	}
+
+	description := note
+	var expenseID uuid.UUID
+	if ctx.mpesaTx != nil {
+		marker := mpesaMarker(ctx.mpesaTx)
+		description = marker + " payout: " + note
+		if existing := s.findMpesaExpense(ctx.mpesaTx, marker); existing != nil {
 			expenseID = existing.ID
 		} else {
 			exp, err := s.financeSvc.CreateExpense(finance.CreateExpenseInput{
 				BusinessID:  businessID,
-				Category:    cat,
+				Category:    strings.TrimSpace(input.ExpenseCategory),
 				Description: description,
-				Amount:      amount,
+				Amount:      ctx.amount,
 				IncurredAt:  time.Now(),
 			})
 			if err != nil {
@@ -1488,69 +1523,72 @@ func (s *service) ReconcileReviewItem(businessID uuid.UUID, itemID uuid.UUID, in
 			}
 			expenseID = exp.ID
 		}
-		if mpesaTx != nil {
-			mpesaTx.ReconciliationStatus = Reconciled
-			mpesaTx.ReconciledEntityType = EntityExpense
-			mpesaTx.ReconciledEntityID = &expenseID
-			return s.repo.UpdateMpesaReconciliation(mpesaTx)
-		}
-		if bankTx != nil {
-			bankTx.ReconciliationStatus = Reconciled
-			bankTx.ReconciledEntityType = EntityExpense
-			bankTx.ReconciledEntityID = &expenseID
-			return s.repo.UpdateBankTransaction(bankTx)
-		}
-
-	case "supplier_payment":
-		supplierUUID, err := uuid.Parse(input.TargetID)
+	} else {
+		exp, err := s.financeSvc.CreateExpense(finance.CreateExpenseInput{
+			BusinessID:  businessID,
+			Category:    strings.TrimSpace(input.ExpenseCategory),
+			Description: description,
+			Amount:      ctx.amount,
+			IncurredAt:  time.Now(),
+		})
 		if err != nil {
-			return fmt.Errorf("invalid supplier id: %w", err)
+			return fmt.Errorf("create expense: %w", err)
 		}
-		if s.suppliersSvc == nil {
-			return errors.New("supplier service not configured")
-		}
-		paymentNote := note
-		if mpesaTx != nil {
-			marker := mpesaMarker(mpesaTx)
-			paymentNote = marker + " supplier payment: " + note
-			exists, err := s.supplierPaymentExists(supplierUUID, businessID, marker)
-			if err != nil {
-				return err
-			}
-			if !exists {
-				if _, err := s.suppliersSvc.RecordPayment(supplierUUID, businessID, amount, paymentNote); err != nil {
-					return fmt.Errorf("record supplier payment: %w", err)
-				}
-			}
-		} else if _, err := s.suppliersSvc.RecordPayment(supplierUUID, businessID, amount, paymentNote); err != nil {
-			return fmt.Errorf("record supplier payment: %w", err)
-		}
-		if mpesaTx != nil {
-			mpesaTx.ReconciliationStatus = Reconciled
-			mpesaTx.ReconciledEntityType = EntitySupplierPayment
-			mpesaTx.ReconciledEntityID = &supplierUUID
-			return s.repo.UpdateMpesaReconciliation(mpesaTx)
-		}
-		if bankTx != nil {
-			bankTx.ReconciliationStatus = Reconciled
-			bankTx.ReconciledEntityType = EntitySupplierPayment
-			bankTx.ReconciledEntityID = &supplierUUID
-			return s.repo.UpdateBankTransaction(bankTx)
-		}
-
-	case "dismiss":
-		if mpesaTx != nil {
-			mpesaTx.ReconciliationStatus = Manual
-			return s.repo.UpdateMpesaReconciliation(mpesaTx)
-		}
-		if bankTx != nil {
-			bankTx.ReconciliationStatus = Manual
-			return s.repo.UpdateBankTransaction(bankTx)
-		}
-
-	default:
-		return ErrInvalidTarget
+		expenseID = exp.ID
 	}
 
+	if ctx.mpesaTx != nil {
+		return s.finalizeMpesaReconciliation(ctx.mpesaTx, EntityExpense, expenseID)
+	}
+	if ctx.bankTx != nil {
+		return s.finalizeBankReconciliation(ctx.bankTx, EntityExpense, expenseID)
+	}
+	return nil
+}
+
+func (s *service) reconcileReviewSupplierPayment(businessID uuid.UUID, ctx *reviewReconcileContext, input ReconcileInput, note string) error {
+	supplierUUID, err := uuid.Parse(input.TargetID)
+	if err != nil {
+		return fmt.Errorf("invalid supplier id: %w", err)
+	}
+	if s.suppliersSvc == nil {
+		return errors.New("supplier service not configured")
+	}
+
+	paymentNote := note
+	if ctx.mpesaTx != nil {
+		marker := mpesaMarker(ctx.mpesaTx)
+		paymentNote = marker + " supplier payment: " + note
+		exists, err := s.supplierPaymentExists(supplierUUID, businessID, marker)
+		if err != nil {
+			return err
+		}
+		if !exists {
+			if _, err := s.suppliersSvc.RecordPayment(supplierUUID, businessID, ctx.amount, paymentNote); err != nil {
+				return fmt.Errorf("record supplier payment: %w", err)
+			}
+		}
+	} else if _, err := s.suppliersSvc.RecordPayment(supplierUUID, businessID, ctx.amount, paymentNote); err != nil {
+		return fmt.Errorf("record supplier payment: %w", err)
+	}
+
+	if ctx.mpesaTx != nil {
+		return s.finalizeMpesaReconciliation(ctx.mpesaTx, EntitySupplierPayment, supplierUUID)
+	}
+	if ctx.bankTx != nil {
+		return s.finalizeBankReconciliation(ctx.bankTx, EntitySupplierPayment, supplierUUID)
+	}
+	return nil
+}
+
+func (s *service) reconcileReviewDismiss(ctx *reviewReconcileContext) error {
+	if ctx.mpesaTx != nil {
+		ctx.mpesaTx.ReconciliationStatus = Manual
+		return s.repo.UpdateMpesaReconciliation(ctx.mpesaTx)
+	}
+	if ctx.bankTx != nil {
+		ctx.bankTx.ReconciliationStatus = Manual
+		return s.repo.UpdateBankTransaction(ctx.bankTx)
+	}
 	return nil
 }

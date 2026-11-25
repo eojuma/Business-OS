@@ -38,6 +38,11 @@ const (
 	PurchaseReceive Permission = "purchases:receive"
 	PurchaseDelete  Permission = "purchases:delete"
 
+	DeliveryRead   Permission = "deliveries:read"
+	DeliveryCreate Permission = "deliveries:create"
+	DeliveryUpdate Permission = "deliveries:update"
+	DeliveryDelete Permission = "deliveries:delete"
+
 	ProductRead   Permission = "products:read"
 	ProductManage Permission = "products:manage"
 	ProductDelete Permission = "products:delete"
@@ -80,6 +85,7 @@ var allPermissions = []Permission{
 	SalesRead, SalesCreate,
 	InvoiceRead, InvoicePayment,
 	PurchaseRead, PurchaseCreate, PurchaseReceive, PurchaseDelete,
+	DeliveryRead, DeliveryCreate, DeliveryUpdate, DeliveryDelete,
 	ProductRead, ProductManage, ProductDelete,
 	InventoryRead, InventoryAdjust,
 	CustomerRead, CustomerManage, CustomerPayment,
@@ -101,6 +107,7 @@ var matrix = map[string]map[Permission]bool{
 		SalesRead, SalesCreate,
 		InvoiceRead, InvoicePayment,
 		PurchaseRead, PurchaseCreate, PurchaseReceive, PurchaseDelete,
+		DeliveryRead, DeliveryCreate, DeliveryUpdate, DeliveryDelete,
 		ProductRead, ProductManage, ProductDelete,
 		InventoryRead, InventoryAdjust,
 		CustomerRead, CustomerManage, CustomerPayment,
@@ -119,6 +126,7 @@ var matrix = map[string]map[Permission]bool{
 		InventoryRead,
 		CustomerRead, CustomerManage, CustomerPayment,
 		SupplierRead,
+		DeliveryRead, DeliveryCreate, DeliveryUpdate,
 		NotificationRead, NotificationWrite,
 		AssistantUse, ReceiptUse,
 	}),
@@ -129,6 +137,7 @@ var matrix = map[string]map[Permission]bool{
 		SalesRead,
 		InvoiceRead, InvoicePayment,
 		PurchaseRead,
+		DeliveryRead,
 		ProductRead,
 		InventoryRead,
 		CustomerRead, CustomerPayment,
@@ -142,6 +151,7 @@ var matrix = map[string]map[Permission]bool{
 		AccountSelf,
 		BusinessRead,
 		PurchaseRead, PurchaseReceive,
+		DeliveryRead, DeliveryUpdate,
 		ProductRead,
 		InventoryRead, InventoryAdjust,
 		SupplierRead,

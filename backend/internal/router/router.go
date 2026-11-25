@@ -11,6 +11,7 @@ import (
 	"github.com/businessos/backend/internal/modules/auth"
 	"github.com/businessos/backend/internal/modules/business"
 	"github.com/businessos/backend/internal/modules/customers"
+	"github.com/businessos/backend/internal/modules/deliveries"
 	"github.com/businessos/backend/internal/modules/finance"
 	"github.com/businessos/backend/internal/modules/inventory"
 	"github.com/businessos/backend/internal/modules/invoices"
@@ -60,6 +61,7 @@ func New(db *gorm.DB, cfg *config.Config) (*gin.Engine, func(context.Context)) {
 		suppliers.RegisterRoutes(protected, db, cfg)
 		sales.RegisterRoutes(protected, db, cfg)
 		purchases.RegisterRoutes(protected, db, cfg)
+		deliveries.RegisterRoutes(protected, db, cfg)
 		finance.RegisterRoutes(protected, db, cfg)
 		reports.RegisterRoutes(protected, db, cfg)
 		notifications.RegisterRoutes(protected, db, cfg)

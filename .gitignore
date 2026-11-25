@@ -29,3 +29,6 @@ frontend/next-env.d.ts
 
 # Docker
 docker-compose.override.yml
+
+# frontend env (local)
+frontend/.enc

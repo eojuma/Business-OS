@@ -74,9 +74,9 @@ func (f *fakeRepo) TransitionDelivery(d *Delivery, from DeliveryStatus, h *Deliv
 	return true, nil
 }
 
-func (f *fakeRepo) SaleExists(businessID, id uuid.UUID) (bool, error) { return true, nil }
+func (f *fakeRepo) SaleExists(businessID, id uuid.UUID) (bool, error)     { return true, nil }
 func (f *fakeRepo) PurchaseExists(businessID, id uuid.UUID) (bool, error) { return true, nil }
-func (f *fakeRepo) ProductExists(businessID, id uuid.UUID) (bool, error) { return true, nil }
+func (f *fakeRepo) ProductExists(businessID, id uuid.UUID) (bool, error)  { return true, nil }
 
 func (f *fakeRepo) GetByID(id, businessID uuid.UUID) (*Delivery, error) {
 	if f.getErr != nil {

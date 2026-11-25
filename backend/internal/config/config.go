@@ -3,13 +3,14 @@ package config
 
 import (
 	"fmt"
+	"net"
 	"net/url"
 	"os"
 	"strconv"
 	"strings"
 
+	"github.com/google/uuid"
 	"github.com/joho/godotenv"
-	"net"
 )
 
 // Config holds all application configuration.
@@ -80,6 +81,8 @@ type Config struct {
 	MpesaB2CShortCode          string
 	MpesaB2CResultURL          string
 	MpesaB2CTimeoutURL         string
+	// MpesaBusinessID is the optional business UUID authorized to use deployment-wide Daraja credentials.
+	MpesaBusinessID string
 }
 
 // Load loads configuration from environment variables.
@@ -150,6 +153,7 @@ func Load() *Config {
 		MpesaB2CShortCode:          getEnv("MPESA_B2C_SHORTCODE", ""),
 		MpesaB2CResultURL:          getEnv("MPESA_B2C_RESULT_URL", ""),
 		MpesaB2CTimeoutURL:         getEnv("MPESA_B2C_TIMEOUT_URL", ""),
+		MpesaBusinessID:            getEnv("MPESA_BUSINESS_ID", ""),
 	}
 }
 
@@ -219,6 +223,11 @@ func (c *Config) Validate() error {
 	}
 	if c.MpesaCallbackSecret == "" {
 		return fmt.Errorf("MPESA_CALLBACK_SECRET must be set in production so M-Pesa callbacks are signed")
+	}
+	if c.MpesaBusinessID != "" {
+		if _, err := uuid.Parse(c.MpesaBusinessID); err != nil {
+			return fmt.Errorf("MPESA_BUSINESS_ID must be a valid UUID: %w", err)
+		}
 	}
 	// Email/password sign-ups verify their address; without SMTP the message
 	// cannot be delivered, so fail fast instead of silently breaking sign-up.

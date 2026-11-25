@@ -162,6 +162,7 @@ type StatementImportResult struct {
 	TotalRows         int `json:"total_rows"`
 	Imported          int `json:"imported"`
 	SkippedDuplicates int `json:"skipped_duplicates"`
+	InvalidRows       int `json:"invalid_rows"`
 	Reconciled        int `json:"reconciled"`
 	Unmatched         int `json:"unmatched"`
 }

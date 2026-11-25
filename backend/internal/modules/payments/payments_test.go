@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"math"
 	"strings"
 	"testing"
 	"time"
@@ -44,6 +45,11 @@ func (f *fakePaymentRepository) CreateMpesaTransaction(tx *MpesaTransaction) err
 	if tx.ID == uuid.Nil {
 		tx.ID = uuid.New()
 	}
+	f.mpesaTxs[tx.ID.String()] = tx
+	return nil
+}
+
+func (f *fakePaymentRepository) UpdateMpesaTransaction(tx *MpesaTransaction) error {
 	f.mpesaTxs[tx.ID.String()] = tx
 	return nil
 }
@@ -820,7 +826,7 @@ func TestSTKCallbackDoesNotApplyPaymentWhenClaimFails(t *testing.T) {
 	_ = repo.CreateMpesaTransaction(tx)
 	repo.claimErr = errors.New("database unavailable")
 
-	body := []byte(`{"Body":{"stkCallback":{"CheckoutRequestID":"ws_CO_CLAIM_FAILS","ResultCode":0,"ResultDesc":"ok","CallbackMetadata":{"Item":[{"Name":"MpesaReceiptNumber","Value":"CLAIM123"}]}}}}`)
+	body := []byte(`{"Body":{"stkCallback":{"CheckoutRequestID":"ws_CO_CLAIM_FAILS","ResultCode":0,"ResultDesc":"ok","CallbackMetadata":{"Item":[{"Name":"MpesaReceiptNumber","Value":"CLAIM123"},{"Name":"Amount","Value":100.0}]}}}}`)
 	if err := svc.HandleSTKCallback(computeHMAC(cfg.MpesaCallbackSecret, body), body); err == nil {
 		t.Fatal("expected the failed status claim to be reported")
 	}
@@ -862,7 +868,7 @@ func TestSTKCallbackLeavesCompletedUnmatchedWhenPaymentFails(t *testing.T) {
 	}
 	_ = repo.CreateMpesaTransaction(tx)
 
-	body := []byte(`{"Body":{"stkCallback":{"CheckoutRequestID":"ws_CO_RECON_FAILS","ResultCode":0,"ResultDesc":"ok","CallbackMetadata":{"Item":[{"Name":"MpesaReceiptNumber","Value":"FAIL123"}]}}}}`)
+	body := []byte(`{"Body":{"stkCallback":{"CheckoutRequestID":"ws_CO_RECON_FAILS","ResultCode":0,"ResultDesc":"ok","CallbackMetadata":{"Item":[{"Name":"MpesaReceiptNumber","Value":"FAIL123"},{"Name":"Amount","Value":90.0}]}}}}`)
 	if err := svc.HandleSTKCallback(computeHMAC(cfg.MpesaCallbackSecret, body), body); err != nil {
 		t.Fatalf("callback should be acknowledged after the status is durable: %v", err)
 	}
@@ -1111,5 +1117,225 @@ func TestReconcileRejectsB2CInvoice(t *testing.T) {
 		Source: "mpesa", TargetType: "invoice", TargetID: uuid.New().String(),
 	}); !errors.Is(err, ErrTargetDirectionMismatch) {
 		t.Fatalf("B2C -> invoice error = %v, want ErrTargetDirectionMismatch", err)
+	}
+}
+
+func TestParseMoneyStringSignAndMagnitude(t *testing.T) {
+	// Normal numbers
+	if v, err := parseMoneyString("0.29"); err != nil || v != 29 {
+		t.Fatalf("parse 0.29: got %v, %v, want 29, nil", v, err)
+	}
+	if v, err := parseMoneyString("-1.00"); err != nil || v != -100 {
+		t.Fatalf("parse -1.00: got %v, %v, want -100, nil", v, err)
+	}
+	// Double signs must be rejected
+	if _, err := parseMoneyString("--1.00"); err == nil {
+		t.Fatal("parse --1.00 should fail")
+	}
+	if _, err := parseMoneyString("-+1.00"); err == nil {
+		t.Fatal("parse -+1.00 should fail")
+	}
+	if _, err := parseMoneyString("+-1.00"); err == nil {
+		t.Fatal("parse +-1.00 should fail")
+	}
+	// Letters and invalid characters
+	if _, err := parseMoneyString("abc"); err == nil {
+		t.Fatal("parse abc should fail")
+	}
+	// Max magnitude overflow
+	if _, err := parseMoneyString("92233720368547758.08"); err == nil {
+		t.Fatal("magnitude exceeding MaxInt64 cents should fail")
+	}
+}
+
+func TestValidateCallbackSignatureRejectsEmptySecret(t *testing.T) {
+	body := []byte(`{"hello":"world"}`)
+	sig := "any-signature"
+	if ValidateCallbackSignature("", body, sig) {
+		t.Fatal("empty secret must reject signature")
+	}
+	if ValidateCallbackSignature("   ", body, sig) {
+		t.Fatal("whitespace secret must reject signature")
+	}
+}
+
+func TestIdempotencyKeyConflictDetection(t *testing.T) {
+	repo := newFakePaymentRepository()
+	cfg := &config.Config{MpesaCallbackSecret: "sec"}
+	svc := NewService(repo, nil, cfg, nil, nil, nil, nil)
+	businessID := uuid.New()
+
+	// Initial STK push
+	stkTx := &MpesaTransaction{
+		ID:              uuid.New(),
+		BusinessID:      businessID,
+		TransactionType: TypeSTKPush,
+		PhoneNumber:     "254712345678",
+		Amount:          5000,
+		IdempotencyKey:  "shared-key-1",
+		Status:          StatusPending,
+	}
+	_ = repo.CreateMpesaTransaction(stkTx)
+
+	// Replay with identical params returns the same transaction
+	identical, err := svc.InitiateSTKPush(context.Background(), businessID, STKPushInput{
+		PhoneNumber:    "0712345678",
+		Amount:         5000,
+		IdempotencyKey: "shared-key-1",
+	})
+	if err != nil || identical == nil || identical.ID != stkTx.ID {
+		t.Fatalf("identical replay failed: %v", err)
+	}
+
+	// Replay with different amount fails with conflict
+	_, err = svc.InitiateSTKPush(context.Background(), businessID, STKPushInput{
+		PhoneNumber:    "0712345678",
+		Amount:         6000,
+		IdempotencyKey: "shared-key-1",
+	})
+	if !errors.Is(err, ErrIdempotencyKeyConflict) {
+		t.Fatalf("expected ErrIdempotencyKeyConflict, got %v", err)
+	}
+
+	// Replay for B2C with the STK key fails with conflict
+	_, err = svc.InitiateB2C(context.Background(), businessID, B2CPayoutInput{
+		PhoneNumber:    "0712345678",
+		Amount:         5000,
+		IdempotencyKey: "shared-key-1",
+	})
+	if !errors.Is(err, ErrIdempotencyKeyConflict) {
+		t.Fatalf("expected ErrIdempotencyKeyConflict for cross-type replay, got %v", err)
+	}
+}
+
+func TestSTKCallbackRequiresReceiptAndAmount(t *testing.T) {
+	repo := newFakePaymentRepository()
+	cfg := &config.Config{MpesaCallbackSecret: "sec"}
+	svc := NewService(repo, nil, cfg, nil, nil, nil, nil)
+	businessID := uuid.New()
+
+	tx := &MpesaTransaction{
+		ID:                uuid.New(),
+		BusinessID:        businessID,
+		TransactionType:   TypeSTKPush,
+		CheckoutRequestID: "ws_CO_INCOMPLETE",
+		Amount:            5000,
+		Status:            StatusPending,
+	}
+	_ = repo.CreateMpesaTransaction(tx)
+
+	// Missing MpesaReceiptNumber
+	bodyNoReceipt := []byte(`{"Body":{"stkCallback":{"CheckoutRequestID":"ws_CO_INCOMPLETE","ResultCode":0,"ResultDesc":"ok","CallbackMetadata":{"Item":[{"Name":"Amount","Value":50.0}]}}}}`)
+	if err := svc.HandleSTKCallback(computeHMAC(cfg.MpesaCallbackSecret, bodyNoReceipt), bodyNoReceipt); err == nil {
+		t.Fatal("expected error for callback missing receipt")
+	}
+
+	// Missing Amount
+	bodyNoAmount := []byte(`{"Body":{"stkCallback":{"CheckoutRequestID":"ws_CO_INCOMPLETE","ResultCode":0,"ResultDesc":"ok","CallbackMetadata":{"Item":[{"Name":"MpesaReceiptNumber","Value":"REC123"}]}}}}`)
+	if err := svc.HandleSTKCallback(computeHMAC(cfg.MpesaCallbackSecret, bodyNoAmount), bodyNoAmount); err == nil {
+		t.Fatal("expected error for callback missing amount")
+	}
+
+	// Verify transaction remains pending
+	stored, _ := repo.GetMpesaTransactionByID(tx.ID, businessID)
+	if stored.Status != StatusPending {
+		t.Fatalf("expected status to remain pending, got %s", stored.Status)
+	}
+}
+
+func TestC2BConfirmationRequiresTransID(t *testing.T) {
+	repo := newFakePaymentRepository()
+	cfg := &config.Config{MpesaCallbackSecret: "sec"}
+	svc := NewService(repo, nil, cfg, nil, nil, nil, nil)
+
+	sig := computeHMAC(cfg.MpesaCallbackSecret, nil)
+	resp, err := svc.HandleC2BConfirmation(sig, C2BConfirmationRequest{
+		TransID:     "   ",
+		TransAmount: "100.00",
+		MSISDN:      "254712345678",
+	})
+	if err == nil || resp.ResultCode == 0 {
+		t.Fatal("expected error for empty TransID")
+	}
+}
+
+func TestManualBankDirectionValidation(t *testing.T) {
+	repo := newFakePaymentRepository()
+	svc := NewService(repo, nil, &config.Config{}, nil, nil, nil, nil)
+	businessID := uuid.New()
+
+	_, err := svc.RecordManualBankTransfer(businessID, BankManualInput{
+		Reference: "REF-UNKNOWN",
+		Amount:    1000,
+		Type:      "invalid-direction",
+	})
+	if err == nil {
+		t.Fatal("expected error for invalid bank direction")
+	}
+
+	// Inflow and withdrawal recognized
+	inflowTx, err := svc.RecordManualBankTransfer(businessID, BankManualInput{
+		Reference: "REF-INFLOW",
+		Amount:    1000,
+		Type:      "deposit",
+	})
+	if err != nil || inflowTx.Type != BankInflow {
+		t.Fatalf("expected deposit to normalize to BankInflow: %v", err)
+	}
+
+	outflowTx, err := svc.RecordManualBankTransfer(businessID, BankManualInput{
+		Reference: "REF-OUTFLOW",
+		Amount:    1000,
+		Type:      "withdrawal",
+	})
+	if err != nil || outflowTx.Type != BankOutflow {
+		t.Fatalf("expected withdrawal to normalize to BankOutflow: %v", err)
+	}
+}
+
+func TestStatementImportValidationAndInvalidRows(t *testing.T) {
+	repo := newFakePaymentRepository()
+	svc := NewService(repo, nil, &config.Config{}, nil, nil, nil, nil)
+	businessID := uuid.New()
+
+	// Missing amount column
+	noAmountCSV := strings.NewReader("date,reference,description\n2026-11-01,REF1,desc\n")
+	_, err := svc.ImportBankStatement(businessID, "TestBank", noAmountCSV)
+	if err == nil {
+		t.Fatal("expected error when amount column is missing")
+	}
+
+	// CSV with 1 valid row, 1 duplicate, 1 row missing amount, 1 row missing reference
+	csvData := `date,reference,amount,description
+2026-11-01,REF-OK,100.00,valid payment
+2026-11-01,REF-NO-AMOUNT,,missing amount
+2026-11-01,,50.00,missing ref
+2026-11-01,REF-OK,100.00,duplicate
+`
+	result, err := svc.ImportBankStatement(businessID, "TestBank", strings.NewReader(csvData))
+	if err != nil {
+		t.Fatalf("import failed: %v", err)
+	}
+	if result.Imported != 1 {
+		t.Errorf("imported = %d, want 1", result.Imported)
+	}
+	if result.SkippedDuplicates != 1 {
+		t.Errorf("skipped_duplicates = %d, want 1", result.SkippedDuplicates)
+	}
+	if result.InvalidRows != 2 {
+		t.Errorf("invalid_rows = %d, want 2", result.InvalidRows)
+	}
+}
+
+func TestPaginationBounds(t *testing.T) {
+	repo := newFakePaymentRepository()
+	svc := NewService(repo, nil, &config.Config{}, nil, nil, nil, nil)
+	businessID := uuid.New()
+
+	// Extremely large page that would overflow int
+	hugePage := math.MaxInt
+	_, _, err := svc.ListReviewQueue(businessID, "", hugePage, 20)
+	if err == nil {
+		t.Fatal("expected error for page causing offset overflow")
 	}
 }

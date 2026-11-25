@@ -33,6 +33,8 @@ var (
 	ErrTargetDirectionMismatch = errors.New("this reconciliation target does not match the payment direction")
 	ErrSupplierNotFound        = errors.New("supplier not found")
 	ErrInvalidStatementFile    = errors.New("statement file could not be parsed")
+	ErrIdempotencyKeyConflict  = errors.New("idempotency key already used for different request")
+	ErrBusinessNotBound        = errors.New("business is not authorized to use deployment daraja account")
 )
 
 const (
@@ -135,10 +137,19 @@ func (s *service) InitiateSTKPush(ctx context.Context, businessID uuid.UUID, inp
 		return nil, ErrMissingPhone
 	}
 
-	// Idempotency: return existing transaction if key was already used
+	// Idempotency: return existing transaction if key was already used for the same request
 	if input.IdempotencyKey != "" {
 		if existing, err := s.repo.GetMpesaTransactionByIdempotency(businessID, input.IdempotencyKey); err == nil && existing != nil {
+			if existing.TransactionType != TypeSTKPush || existing.Amount != input.Amount || existing.PhoneNumber != phone {
+				return nil, ErrIdempotencyKeyConflict
+			}
 			return existing, nil
+		}
+	}
+
+	if s.cfg != nil && s.cfg.MpesaBusinessID != "" {
+		if boundID, err := uuid.Parse(s.cfg.MpesaBusinessID); err == nil && boundID != businessID {
+			return nil, ErrBusinessNotBound
 		}
 	}
 
@@ -193,16 +204,27 @@ func (s *service) InitiateSTKPush(ctx context.Context, businessID uuid.UUID, inp
 		ReconciliationStatus: Unmatched,
 	}
 
+	// Persist pending transaction before gateway call to reserve idempotency key
+	if err := s.repo.CreateMpesaTransaction(tx); err != nil {
+		if input.IdempotencyKey != "" {
+			if existing, lookupErr := s.repo.GetMpesaTransactionByIdempotency(businessID, input.IdempotencyKey); lookupErr == nil && existing != nil {
+				return existing, nil
+			}
+		}
+		return nil, fmt.Errorf("create pending transaction: %w", err)
+	}
+
 	// Make call to Daraja gateway
 	resp, err := s.mpesaClient.InitiateSTKPush(ctx, darajaReq)
 	if err != nil {
-		// Even if gateway returned error, record failed transaction if we have response code
 		if resp != nil {
 			tx.MerchantRequestID = resp.MerchantRequestID
 			tx.CheckoutRequestID = resp.CheckoutRequestID
-			tx.Status = StatusFailed
 			tx.ResultDesc = resp.ResponseDescription
-			_ = s.repo.CreateMpesaTransaction(tx)
+			if errors.Is(err, ErrTransactionFailed) || (resp.ResponseCode != "" && resp.ResponseCode != "0") {
+				tx.Status = StatusFailed
+			}
+			_ = s.repo.UpdateMpesaTransaction(tx)
 		}
 		return nil, fmt.Errorf("initiate stk push: %w", err)
 	}
@@ -211,7 +233,7 @@ func (s *service) InitiateSTKPush(ctx context.Context, businessID uuid.UUID, inp
 	tx.CheckoutRequestID = resp.CheckoutRequestID
 	tx.ResultDesc = resp.ResponseDescription
 
-	if err := s.repo.CreateMpesaTransaction(tx); err != nil {
+	if err := s.repo.UpdateMpesaTransaction(tx); err != nil {
 		return nil, fmt.Errorf("save transaction: %w", err)
 	}
 
@@ -256,12 +278,14 @@ func (s *service) HandleSTKCallback(signatureHeader string, body []byte) error {
 	if terminal == StatusCompleted {
 		// Extract receipt and metadata before claiming so the durable row has
 		// everything needed to reconcile later.
+		var confirmedReceipt string
+		var confirmedAmount int64
 		if cb.CallbackMetadata != nil {
 			for _, item := range cb.CallbackMetadata.Item {
 				switch item.Name {
 				case "MpesaReceiptNumber":
 					if val, ok := item.Value.(string); ok {
-						tx.MpesaReceiptNumber = val
+						confirmedReceipt = strings.TrimSpace(val)
 					}
 				case "PhoneNumber":
 					tx.PhoneNumber = fmt.Sprintf("%v", item.Value)
@@ -269,12 +293,17 @@ func (s *service) HandleSTKCallback(signatureHeader string, body []byte) error {
 					// Round half away from zero so 0.29 -> 29 cents (not 28 via
 					// float truncation). M-Pesa may return the value as a number
 					// or string depending on the callback type.
-					if cents, err := parseMoneyCents(item.Value); err == nil {
-						tx.Amount = cents
+					if cents, err := parseMoneyCents(item.Value); err == nil && cents > 0 {
+						confirmedAmount = cents
 					}
 				}
 			}
 		}
+		if confirmedReceipt == "" || confirmedAmount <= 0 {
+			return fmt.Errorf("stk callback missing confirmed receipt or valid amount")
+		}
+		tx.MpesaReceiptNumber = confirmedReceipt
+		tx.Amount = confirmedAmount
 	}
 
 	// Persist the terminal status before touching invoices or customer credit.
@@ -326,8 +355,13 @@ func (s *service) HandleC2BConfirmation(signatureHeader string, req C2BConfirmat
 		return C2BConfirmationResponse{ResultCode: 1, ResultDesc: DescInvalidSignature}, ErrInvalidSignature
 	}
 
+	transID := strings.TrimSpace(req.TransID)
+	if transID == "" {
+		return C2BConfirmationResponse{ResultCode: 1, ResultDesc: "Missing TransID"}, errors.New("missing trans_id")
+	}
+
 	// Idempotency: skip duplicate TransID
-	if existing, err := s.repo.GetMpesaTransactionByReceipt(req.TransID); err == nil && existing != nil {
+	if existing, err := s.repo.GetMpesaTransactionByReceipt(transID); err == nil && existing != nil {
 		return C2BConfirmationResponse{ResultCode: 0, ResultDesc: DescAccepted}, nil
 	}
 
@@ -357,14 +391,14 @@ func (s *service) HandleC2BConfirmation(signatureHeader string, req C2BConfirmat
 		}
 	}
 	if businessID == uuid.Nil {
-		return C2BConfirmationResponse{ResultCode: 1, ResultDesc: "Could not resolve business"}, fmt.Errorf("resolve business for c2b payment %s: %w", req.TransID, ErrTransactionNotFound)
+		return C2BConfirmationResponse{ResultCode: 1, ResultDesc: "Could not resolve business"}, fmt.Errorf("resolve business for c2b payment %s: %w", transID, ErrTransactionNotFound)
 	}
 
 	raw, _ := json.Marshal(req)
 	tx := &MpesaTransaction{
 		BusinessID:           businessID,
 		TransactionType:      TypeC2B,
-		MpesaReceiptNumber:   req.TransID,
+		MpesaReceiptNumber:   transID,
 		PhoneNumber:          phone,
 		Amount:               amountCents,
 		Status:               StatusCompleted,
@@ -409,7 +443,16 @@ func (s *service) InitiateB2C(ctx context.Context, businessID uuid.UUID, input B
 
 	if input.IdempotencyKey != "" {
 		if existing, err := s.repo.GetMpesaTransactionByIdempotency(businessID, input.IdempotencyKey); err == nil && existing != nil {
+			if existing.TransactionType != TypeB2C || existing.Amount != input.Amount || existing.PhoneNumber != phone {
+				return nil, ErrIdempotencyKeyConflict
+			}
 			return existing, nil
+		}
+	}
+
+	if s.cfg != nil && s.cfg.MpesaBusinessID != "" {
+		if boundID, err := uuid.Parse(s.cfg.MpesaBusinessID); err == nil && boundID != businessID {
+			return nil, ErrBusinessNotBound
 		}
 	}
 
@@ -473,13 +516,25 @@ func (s *service) InitiateB2C(ctx context.Context, businessID uuid.UUID, input B
 		ExpenseCategory:      expenseCategory,
 	}
 
+	// Persist pending transaction before provider request to reserve idempotency key
+	if err := s.repo.CreateMpesaTransaction(tx); err != nil {
+		if input.IdempotencyKey != "" {
+			if existing, lookupErr := s.repo.GetMpesaTransactionByIdempotency(businessID, input.IdempotencyKey); lookupErr == nil && existing != nil {
+				return existing, nil
+			}
+		}
+		return nil, fmt.Errorf("create pending transaction: %w", err)
+	}
+
 	resp, err := s.mpesaClient.InitiateB2CPayout(ctx, darajaReq)
 	if err != nil {
 		if resp != nil {
 			tx.CheckoutRequestID = resp.ConversationID
-			tx.Status = StatusFailed
 			tx.ResultDesc = resp.ResponseDescription
-			_ = s.repo.CreateMpesaTransaction(tx)
+			if errors.Is(err, ErrTransactionFailed) || (resp.ResponseCode != "" && resp.ResponseCode != "0") {
+				tx.Status = StatusFailed
+			}
+			_ = s.repo.UpdateMpesaTransaction(tx)
 		}
 		return nil, fmt.Errorf("initiate b2c: %w", err)
 	}
@@ -487,7 +542,7 @@ func (s *service) InitiateB2C(ctx context.Context, businessID uuid.UUID, input B
 	tx.CheckoutRequestID = resp.ConversationID
 	tx.ResultDesc = resp.ResponseDescription
 
-	if err := s.repo.CreateMpesaTransaction(tx); err != nil {
+	if err := s.repo.UpdateMpesaTransaction(tx); err != nil {
 		return nil, fmt.Errorf("save transaction: %w", err)
 	}
 
@@ -569,7 +624,11 @@ func (s *service) applyB2CPayout(tx *MpesaTransaction) error {
 		if s.suppliersSvc == nil {
 			return errors.New("supplier service not configured")
 		}
-		if s.supplierPaymentExists(*tx.SupplierID, tx.BusinessID, marker) {
+		exists, err := s.supplierPaymentExists(*tx.SupplierID, tx.BusinessID, marker)
+		if err != nil {
+			return err
+		}
+		if exists {
 			tx.ReconciliationStatus = Reconciled
 			tx.ReconciledEntityType = EntitySupplierPayment
 			tx.ReconciledEntityID = tx.SupplierID
@@ -670,7 +729,11 @@ func (s *service) autoReconcileMpesa(tx *MpesaTransaction) error {
 	}
 	if ref != "" && s.invoicesSvc != nil {
 		if inv, err := s.repo.FindInvoiceByNumber(tx.BusinessID, ref); err == nil && inv != nil && inv.Status != invoices.StatusPaid {
-			if !s.invoicePaymentExists(inv.ID, tx.BusinessID, marker) {
+			exists, err := s.invoicePaymentExists(inv.ID, tx.BusinessID, marker)
+			if err != nil {
+				return err
+			}
+			if !exists {
 				_, err := s.invoicesSvc.RecordPayment(inv.ID, tx.BusinessID, invoices.RecordPaymentInput{
 					Amount: tx.Amount,
 					Note:   marker + " invoice payment",
@@ -689,7 +752,11 @@ func (s *service) autoReconcileMpesa(tx *MpesaTransaction) error {
 	// 2. Try matching Customer by Phone Number
 	if tx.PhoneNumber != "" && s.customersSvc != nil {
 		if cust, err := s.repo.FindCustomerByPhone(tx.BusinessID, tx.PhoneNumber); err == nil && cust != nil {
-			if !s.customerPaymentExists(cust.ID, tx.BusinessID, marker) {
+			exists, err := s.customerPaymentExists(cust.ID, tx.BusinessID, marker)
+			if err != nil {
+				return err
+			}
+			if !exists {
 				if _, err := s.customersSvc.RecordPayment(cust.ID, tx.BusinessID, tx.Amount, marker+" customer payment"); err != nil {
 					return err
 				}
@@ -717,52 +784,52 @@ func mpesaMarker(tx *MpesaTransaction) string {
 	return "M-Pesa " + ref
 }
 
-func (s *service) invoicePaymentExists(invoiceID, businessID uuid.UUID, marker string) bool {
+func (s *service) invoicePaymentExists(invoiceID, businessID uuid.UUID, marker string) (bool, error) {
 	if s.invoicesSvc == nil {
-		return false
+		return false, errors.New("invoice service not configured")
 	}
 	payments, err := s.invoicesSvc.ListPayments(invoiceID, businessID)
 	if err != nil {
-		return false
+		return false, fmt.Errorf("list invoice payments: %w", err)
 	}
 	for _, payment := range payments {
 		if strings.HasPrefix(payment.Note, marker) {
-			return true
+			return true, nil
 		}
 	}
-	return false
+	return false, nil
 }
 
-func (s *service) customerPaymentExists(customerID, businessID uuid.UUID, marker string) bool {
+func (s *service) customerPaymentExists(customerID, businessID uuid.UUID, marker string) (bool, error) {
 	if s.customersSvc == nil {
-		return false
+		return false, errors.New("customer service not configured")
 	}
 	payments, err := s.customersSvc.ListPayments(customerID, businessID)
 	if err != nil {
-		return false
+		return false, fmt.Errorf("list customer payments: %w", err)
 	}
 	for _, payment := range payments {
 		if strings.HasPrefix(payment.Note, marker) {
-			return true
+			return true, nil
 		}
 	}
-	return false
+	return false, nil
 }
 
-func (s *service) supplierPaymentExists(supplierID, businessID uuid.UUID, marker string) bool {
+func (s *service) supplierPaymentExists(supplierID, businessID uuid.UUID, marker string) (bool, error) {
 	if s.suppliersSvc == nil {
-		return false
+		return false, errors.New("supplier service not configured")
 	}
 	payments, err := s.suppliersSvc.ListPayments(supplierID, businessID)
 	if err != nil {
-		return false
+		return false, fmt.Errorf("list supplier payments: %w", err)
 	}
 	for _, payment := range payments {
 		if strings.HasPrefix(payment.Note, marker) {
-			return true
+			return true, nil
 		}
 	}
-	return false
+	return false, nil
 }
 
 // receiptAlreadyApplied reports whether an M-Pesa receipt number has already
@@ -830,9 +897,15 @@ func (s *service) RecordManualBankTransfer(businessID uuid.UUID, input BankManua
 		transDate = time.Now()
 	}
 
-	txType := BankInflow
-	if strings.EqualFold(input.Type, "outflow") {
+	var txType BankTransactionType
+	normalizedType := strings.ToLower(strings.TrimSpace(input.Type))
+	switch normalizedType {
+	case "inflow", "deposit":
+		txType = BankInflow
+	case "outflow", "withdrawal":
 		txType = BankOutflow
+	default:
+		return nil, errors.New("invalid transaction type: must be inflow or outflow")
 	}
 
 	tx := &BankTransaction{
@@ -884,14 +957,27 @@ func (s *service) autoReconcileBank(tx *BankTransaction) {
 			}
 			if inv, err := s.repo.FindInvoiceByNumber(tx.BusinessID, token); err == nil && inv != nil && inv.Status != invoices.StatusPaid {
 				if s.invoicesSvc != nil {
+					note := fmt.Sprintf("Bank transfer %s (%s)", tx.Reference, tx.BankName)
 					_, err := s.invoicesSvc.RecordPayment(inv.ID, tx.BusinessID, invoices.RecordPaymentInput{
 						Amount: tx.Amount,
-						Note:   fmt.Sprintf("Bank transfer %s (%s)", tx.Reference, tx.BankName),
+						Note:   note,
 					})
 					if err == nil {
 						tx.ReconciliationStatus = Reconciled
 						tx.ReconciledEntityType = EntityInvoice
 						tx.ReconciledEntityID = &inv.ID
+						return
+					}
+					// Recover payment if already committed before read failure
+					if exists, chkErr := s.invoicePaymentExists(inv.ID, tx.BusinessID, note); chkErr == nil && exists {
+						tx.ReconciliationStatus = Reconciled
+						tx.ReconciledEntityType = EntityInvoice
+						tx.ReconciledEntityID = &inv.ID
+						return
+					}
+					// If the error was uncertain (not an explicit business logic rejection), stop matching to prevent double payment
+					if !errors.Is(err, invoices.ErrInvoiceAlreadyPaid) && !errors.Is(err, invoices.ErrPaymentExceedsBalance) && !errors.Is(err, invoices.ErrInvalidPayment) && !errors.Is(err, invoices.ErrInvoiceNotFound) {
+						tx.ReconciliationStatus = Unmatched
 						return
 					}
 				}
@@ -943,15 +1029,20 @@ func (s *service) ImportBankStatement(businessID uuid.UUID, bankName string, r i
 	if refIdx == -1 {
 		return nil, fmt.Errorf("%w: missing reference column", ErrInvalidStatementFile)
 	}
+	if amountIdx == -1 && inflowIdx == -1 && outflowIdx == -1 {
+		return nil, fmt.Errorf("%w: missing amount column", ErrInvalidStatementFile)
+	}
 
 	res := &StatementImportResult{TotalRows: len(records) - 1}
 
 	for _, row := range records[1:] {
 		if len(row) <= refIdx {
+			res.InvalidRows++
 			continue
 		}
 		ref := strings.TrimSpace(row[refIdx])
 		if ref == "" {
+			res.InvalidRows++
 			continue
 		}
 
@@ -1006,6 +1097,7 @@ func (s *service) ImportBankStatement(businessID uuid.UUID, bankName string, r i
 		}
 
 		if amountCents <= 0 {
+			res.InvalidRows++
 			continue
 		}
 
@@ -1067,6 +1159,23 @@ func parseMoneyString(s string) (int64, error) {
 		intPart = s
 	}
 
+	if intPart == "" && fracPart == "" {
+		return 0, errors.New("empty amount")
+	}
+
+	// Validate integer part contains only ASCII digits
+	for _, ch := range intPart {
+		if ch < '0' || ch > '9' {
+			return 0, errors.New("invalid characters in integer part of amount")
+		}
+	}
+	// Validate fractional part contains only ASCII digits
+	for _, ch := range fracPart {
+		if ch < '0' || ch > '9' {
+			return 0, errors.New("invalid characters in fractional part of amount")
+		}
+	}
+
 	intCents := int64(0)
 	if intPart != "" {
 		n, err := strconv.ParseInt(intPart, 10, 64)
@@ -1076,7 +1185,7 @@ func parseMoneyString(s string) (int64, error) {
 		// Guard the scaling before it silently wraps. int64 max is
 		// 9223372036854775807, so any integer part above
 		// 92233720368547758 would overflow when multiplied by 100.
-		if n > math.MaxInt64/100 || n < math.MinInt64/100 {
+		if n > math.MaxInt64/100 {
 			return 0, errors.New("amount out of range")
 		}
 		intCents = n * 100
@@ -1106,8 +1215,11 @@ func parseMoneyString(s string) (int64, error) {
 		fracCents = cents
 	}
 
-	// The integer part was already bounded by MaxInt64/100 above and the
-	// fractional part is at most 999 cents, so the sum cannot overflow int64.
+	// Check combined magnitude before addition and applying sign
+	if intCents > math.MaxInt64-fracCents {
+		return 0, errors.New("amount out of range")
+	}
+
 	total := intCents + fracCents
 	if negative {
 		total = -total
@@ -1151,6 +1263,9 @@ func (s *service) ListBankTransactions(businessID uuid.UUID, txType string, stat
 	if limit <= 0 || limit > 100 {
 		limit = 20
 	}
+	if (page - 1) > (math.MaxInt-1)/limit {
+		return nil, 0, errors.New("page out of bounds")
+	}
 	offset := (page - 1) * limit
 	return s.repo.ListBankTransactions(businessID, txType, status, limit, offset)
 }
@@ -1163,6 +1278,9 @@ func (s *service) ListMpesaTransactions(businessID uuid.UUID, page, limit int) (
 	if limit <= 0 || limit > 100 {
 		limit = 20
 	}
+	if (page - 1) > (math.MaxInt-1)/limit {
+		return nil, 0, errors.New("page out of bounds")
+	}
 	offset := (page - 1) * limit
 	return s.repo.ListMpesaTransactions(businessID, limit, offset)
 }
@@ -1174,6 +1292,9 @@ func (s *service) ListReviewQueue(businessID uuid.UUID, source string, page, lim
 	}
 	if limit <= 0 || limit > 100 {
 		limit = 20
+	}
+	if (page - 1) > (math.MaxInt-1)/limit {
+		return nil, 0, errors.New("page out of bounds")
 	}
 	offset := (page - 1) * limit
 	return s.repo.ListReviewQueue(businessID, source, limit, offset)
@@ -1268,7 +1389,11 @@ func (s *service) ReconcileReviewItem(businessID uuid.UUID, itemID uuid.UUID, in
 		if mpesaTx != nil {
 			marker := mpesaMarker(mpesaTx)
 			paymentNote = marker + " invoice payment: " + note
-			if !s.invoicePaymentExists(targetUUID, businessID, marker) {
+			exists, err := s.invoicePaymentExists(targetUUID, businessID, marker)
+			if err != nil {
+				return err
+			}
+			if !exists {
 				if _, err := s.invoicesSvc.RecordPayment(targetUUID, businessID, invoices.RecordPaymentInput{
 					Amount: amount,
 					Note:   paymentNote,
@@ -1307,7 +1432,11 @@ func (s *service) ReconcileReviewItem(businessID uuid.UUID, itemID uuid.UUID, in
 		if mpesaTx != nil {
 			marker := mpesaMarker(mpesaTx)
 			paymentNote = marker + " customer payment: " + note
-			if !s.customerPaymentExists(targetUUID, businessID, marker) {
+			exists, err := s.customerPaymentExists(targetUUID, businessID, marker)
+			if err != nil {
+				return err
+			}
+			if !exists {
 				if _, err := s.customersSvc.RecordPayment(targetUUID, businessID, amount, paymentNote); err != nil {
 					return fmt.Errorf("record customer payment: %w", err)
 				}
@@ -1384,7 +1513,11 @@ func (s *service) ReconcileReviewItem(businessID uuid.UUID, itemID uuid.UUID, in
 		if mpesaTx != nil {
 			marker := mpesaMarker(mpesaTx)
 			paymentNote = marker + " supplier payment: " + note
-			if !s.supplierPaymentExists(supplierUUID, businessID, marker) {
+			exists, err := s.supplierPaymentExists(supplierUUID, businessID, marker)
+			if err != nil {
+				return err
+			}
+			if !exists {
 				if _, err := s.suppliersSvc.RecordPayment(supplierUUID, businessID, amount, paymentNote); err != nil {
 					return fmt.Errorf("record supplier payment: %w", err)
 				}

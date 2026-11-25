@@ -205,9 +205,10 @@ func NormalizePhone(phone string) string {
 // ValidateCallbackSignature validates callback signature against MPESA_CALLBACK_SECRET.
 // Supports direct shared secret token header or HMAC-SHA256 (hex or base64).
 func ValidateCallbackSignature(secret string, body []byte, signatureHeader string) bool {
+	secret = strings.TrimSpace(secret)
 	if secret == "" {
-		// If secret is not set, allow requests (e.g., local dev)
-		return true
+		// Secret is required; empty secret must reject all callbacks
+		return false
 	}
 	signatureHeader = strings.TrimSpace(signatureHeader)
 	if signatureHeader == "" {

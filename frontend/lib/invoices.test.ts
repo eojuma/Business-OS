@@ -27,6 +27,8 @@ describe("invoice presentation", () => {
     expect(shouldKeepPollingInvoicePayment({ status: "partial", remaining_balance: 1500 })).toBe(true);
     expect(shouldKeepPollingInvoicePayment({ status: "paid", remaining_balance: 1500 })).toBe(false);
     expect(shouldKeepPollingInvoicePayment({ status: "unpaid", remaining_balance: 0 })).toBe(false);
+    // Stops polling when a partial payment settles and balance drops from initial balance
+    expect(shouldKeepPollingInvoicePayment({ status: "partial", remaining_balance: 1000 }, 1500)).toBe(false);
   });
 
   it("falls back to a walk-in label when no customer is linked", () => {

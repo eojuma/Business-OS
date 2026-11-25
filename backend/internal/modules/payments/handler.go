@@ -35,9 +35,28 @@ func extractSignature(c *gin.Context) string {
 	return sig
 }
 
+const (
+	maxCallbackBodyBytes  = 1 << 20  // 1 MB
+	maxStatementBodyBytes = 10 << 20 // 10 MB
+)
+
+func parsePagination(c *gin.Context) (page int, limit int) {
+	var err error
+	page, err = strconv.Atoi(c.DefaultQuery("page", "1"))
+	if err != nil || page < 1 {
+		page = 1
+	}
+	limit, err = strconv.Atoi(c.DefaultQuery("limit", "20"))
+	if err != nil || limit <= 0 || limit > 100 {
+		limit = 20
+	}
+	return page, limit
+}
+
 // Public Webhook Handlers
 
 func (h *Handler) HandleSTKCallback(c *gin.Context) {
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxCallbackBodyBytes)
 	sig := extractSignature(c)
 	body, err := c.GetRawData()
 	if err != nil {
@@ -92,6 +111,7 @@ func (h *Handler) HandleC2BConfirm(c *gin.Context) {
 }
 
 func (h *Handler) HandleB2CResult(c *gin.Context) {
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxCallbackBodyBytes)
 	sig := extractSignature(c)
 	body, err := c.GetRawData()
 	if err != nil {
@@ -112,6 +132,7 @@ func (h *Handler) HandleB2CResult(c *gin.Context) {
 }
 
 func (h *Handler) HandleB2CTimeout(c *gin.Context) {
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxCallbackBodyBytes)
 	sig := extractSignature(c)
 	body, err := c.GetRawData()
 	if err != nil {
@@ -182,8 +203,7 @@ func (h *Handler) ListMpesaTransactions(c *gin.Context) {
 		return
 	}
 
-	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
-	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "20"))
+	page, limit := parsePagination(c)
 
 	list, total, err := h.service.ListMpesaTransactions(businessID, page, limit)
 	if err != nil {
@@ -227,6 +247,7 @@ func (h *Handler) ImportBankStatement(c *gin.Context) {
 		return
 	}
 
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxStatementBodyBytes)
 	bankName := c.DefaultPostForm("bank_name", c.Query("bank_name"))
 
 	var r io.Reader
@@ -260,8 +281,7 @@ func (h *Handler) ListBankTransactions(c *gin.Context) {
 		return
 	}
 
-	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
-	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "20"))
+	page, limit := parsePagination(c)
 	txType := c.Query("type")
 	status := c.Query("status")
 
@@ -282,8 +302,7 @@ func (h *Handler) ListReviewQueue(c *gin.Context) {
 	}
 
 	source := c.Query("source")
-	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
-	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "20"))
+	page, limit := parsePagination(c)
 
 	items, total, err := h.service.ListReviewQueue(businessID, source, page, limit)
 	if err != nil {

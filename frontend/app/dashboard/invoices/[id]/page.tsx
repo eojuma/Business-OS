@@ -42,30 +42,38 @@ export default function InvoiceDetailPage() {
   const [pollTimer, setPollTimer] = useState<NodeJS.Timeout | null>(null);
 
   /** Loads the invoice and resets the payment amount to the remainder. */
-  const loadInvoice = useCallback(async () => {
+  const loadInvoice = useCallback(async (background = false) => {
     if (!id) return null;
-    setLoading(true);
-    setError("");
+    if (!background) {
+      setLoading(true);
+      setError("");
+    }
     try {
       const res = await api.get(`/invoices/${id}`);
       const next = res.data.data as Invoice;
       setInvoice(next);
-      // Reset the STK phone to the customer's current phone. If the customer
-      // has no phone, clear the field so a stale value from a previous
-      // invoice cannot be reused.
-      setStkPhone(next.customer?.phone || "");
-      if (next.remaining_balance > 0) {
-        setAmount((next.remaining_balance / 100).toFixed(2));
-      } else {
-        setAmount("");
+      if (!background) {
+        // Reset the STK phone to the customer's current phone. If the customer
+        // has no phone, clear the field so a stale value from a previous
+        // invoice cannot be reused.
+        setStkPhone(next.customer?.phone || "");
+        if (next.remaining_balance > 0) {
+          setAmount((next.remaining_balance / 100).toFixed(2));
+        } else {
+          setAmount("");
+        }
       }
       return next;
     } catch (e) {
-      setInvoice(null);
-      setError(errorMessage(e, "Failed to load invoice"));
+      if (!background) {
+        setInvoice(null);
+        setError(errorMessage(e, "Failed to load invoice"));
+      }
       return null;
     } finally {
-      setLoading(false);
+      if (!background) {
+        setLoading(false);
+      }
     }
   }, [id]);
 
@@ -135,20 +143,25 @@ export default function InvoiceDetailPage() {
         idempotency_key: `stk-${invoice.id}`,
       });
       setStkSuccess("M-Pesa STK push prompt sent! Payment will automatically reconcile upon confirmation.");
-      // Refresh after the callback window and keep polling only while the
-      // invoice still has a balance. That avoids leaving the page with stale
-      // status once the transaction settles.
+      // Refresh after the callback window and keep polling within a bounded
+      // window until the payment settles. That avoids leaving the page with stale
+      // status while preventing infinite polling or resetting form state.
       if (pollTimer) clearTimeout(pollTimer);
-      const poll = async () => {
+      const initialBalance = invoice.remaining_balance;
+      let attempts = 0;
+      const maxAttempts = 15; // 30 seconds max polling window (15 * 2s)
+      const poll = () => {
         const timer = setTimeout(async () => {
-          const next = await loadInvoice();
-          if (next && shouldKeepPollingInvoicePayment(next)) {
-            void poll();
+          attempts++;
+          const next = await loadInvoice(true);
+          const keepPolling = next ? shouldKeepPollingInvoicePayment(next, initialBalance) : true;
+          if (keepPolling && attempts < maxAttempts) {
+            poll();
           }
         }, 2000);
         setPollTimer(timer);
       };
-      void poll();
+      poll();
     } catch (e) {
       setPaymentError(errorMessage(e, "Failed to send STK push"));
     } finally {

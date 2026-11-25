@@ -19,9 +19,9 @@ describe("payments presentation helpers", () => {
   });
 
   it("describes bank transfers using the reconciliation status", () => {
-    expect(bankTransferMessage(1200, "reconciled")).toBe("Bank transfer of 1,200.00 recorded and reconciled.");
+    expect(bankTransferMessage(1200, "reconciled")).toBe("Bank transfer of 12.00 recorded and reconciled.");
     expect(bankTransferMessage(1200, "manual")).toBe(
-      "Bank transfer of 1,200.00 recorded and queued for manual reconciliation.",
+      "Bank transfer of 12.00 recorded and queued for manual reconciliation.",
     );
   });
 

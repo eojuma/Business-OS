@@ -35,6 +35,7 @@ type Repository interface {
 	// UpdateMpesaReconciliation persists reconciliation fields without touching
 	// the transaction status.
 	UpdateMpesaReconciliation(tx *MpesaTransaction) error
+	UpdateMpesaTransaction(tx *MpesaTransaction) error
 	ListMpesaTransactions(businessID uuid.UUID, limit, offset int) ([]MpesaTransaction, int64, error)
 
 	CreateBankTransaction(tx *BankTransaction) error
@@ -70,6 +71,10 @@ func (r *repository) CreateMpesaTransaction(tx *MpesaTransaction) error {
 	return err
 }
 
+func (r *repository) UpdateMpesaTransaction(tx *MpesaTransaction) error {
+	return r.db.Save(tx).Error
+}
+
 // isMpesaReceiptConflict reports whether a create error is a violation of the
 // partial unique index on mpesa_receipt_number. Gorm surfaces it as a
 // gorm.ErrDuplicatedKey with the index name in the message.
@@ -77,13 +82,9 @@ func isMpesaReceiptConflict(err error) bool {
 	if err == nil {
 		return false
 	}
-	if errors.Is(err, gorm.ErrDuplicatedKey) {
-		return true
-	}
 	msg := err.Error()
 	return strings.Contains(msg, "mpesa_receipt_number") ||
-		strings.Contains(msg, "idx_mpesa_transactions_receipt_unique") ||
-		strings.Contains(msg, "23505") // unique_violation
+		strings.Contains(msg, "idx_mpesa_transactions_receipt_unique")
 }
 
 func (r *repository) GetMpesaTransactionByID(id, businessID uuid.UUID) (*MpesaTransaction, error) {

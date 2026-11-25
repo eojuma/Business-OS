@@ -58,9 +58,18 @@ export function invoiceStatusClass(status: string, overdue = false): string {
   }
 }
 
-/** Keeps polling after an STK push until the invoice is settled or no balance remains. */
-export function shouldKeepPollingInvoicePayment(invoice: Pick<Invoice, "remaining_balance" | "status">): boolean {
-  return invoice.status !== "paid" && invoice.remaining_balance > 0;
+/** Keeps polling after an STK push until the invoice is settled or the current payment completes. */
+export function shouldKeepPollingInvoicePayment(
+  invoice: Pick<Invoice, "remaining_balance" | "status">,
+  initialBalance?: number,
+): boolean {
+  if (invoice.status === "paid" || invoice.remaining_balance <= 0) {
+    return false;
+  }
+  if (initialBalance !== undefined && invoice.remaining_balance < initialBalance) {
+    return false;
+  }
+  return true;
 }
 
 /** Returns the invoice customer name or the walk-in fallback. */

@@ -3,6 +3,7 @@ package deliveries
 import (
 	"errors"
 	"net/http"
+	"strconv"
 
 	"github.com/businessos/backend/internal/shared/middleware"
 	"github.com/businessos/backend/internal/shared/response"
@@ -112,6 +113,19 @@ func (h *Handler) List(c *gin.Context) {
 	}
 	limit := 50
 	offset := 0
+	if v := c.Query("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			limit = n
+		}
+	}
+	if limit > 100 {
+		limit = 100
+	}
+	if v := c.Query("offset"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+			offset = n
+		}
+	}
 	items, total, err := h.service.List(businessID, sourceType, sourceID, status, limit, offset)
 	if err != nil {
 		response.Error(c, http.StatusInternalServerError, err.Error())

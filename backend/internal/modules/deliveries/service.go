@@ -35,6 +35,24 @@ func (s *service) Create(businessID, actorID uuid.UUID, input CreateDeliveryInpu
 	if err != nil {
 		return nil, errors.New("invalid source_id")
 	}
+	// Resolve the source order within this business before persisting.
+	if input.SourceType == "sale" {
+		ok, err := s.repo.SaleExists(businessID, sid)
+		if err != nil {
+			return nil, err
+		}
+		if !ok {
+			return nil, errors.New("sale not found")
+		}
+	} else {
+		ok, err := s.repo.PurchaseExists(businessID, sid)
+		if err != nil {
+			return nil, err
+		}
+		if !ok {
+			return nil, errors.New("purchase not found")
+		}
+	}
 	d := &Delivery{
 		BusinessID:     businessID,
 		SourceType:     input.SourceType,
@@ -53,20 +71,25 @@ func (s *service) Create(businessID, actorID uuid.UUID, input CreateDeliveryInpu
 		if it.Quantity <= 0 {
 			return nil, errors.New("quantity must be positive")
 		}
+		ok, err := s.repo.ProductExists(businessID, pid)
+		if err != nil {
+			return nil, err
+		}
+		if !ok {
+			return nil, errors.New("product not found")
+		}
 		d.Items = append(d.Items, DeliveryItem{ProductID: pid, Quantity: it.Quantity})
 	}
-	if err := s.repo.Create(d); err != nil {
-		return nil, err
-	}
-	// record initial history
-	_ = s.repo.CreateHistory(&DeliveryStatusHistory{
-		DeliveryID:  d.ID,
+	h := &DeliveryStatusHistory{
 		BusinessID:  businessID,
 		FromStatus:  "",
 		ToStatus:    StatusPending,
 		ActorUserID: &actorID,
 		Note:        "created",
-	})
+	}
+	if err := s.repo.CreateDeliveryWithHistory(d, h); err != nil {
+		return nil, err
+	}
 	return d, nil
 }
 
@@ -92,7 +115,6 @@ func (s *service) Transition(businessID, actorID, id uuid.UUID, input Transition
 	}
 	now := time.Now()
 	from := d.Status
-	//nolint:exhaustive // StatusPending records no timestamp
 	switch to {
 	case StatusDispatched:
 		if d.DispatchedAt == nil {
@@ -111,20 +133,27 @@ func (s *service) Transition(businessID, actorID, id uuid.UUID, input Transition
 			d.FailedAt = &now
 		}
 		d.FailureReason = input.Note
+	case StatusPending:
+		break
 	default:
 	}
 	d.Status = to
-	if err := s.repo.Update(d); err != nil {
-		return nil, err
-	}
-	_ = s.repo.CreateHistory(&DeliveryStatusHistory{
+	d.UpdatedAt = now
+	h := &DeliveryStatusHistory{
 		DeliveryID:  d.ID,
 		BusinessID:  businessID,
 		FromStatus:  from,
 		ToStatus:    to,
 		ActorUserID: &actorID,
 		Note:        input.Note,
-	})
+	}
+	ok, err := s.repo.TransitionDelivery(d, from, h)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return nil, errors.New("delivery status changed concurrently")
+	}
 	// notification hook
 	s.notify(businessID, d, to)
 	return d, nil

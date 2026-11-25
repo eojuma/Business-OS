@@ -35,6 +35,49 @@ func (f *fakeRepo) Create(d *Delivery) error {
 	return nil
 }
 
+func (f *fakeRepo) CreateDeliveryWithHistory(d *Delivery, h *DeliveryStatusHistory) error {
+	if f.createErr != nil {
+		return f.createErr
+	}
+	if d.ID == uuid.Nil {
+		d.ID = uuid.New()
+	}
+	clone := *d
+	items := make([]DeliveryItem, len(d.Items))
+	copy(items, d.Items)
+	clone.Items = items
+	f.deliveries[clone.ID] = &clone
+	d.ID = clone.ID
+	if h != nil {
+		h.DeliveryID = d.ID
+		f.history = append(f.history, *h)
+	}
+	return nil
+}
+
+func (f *fakeRepo) TransitionDelivery(d *Delivery, from DeliveryStatus, h *DeliveryStatusHistory) (bool, error) {
+	if f.updateErr != nil {
+		return false, f.updateErr
+	}
+	existing, ok := f.deliveries[d.ID]
+	if !ok || existing.Status != from {
+		return false, nil
+	}
+	clone := *d
+	items := make([]DeliveryItem, len(d.Items))
+	copy(items, d.Items)
+	clone.Items = items
+	f.deliveries[clone.ID] = &clone
+	if h != nil {
+		f.history = append(f.history, *h)
+	}
+	return true, nil
+}
+
+func (f *fakeRepo) SaleExists(businessID, id uuid.UUID) (bool, error) { return true, nil }
+func (f *fakeRepo) PurchaseExists(businessID, id uuid.UUID) (bool, error) { return true, nil }
+func (f *fakeRepo) ProductExists(businessID, id uuid.UUID) (bool, error) { return true, nil }
+
 func (f *fakeRepo) GetByID(id, businessID uuid.UUID) (*Delivery, error) {
 	if f.getErr != nil {
 		return nil, f.getErr

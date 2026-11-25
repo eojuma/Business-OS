@@ -62,6 +62,7 @@ export default function DeliveriesPage() {
 
   const [historyFor, setHistoryFor] = useState<Delivery | null>(null);
   const [history, setHistory] = useState<History[]>([]);
+  const [creating, setCreating] = useState(false);
 
   const [noteFor, setNoteFor] = useState<Delivery | null>(null);
   const [noteData, setNoteData] = useState<any>(null);
@@ -85,6 +86,8 @@ export default function DeliveriesPage() {
 
   async function submitCreate(e: React.FormEvent) {
     e.preventDefault();
+    if (creating) return;
+    setCreating(true);
     try {
       await api.post("/deliveries", {
         source_type: sourceType,
@@ -104,6 +107,8 @@ export default function DeliveriesPage() {
       await load();
     } catch (e: any) {
       setError(e.response?.data?.error || "Failed to create delivery");
+    } finally {
+      setCreating(false);
     }
   }
 
@@ -126,20 +131,28 @@ export default function DeliveriesPage() {
 
   async function openHistory(d: Delivery) {
     setHistoryFor(d);
+    setHistory([]);
+    const currentId = d.id;
     try {
       const res = await api.get(`/deliveries/${d.id}/history`);
+      if (historyFor?.id !== currentId) return;
       setHistory(res.data.data || []);
     } catch (e: any) {
+      if (historyFor?.id !== currentId) return;
       setError(e.response?.data?.error || "Failed to load history");
     }
   }
 
   async function openNote(d: Delivery) {
     setNoteFor(d);
+    setNoteData(null);
+    const currentId = d.id;
     try {
       const res = await api.get(`/deliveries/${d.id}/note`);
+      if (noteFor?.id !== currentId) return;
       setNoteData(res.data.data);
     } catch (e: any) {
+      if (noteFor?.id !== currentId) return;
       setError(e.response?.data?.error || "Failed to load note");
     }
   }
@@ -283,7 +296,7 @@ export default function DeliveriesPage() {
               </div>
               <div className="mt-4 flex justify-end gap-2">
                 <button type="button" className="btn-secondary" onClick={() => setShowCreate(false)}>Cancel</button>
-                <button className="btn-primary">Create</button>
+                <button className="btn-primary" disabled={creating}>Create</button>
               </div>
             </form>
           </div>

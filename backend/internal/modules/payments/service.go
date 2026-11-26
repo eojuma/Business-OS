@@ -1326,10 +1326,23 @@ func (s *service) ReconcileReviewItem(businessID uuid.UUID, itemID uuid.UUID, in
 		return err
 	}
 
-	// One M-Pesa receipt must settle exactly one target. The callback path
-	// claims the transaction before applying its effect, but if that save
-	// fails the receipt can remain unmatched and be applied again here. Check
-	// the receipt against every payment table, not just the selected target.
+	// Claim the transaction before applying any financial effect. This ensures
+	// only one concurrent request can claim it; others receive ErrAlreadyReconciled.
+	// The callback path claims before saving, but if that save fails the receipt
+	// can remain unmatched and be applied again here - the claim prevents double-
+	// settlement in that retry path.
+	if ctx.mpesaTx != nil && ctx.mpesaTx.MpesaReceiptNumber != "" {
+		claimed, err := s.repo.ClaimMpesaTransactionStatus(ctx.mpesaTx, StatusCompleted, StatusPending)
+		if err != nil {
+			return err
+		}
+		if !claimed {
+			return ErrAlreadyReconciled
+		}
+	}
+
+	// One M-Pesa receipt must settle exactly one target. Check the receipt against
+	// every payment table, not just the selected target.
 	if ctx.mpesaTx != nil && ctx.mpesaTx.MpesaReceiptNumber != "" {
 		if s.receiptAlreadyApplied(ctx.mpesaTx.MpesaReceiptNumber, businessID) {
 			return ErrAlreadyReconciled

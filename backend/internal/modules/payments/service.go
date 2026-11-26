@@ -143,6 +143,10 @@ func (s *service) InitiateSTKPush(ctx context.Context, businessID uuid.UUID, inp
 			if existing.TransactionType != TypeSTKPush || existing.Amount != input.Amount || existing.PhoneNumber != phone {
 				return nil, ErrIdempotencyKeyConflict
 			}
+			// Do not return a failed transaction as a successful replay.
+			if existing.Status == StatusFailed {
+				return nil, ErrIdempotencyKeyConflict
+			}
 			return existing, nil
 		}
 	}
@@ -444,6 +448,10 @@ func (s *service) InitiateB2C(ctx context.Context, businessID uuid.UUID, input B
 	if input.IdempotencyKey != "" {
 		if existing, err := s.repo.GetMpesaTransactionByIdempotency(businessID, input.IdempotencyKey); err == nil && existing != nil {
 			if existing.TransactionType != TypeB2C || existing.Amount != input.Amount || existing.PhoneNumber != phone {
+				return nil, ErrIdempotencyKeyConflict
+			}
+			// Do not return a failed transaction as a successful replay.
+			if existing.Status == StatusFailed {
 				return nil, ErrIdempotencyKeyConflict
 			}
 			return existing, nil

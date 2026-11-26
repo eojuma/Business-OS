@@ -329,7 +329,7 @@ func (s *service) HandleSTKCallback(signatureHeader string, body []byte) error {
 	// review queue without ever replaying the payment.
 	if err := s.autoReconcileMpesa(tx); err != nil {
 		log.Printf("payments: stk reconciliation for transaction %s failed: %v", tx.ID, err)
-		return nil
+		return err
 	}
 
 	return s.repo.UpdateMpesaReconciliation(tx)
@@ -721,6 +721,20 @@ func (s *service) HandleB2CTimeout(signatureHeader string, body []byte) error {
 // be recorded, leaving the caller to surface the transaction for review.
 func (s *service) autoReconcileMpesa(tx *MpesaTransaction) error {
 	marker := mpesaMarker(tx)
+
+	// Guard: if this M-Pesa receipt has already been applied to any target
+	// (invoice, customer credit, or supplier), do not re-apply it. This
+	// prevents double-settlement when reconciliation is retried after a save
+	// failure leaves the receipt eligible in the review queue.
+	allNotes, err := s.repo.ListAllMpesaPaymentNotes(tx.BusinessID)
+	if err != nil {
+		return fmt.Errorf("list mpesa payment notes: %w", err)
+	}
+	for _, note := range allNotes {
+		if strings.HasPrefix(note, marker) {
+			return nil // already settled; leave transaction as-is
+		}
+	}
 
 	// 1. Try matching Invoice by AccountReference or BillRefNumber
 	ref := strings.TrimSpace(tx.BillRefNumber)

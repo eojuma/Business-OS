@@ -77,10 +77,35 @@ func NewRepository(db *gorm.DB) Repository {
 
 func (r *repository) CreateMpesaTransaction(tx *MpesaTransaction) error {
 	err := r.db.Create(tx).Error
-	if err != nil && isMpesaReceiptConflict(err) {
+	if err == nil {
+		return nil
+	}
+	if isMpesaReceiptConflict(err) {
+		return ErrMpesaReceiptExists
+	}
+	// With TranslateError enabled the driver replaces the Postgres error with
+	// the gorm.ErrDuplicatedKey sentinel, which no longer names the index. Only
+	// map it when the row really is a receipt duplicate, not an idempotency-key
+	// collision.
+	if errors.Is(err, gorm.ErrDuplicatedKey) && r.mpesaReceiptExists(tx) {
 		return ErrMpesaReceiptExists
 	}
 	return err
+}
+
+// mpesaReceiptExists reports whether another row already stores this receipt.
+func (r *repository) mpesaReceiptExists(tx *MpesaTransaction) bool {
+	receipt := strings.TrimSpace(tx.MpesaReceiptNumber)
+	if receipt == "" {
+		return false
+	}
+	var count int64
+	if err := r.db.Model(&MpesaTransaction{}).
+		Where("business_id = ? AND mpesa_receipt_number = ?", tx.BusinessID, receipt).
+		Count(&count).Error; err != nil {
+		return false
+	}
+	return count > 0
 }
 
 func (r *repository) UpdateMpesaTransaction(tx *MpesaTransaction) error {
@@ -398,18 +423,36 @@ func (r *repository) FindInvoiceByNumber(businessID uuid.UUID, invoiceNumber str
 }
 
 func (r *repository) FindCustomerByPhone(businessID uuid.UUID, phone string) (*customers.Customer, error) {
-	phone = strings.TrimSpace(phone)
-	if phone == "" {
+	normalized := NormalizePhone(strings.TrimSpace(phone))
+	digits := onlyDigits(normalized)
+	// Short suffixes match too many customers and are not safe to auto-credit.
+	if len(digits) < 9 {
 		return nil, gorm.ErrRecordNotFound
 	}
-	normalized := NormalizePhone(phone)
-	last9 := normalized
-	if len(last9) > 9 {
-		last9 = last9[len(last9)-9:]
-	}
-	var cust customers.Customer
-	if err := r.db.Where("business_id = ? AND (phone = ? OR phone LIKE ?)", businessID, normalized, "%"+last9).First(&cust).Error; err != nil {
+	last9 := digits[len(digits)-9:]
+	var matches []customers.Customer
+	err := r.db.
+		Where("business_id = ? AND (phone = ? OR phone LIKE ?)", businessID, normalized, "%"+last9).
+		Limit(2).
+		Find(&matches).Error
+	if err != nil {
 		return nil, err
 	}
-	return &cust, nil
+	// Only a single unambiguous match may be auto-reconciled; otherwise leave the
+	// receipt for manual review instead of guessing a customer.
+	if len(matches) != 1 {
+		return nil, gorm.ErrRecordNotFound
+	}
+	return &matches[0], nil
+}
+
+// onlyDigits keeps 0-9 so a phone suffix cannot act as a LIKE wildcard.
+func onlyDigits(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		if r >= '0' && r <= '9' {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
 }

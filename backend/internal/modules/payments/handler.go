@@ -94,6 +94,7 @@ func (h *Handler) HandleC2BValidate(c *gin.Context) {
 }
 
 func (h *Handler) HandleC2BConfirm(c *gin.Context) {
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxCallbackBodyBytes)
 	sig := extractSignature(c)
 	var req C2BConfirmationRequest
 	if err := c.ShouldBindJSON(&req); err != nil {

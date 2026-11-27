@@ -24,6 +24,11 @@ var (
 	ErrMpesaAuthFailed   = errors.New("m-pesa authentication failed")
 	ErrMissingConfig     = errors.New("m-pesa configuration is incomplete")
 	ErrTransactionFailed = errors.New("m-pesa transaction request failed")
+	// ErrTransactionAmbiguous means the gateway outcome is indeterminate (for
+	// example a 5xx after the request may have been accepted). The transaction
+	// must stay in a non-final state so a late callback can still settle it and
+	// a retry cannot trigger a second payout.
+	ErrTransactionAmbiguous = errors.New("m-pesa transaction outcome is ambiguous")
 )
 
 type MpesaClient interface {
@@ -126,8 +131,18 @@ func (c *mpesaClient) InitiateSTKPush(ctx context.Context, req DarajaSTKPushRequ
 		return nil, fmt.Errorf("decode stk response: %w", err)
 	}
 
-	if resp.StatusCode >= 400 || (stkResp.ResponseCode != "" && stkResp.ResponseCode != "0") {
+	// A non-zero ResponseCode is an explicit rejection regardless of HTTP status.
+	if stkResp.ResponseCode != "" && stkResp.ResponseCode != "0" {
 		return &stkResp, fmt.Errorf("%w: code %s, desc %s", ErrTransactionFailed, stkResp.ResponseCode, stkResp.ResponseDescription)
+	}
+	// A 5xx (or any accepted-looking body on a server error) does not prove the
+	// request was rejected: Daraja may still process it. Keep it non-final.
+	if resp.StatusCode >= 500 {
+		return &stkResp, fmt.Errorf("%w: status %d, desc %s", ErrTransactionAmbiguous, resp.StatusCode, stkResp.ResponseDescription)
+	}
+	// A 4xx is a definitive rejection.
+	if resp.StatusCode >= 400 {
+		return &stkResp, fmt.Errorf("%w: status %d, desc %s", ErrTransactionFailed, resp.StatusCode, stkResp.ResponseDescription)
 	}
 	if stkResp.CheckoutRequestID == "" {
 		return &stkResp, fmt.Errorf("%w: response lacks CheckoutRequestID", ErrTransactionFailed)
@@ -173,8 +188,16 @@ func (c *mpesaClient) InitiateB2CPayout(ctx context.Context, req DarajaB2CReques
 		return nil, fmt.Errorf("decode b2c response: %w", err)
 	}
 
-	if resp.StatusCode >= 400 || (b2cResp.ResponseCode != "" && b2cResp.ResponseCode != "0") {
+	// A non-zero ResponseCode is an explicit rejection regardless of HTTP status.
+	if b2cResp.ResponseCode != "" && b2cResp.ResponseCode != "0" {
 		return &b2cResp, fmt.Errorf("%w: code %s, desc %s", ErrTransactionFailed, b2cResp.ResponseCode, b2cResp.ResponseDescription)
+	}
+	// A 5xx does not prove the payout was rejected: Daraja may have queued it.
+	if resp.StatusCode >= 500 {
+		return &b2cResp, fmt.Errorf("%w: status %d, desc %s", ErrTransactionAmbiguous, resp.StatusCode, b2cResp.ResponseDescription)
+	}
+	if resp.StatusCode >= 400 {
+		return &b2cResp, fmt.Errorf("%w: status %d, desc %s", ErrTransactionFailed, resp.StatusCode, b2cResp.ResponseDescription)
 	}
 	if b2cResp.ConversationID == "" {
 		return &b2cResp, fmt.Errorf("%w: response lacks ConversationID", ErrTransactionFailed)

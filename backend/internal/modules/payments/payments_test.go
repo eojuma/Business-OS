@@ -1369,3 +1369,105 @@ func TestPaginationBounds(t *testing.T) {
 		t.Fatal("expected error for page causing offset overflow")
 	}
 }
+
+// A statement row that lists both a credit and a debit is ambiguous and must
+// not be imported as a single movement.
+func TestStatementImportRejectsCreditAndDebit(t *testing.T) {
+	repo := newFakePaymentRepository()
+	svc := NewService(repo, nil, &config.Config{}, nil, nil, nil, nil)
+	businessID := uuid.New()
+
+	csv := `date,reference,credit,debit
+2026-11-01,REF-BOTH,100.00,25.00
+2026-11-02,REF-OK,100.00,
+`
+	result, err := svc.ImportBankStatement(businessID, "TestBank", strings.NewReader(csv))
+	if err != nil {
+		t.Fatalf("import failed: %v", err)
+	}
+	if result.InvalidRows != 1 {
+		t.Errorf("invalid_rows = %d, want 1", result.InvalidRows)
+	}
+	if result.Imported != 1 {
+		t.Errorf("imported = %d, want 1", result.Imported)
+	}
+}
+
+// A B2C result without an explicit ResultCode must not complete the payout.
+func TestB2CResultRequiresResultCode(t *testing.T) {
+	repo := newFakePaymentRepository()
+	cfg := &config.Config{MpesaCallbackSecret: "sec"}
+	svc := NewService(repo, nil, cfg, nil, nil, &mockFinanceService{}, nil)
+	businessID := uuid.New()
+
+	tx := &MpesaTransaction{
+		ID:                   uuid.New(),
+		BusinessID:           businessID,
+		TransactionType:      TypeB2C,
+		CheckoutRequestID:    "CONV-NO-CODE",
+		Amount:               1000,
+		Status:               StatusPending,
+		ReconciliationStatus: Unmatched,
+	}
+	_ = repo.CreateMpesaTransaction(tx)
+
+	body := []byte(`{"Result":{"ResultDesc":"ok","ConversationID":"CONV-NO-CODE","TransactionID":"X"}}`)
+	if err := svc.HandleB2CResult(computeHMAC(cfg.MpesaCallbackSecret, body), body); err == nil {
+		t.Fatal("expected error when ResultCode is missing")
+	}
+	stored, _ := repo.GetMpesaTransactionByID(tx.ID, businessID)
+	if stored.Status != StatusPending {
+		t.Fatalf("status = %s, want pending", stored.Status)
+	}
+}
+
+// An ambiguous STK outcome must leave the transaction pending so a late
+// callback can still settle it.
+func TestInitiateSTKAmbiguousKeepsPending(t *testing.T) {
+	repo := newFakePaymentRepository()
+	client := &mockMpesaClient{
+		stkResp: &DarajaSTKPushResponse{CheckoutRequestID: "ws_CO_AMB", ResponseCode: "0"},
+		stkErr:  ErrTransactionAmbiguous,
+	}
+	cfg := &config.Config{
+		MpesaShortCode:      "174379",
+		MpesaPasskey:        "passkey",
+		MpesaStkCallbackURL: "https://example.com/callback",
+	}
+	svc := NewService(repo, client, cfg, nil, nil, nil, nil)
+
+	if _, err := svc.InitiateSTKPush(context.Background(), uuid.New(), STKPushInput{
+		PhoneNumber: PhoneNumberTestConst,
+		Amount:      1000,
+	}); err == nil {
+		t.Fatal("expected ambiguous error to surface")
+	}
+	for _, m := range repo.mpesaTxs {
+		if m.Status != StatusPending {
+			t.Fatalf("status = %s, want pending", m.Status)
+		}
+	}
+}
+
+// An ambiguous B2C outcome must move to timed_out (non-final) rather than failed.
+func TestInitiateB2CAmbiguousUsesTimedOut(t *testing.T) {
+	repo := newFakePaymentRepository()
+	client := &mockMpesaClient{
+		b2cResp: &DarajaB2CResponse{ConversationID: "CONV-AMB", ResponseCode: "0"},
+		b2cErr:  ErrTransactionAmbiguous,
+	}
+	cfg := &config.Config{MpesaShortCode: "174379", MpesaPasskey: "passkey"}
+	svc := NewService(repo, client, cfg, nil, nil, nil, nil)
+
+	if _, err := svc.InitiateB2C(context.Background(), uuid.New(), B2CPayoutInput{
+		PhoneNumber: PhoneNumberTestConst,
+		Amount:      1000,
+	}); err == nil {
+		t.Fatal("expected ambiguous error to surface")
+	}
+	for _, m := range repo.mpesaTxs {
+		if m.Status != StatusTimedOut {
+			t.Fatalf("status = %s, want timed_out", m.Status)
+		}
+	}
+}

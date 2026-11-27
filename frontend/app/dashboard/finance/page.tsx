@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "@/lib/api";
 import { PageHeader, StatCard, formatMoney } from "@/components/app-shell";
 import { bankTransferMessage } from "@/lib/payments";
@@ -79,17 +79,12 @@ type TabType = "overview" | "mpesa" | "bank" | "review";
 
 /** Convert a decimal-string amount to integer cents without floating-point rounding. */
 function parseCents(input: string): number {
+  // Reject trailing garbage such as "12abc" instead of silently truncating it.
   const t = input.trim();
-  if (t === "") return 0;
-  const negative = t.startsWith("-");
-  const abs = negative ? t.slice(1) : t;
-  const [intPart, fracPart = ""] = abs.split(".");
-  const intCents = parseInt(intPart, 10) * 100;
-  let fracCents = 0;
-  if (fracPart.length > 0) {
-    fracCents = parseInt((fracPart + "00").slice(0, 2), 10);
-  }
-  return negative ? -(intCents + fracCents) : intCents + fracCents;
+  if (!/^\d+(\.\d{1,2})?$/.test(t)) return 0;
+  const [intPart, fracPart = ""] = t.split(".");
+  const cents = Number(intPart) * 100 + Number((fracPart + "00").slice(0, 2));
+  return Number.isSafeInteger(cents) ? cents : 0;
 }
 
 export default function FinancePage() {
@@ -105,9 +100,9 @@ export default function FinancePage() {
   const [reviewItems, setReviewItems] = useState<ReviewItem[]>([]);
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
-  // Each tab change increments the counter so a slow response from the
-  // previous tab cannot overwrite state after the user has switched away.
-  const [loadVersion, setLoadVersion] = useState(0);
+  // Request counter held in a ref so callbacks always compare against the
+  // latest value (state captured in a closure would be stale).
+  const requestVersion = useRef(0);
 
   // Modals
   const [showExpenseForm, setShowExpenseForm] = useState(false);
@@ -143,43 +138,43 @@ export default function FinancePage() {
 
   /** Loads summary and tab data. */
   const loadData = useCallback(async () => {
-    const myVersion = loadVersion + 1;
-    setLoadVersion(myVersion);
+    const myVersion = ++requestVersion.current;
     setError("");
     try {
       if (activeTab === "overview") {
         const [s, e] = await Promise.all([api.get("/finance/summary"), api.get("/finance/expenses")]);
-        if (myVersion !== loadVersion) return;
+        if (myVersion !== requestVersion.current) return;
         setD(s.data.data);
         setExpenses(e.data.data || []);
       } else if (activeTab === "mpesa") {
         const res = await api.get("/payments/mpesa/transactions");
-        if (myVersion !== loadVersion) return;
+        if (myVersion !== requestVersion.current) return;
         setMpesaTxs(res.data.data || []);
       } else if (activeTab === "bank") {
         const res = await api.get("/payments/bank/transactions");
-        if (myVersion !== loadVersion) return;
+        if (myVersion !== requestVersion.current) return;
         setBankTxs(res.data.data || []);
       } else if (activeTab === "review") {
         const res = await api.get("/payments/review-queue");
-        if (myVersion !== loadVersion) return;
+        if (myVersion !== requestVersion.current) return;
         setReviewItems(res.data.data || []);
       }
     } catch (e: any) {
-      if (myVersion !== loadVersion) return;
+      if (myVersion !== requestVersion.current) return;
       setError(e.response?.data?.error || "Failed to load data");
     }
-  }, [activeTab, loadVersion]);
+  }, [activeTab]);
+
+  // Invalidate any in-flight load and clear stale banners when the tab changes.
+  useEffect(() => {
+    requestVersion.current += 1;
+    setMessage("");
+    setError("");
+  }, [activeTab]);
 
   useEffect(() => {
     if (canView) void loadData();
   }, [canView, loadData]);
-
-  // Clear stale messages when the tab changes so the previous tab's
-  // success/error banner does not linger.
-  useEffect(() => {
-    setMessage("");
-  }, [activeTab]);
 
   /** Record expense */
   async function submitExpense(e: React.FormEvent) {
@@ -194,7 +189,7 @@ export default function FinancePage() {
       setAmount("");
       setDescription("");
       setShowExpenseForm(false);
-      setMessage(`Expense recorded successfully for ${cents / 100}.`);
+      setMessage(`Expense recorded successfully for ${formatMoney(cents)}.`);
       await loadData();
     } catch (e: any) {
       setError(e.response?.data?.error || "Failed to save expense");
@@ -286,9 +281,9 @@ export default function FinancePage() {
     if (!reconcileTarget) return;
     if (
       reconcileTarget.type === "outflow" &&
-      (recType === "invoice" || recType === "customer_credit" || recType === "supplier_payment")
+      (recType === "invoice" || recType === "customer_credit")
     ) {
-      setError("An outflow cannot be reconciled against an invoice, customer balance, or supplier payment.");
+      setError("An outflow cannot be reconciled against an invoice or customer balance.");
       return;
     }
     if (
@@ -907,7 +902,7 @@ export default function FinancePage() {
                 </select>
                 <p className="mt-1 text-xs text-subtle">
                   {reconcileTarget.type === "outflow"
-                    ? "Money left the business, so this can only be booked as an expense."
+                    ? "Money left the business, so this can be booked as an expense or a supplier payment."
                     : "Money arrived, so this can settle an invoice or customer balance."}
                 </p>
               </div>

@@ -221,7 +221,9 @@ func (c *Config) Validate() error {
 	if c.DBSSLMode == "disable" {
 		return fmt.Errorf("DB_SSLMODE must enable TLS in production")
 	}
-	if c.MpesaCallbackSecret == "" {
+	// Only require the callback secret when M-Pesa is actually configured;
+	// deployments that never enable M-Pesa should not fail startup for it.
+	if c.MpesaConsumerKey != "" && c.MpesaCallbackSecret == "" {
 		return fmt.Errorf("MPESA_CALLBACK_SECRET must be set in production so M-Pesa callbacks are signed")
 	}
 	if c.MpesaBusinessID != "" {

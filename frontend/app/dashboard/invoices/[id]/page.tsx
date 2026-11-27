@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { ArrowLeft, CheckCircle2, Clock, Smartphone } from "lucide-react";
@@ -40,10 +40,24 @@ export default function InvoiceDetailPage() {
   const [stkPhone, setStkPhone] = useState("");
   const [stkSuccess, setStkSuccess] = useState("");
   const [pollTimer, setPollTimer] = useState<NodeJS.Timeout | null>(null);
+  // Bumped on each successful payment so a slow background read that started
+  // before the payment cannot overwrite the paid snapshot with stale data.
+  const invoiceGeneration = useRef(0);
+  // Tracks mount state so a poll GET that resolves after unmount does not
+  // schedule another timeout.
+  const mountedRef = useRef(true);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
 
   /** Loads the invoice and resets the payment amount to the remainder. */
   const loadInvoice = useCallback(async (background = false) => {
     if (!id) return null;
+    const generation = invoiceGeneration.current;
     if (!background) {
       setLoading(true);
       setError("");
@@ -51,6 +65,10 @@ export default function InvoiceDetailPage() {
     try {
       const res = await api.get(`/invoices/${id}`);
       const next = res.data.data as Invoice;
+      // Discard a background read that began before a successful payment.
+      if (background && generation !== invoiceGeneration.current) {
+        return null;
+      }
       setInvoice(next);
       if (!background) {
         // Reset the STK phone to the customer's current phone. If the customer
@@ -106,6 +124,7 @@ export default function InvoiceDetailPage() {
         note,
       });
       const next = res.data.data as Invoice;
+      invoiceGeneration.current += 1;
       setInvoice(next);
       setNote("");
       setAmount(next.remaining_balance > 0 ? (next.remaining_balance / 100).toFixed(2) : "");
@@ -154,6 +173,7 @@ export default function InvoiceDetailPage() {
         const timer = setTimeout(async () => {
           attempts++;
           const next = await loadInvoice(true);
+          if (!mountedRef.current) return;
           const keepPolling = next ? shouldKeepPollingInvoicePayment(next, initialBalance) : true;
           if (keepPolling && attempts < maxAttempts) {
             poll();

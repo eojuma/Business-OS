@@ -21,6 +21,10 @@ var (
 	ErrMpesaReceiptExists = errors.New("mpesa receipt number already exists")
 )
 
+// colUpdatedAt is the shared updated_at column name used by the repository's
+// compare-and-set and reconciliation updates.
+const colUpdatedAt = "updated_at"
+
 type Repository interface {
 	CreateMpesaTransaction(tx *MpesaTransaction) error
 	GetMpesaTransactionByID(id, businessID uuid.UUID) (*MpesaTransaction, error)
@@ -32,6 +36,11 @@ type Repository interface {
 	// false when another delivery already settled the transaction, which is what
 	// makes callback processing safe to replay.
 	ClaimMpesaTransactionStatus(tx *MpesaTransaction, terminal TransactionStatus, allowedFrom ...TransactionStatus) (bool, error)
+	// ClaimMpesaReconciliation atomically moves the reconciliation status from
+	// one value to another. It returns false when another request already
+	// claimed the row, which serializes the manual-review settle path so one
+	// receipt can never be applied twice by concurrent requests.
+	ClaimMpesaReconciliation(tx *MpesaTransaction, from, to ReconciliationStatus) (bool, error)
 	// UpdateMpesaReconciliation persists reconciliation fields without touching
 	// the transaction status.
 	UpdateMpesaReconciliation(tx *MpesaTransaction) error
@@ -43,6 +52,9 @@ type Repository interface {
 	GetBankTransactionByReference(businessID uuid.UUID, ref string) (*BankTransaction, error)
 	ListBankTransactions(businessID uuid.UUID, txType string, status string, limit, offset int) ([]BankTransaction, int64, error)
 	UpdateBankTransaction(tx *BankTransaction) error
+	// ClaimBankReconciliation mirrors ClaimMpesaReconciliation for bank
+	// transactions so the manual-review settle path is serialized there too.
+	ClaimBankReconciliation(tx *BankTransaction, from, to ReconciliationStatus) (bool, error)
 
 	ListReviewQueue(businessID uuid.UUID, source string, limit, offset int) ([]ReviewQueueItem, int64, error)
 	// ListAllMpesaPaymentNotes returns every payment note stored against
@@ -143,11 +155,42 @@ func (r *repository) ClaimMpesaTransactionStatus(tx *MpesaTransaction, terminal 
 		"mpesa_receipt_number": tx.MpesaReceiptNumber,
 		"phone_number":         tx.PhoneNumber,
 		"amount":               tx.Amount,
-		"updated_at":           time.Now(),
+		colUpdatedAt:           time.Now(),
 	}
 	result := r.db.Model(&MpesaTransaction{}).
 		Where("id = ? AND status IN ?", tx.ID, allowedFrom).
 		Updates(updates)
+	if result.Error != nil {
+		return false, result.Error
+	}
+	return result.RowsAffected == 1, nil
+}
+
+// ClaimMpesaReconciliation performs a compare-and-set on the reconciliation
+// status. Only one concurrent caller can move the row out of the expected
+// status, which serializes manual reconciliation and prevents a double settle.
+func (r *repository) ClaimMpesaReconciliation(tx *MpesaTransaction, from, to ReconciliationStatus) (bool, error) {
+	result := r.db.Model(&MpesaTransaction{}).
+		Where("id = ? AND reconciliation_status = ?", tx.ID, from).
+		Updates(map[string]any{
+			"reconciliation_status": to,
+			colUpdatedAt:            time.Now(),
+		})
+	if result.Error != nil {
+		return false, result.Error
+	}
+	return result.RowsAffected == 1, nil
+}
+
+// ClaimBankReconciliation is the bank-transaction counterpart of
+// ClaimMpesaReconciliation.
+func (r *repository) ClaimBankReconciliation(tx *BankTransaction, from, to ReconciliationStatus) (bool, error) {
+	result := r.db.Model(&BankTransaction{}).
+		Where("id = ? AND reconciliation_status = ?", tx.ID, from).
+		Updates(map[string]any{
+			"reconciliation_status": to,
+			colUpdatedAt:            time.Now(),
+		})
 	if result.Error != nil {
 		return false, result.Error
 	}
@@ -159,7 +202,7 @@ func (r *repository) UpdateMpesaReconciliation(tx *MpesaTransaction) error {
 		"reconciliation_status":  tx.ReconciliationStatus,
 		"reconciled_entity_type": nullableEntityType(tx.ReconciledEntityType),
 		"reconciled_entity_id":   tx.ReconciledEntityID,
-		"updated_at":             time.Now(),
+		colUpdatedAt:             time.Now(),
 	}
 	return r.db.Model(&MpesaTransaction{}).Where("id = ?", tx.ID).Updates(updates).Error
 }
@@ -231,7 +274,7 @@ func (r *repository) UpdateBankTransaction(tx *BankTransaction) error {
 		"reconciliation_status":  tx.ReconciliationStatus,
 		"reconciled_entity_type": nullableEntityType(tx.ReconciledEntityType),
 		"reconciled_entity_id":   tx.ReconciledEntityID,
-		"updated_at":             tx.UpdatedAt,
+		colUpdatedAt:             tx.UpdatedAt,
 	}).Error
 }
 

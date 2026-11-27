@@ -1316,7 +1316,7 @@ func (s *service) ListReviewQueue(businessID uuid.UUID, source string, page, lim
 
 // ReconcileReviewItem manually settles an unmatched transaction. Inflows may
 // only settle invoices or customer credit; outflows may only record an expense.
-func (s *service) ReconcileReviewItem(businessID uuid.UUID, itemID uuid.UUID, input ReconcileInput) error {
+func (s *service) ReconcileReviewItem(businessID uuid.UUID, itemID uuid.UUID, input ReconcileInput) (err error) {
 	ctx, err := s.loadReviewReconcileContext(businessID, itemID, input)
 	if err != nil {
 		return err
@@ -1326,19 +1326,40 @@ func (s *service) ReconcileReviewItem(businessID uuid.UUID, itemID uuid.UUID, in
 		return err
 	}
 
-	// Claim the transaction before applying any financial effect. This ensures
-	// only one concurrent request can claim it; others receive ErrAlreadyReconciled.
-	// The callback path claims before saving, but if that save fails the receipt
-	// can remain unmatched and be applied again here - the claim prevents double-
-	// settlement in that retry path.
+	// Claim the reconciliation slot before applying any financial effect. The
+	// claim is a compare-and-set on reconciliation_status, so only one
+	// concurrent request can move the row out of Unmatched. The callback path
+	// claims the transaction status before saving, but if that save fails the
+	// receipt can remain unmatched and be applied again here - this claim
+	// serializes the retry so the same money is never applied twice.
 	if ctx.mpesaTx != nil && ctx.mpesaTx.MpesaReceiptNumber != "" {
-		claimed, err := s.repo.ClaimMpesaTransactionStatus(ctx.mpesaTx, StatusCompleted, StatusPending)
-		if err != nil {
-			return err
+		claimed, claimErr := s.repo.ClaimMpesaReconciliation(ctx.mpesaTx, Unmatched, Manual)
+		if claimErr != nil {
+			return claimErr
 		}
 		if !claimed {
 			return ErrAlreadyReconciled
 		}
+		// Release the claim if the financial write fails so a retry can run.
+		defer func() {
+			if err != nil {
+				_, _ = s.repo.ClaimMpesaReconciliation(ctx.mpesaTx, Manual, Unmatched)
+			}
+		}()
+	} else if ctx.bankTx != nil {
+		claimed, claimErr := s.repo.ClaimBankReconciliation(ctx.bankTx, Unmatched, Manual)
+		if claimErr != nil {
+			return claimErr
+		}
+		if !claimed {
+			return ErrAlreadyReconciled
+		}
+		// Release the claim if the financial write fails so a retry can run.
+		defer func() {
+			if err != nil {
+				_, _ = s.repo.ClaimBankReconciliation(ctx.bankTx, Manual, Unmatched)
+			}
+		}()
 	}
 
 	// One M-Pesa receipt must settle exactly one target. Check the receipt against

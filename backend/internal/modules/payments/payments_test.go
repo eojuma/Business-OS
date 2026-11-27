@@ -123,6 +123,33 @@ func (f *fakePaymentRepository) ClaimMpesaTransactionStatus(tx *MpesaTransaction
 	return true, nil
 }
 
+func (f *fakePaymentRepository) ClaimMpesaReconciliation(tx *MpesaTransaction, from, to ReconciliationStatus) (bool, error) {
+	if f.claimErr != nil {
+		return false, f.claimErr
+	}
+	stored, ok := f.mpesaTxs[tx.ID.String()]
+	if !ok {
+		return false, gorm.ErrRecordNotFound
+	}
+	if stored.ReconciliationStatus != from {
+		return false, nil
+	}
+	stored.ReconciliationStatus = to
+	return true, nil
+}
+
+func (f *fakePaymentRepository) ClaimBankReconciliation(tx *BankTransaction, from, to ReconciliationStatus) (bool, error) {
+	stored, ok := f.bankTxs[tx.ID.String()]
+	if !ok {
+		return false, gorm.ErrRecordNotFound
+	}
+	if stored.ReconciliationStatus != from {
+		return false, nil
+	}
+	stored.ReconciliationStatus = to
+	return true, nil
+}
+
 func (f *fakePaymentRepository) UpdateMpesaReconciliation(tx *MpesaTransaction) error {
 	if f.reconciliationErr != nil {
 		return f.reconciliationErr
@@ -872,8 +899,8 @@ func TestSTKCallbackLeavesCompletedUnmatchedWhenPaymentFails(t *testing.T) {
 	_ = repo.CreateMpesaTransaction(tx)
 
 	body := []byte(`{"Body":{"stkCallback":{"CheckoutRequestID":"ws_CO_RECON_FAILS","ResultCode":0,"ResultDesc":"ok","CallbackMetadata":{"Item":[{"Name":"MpesaReceiptNumber","Value":"FAIL123"},{"Name":"Amount","Value":90.0}]}}}}`)
-	if err := svc.HandleSTKCallback(computeHMAC(cfg.MpesaCallbackSecret, body), body); err != nil {
-		t.Fatalf("callback should be acknowledged after the status is durable: %v", err)
+	if err := svc.HandleSTKCallback(computeHMAC(cfg.MpesaCallbackSecret, body), body); err == nil {
+		t.Fatal("expected callback to report the reconciliation failure")
 	}
 	stored, _ := repo.GetMpesaTransactionByID(tx.ID, businessID)
 	if stored.Status != StatusCompleted {

@@ -2,6 +2,7 @@ package payments
 
 import (
 	"context"
+	"crypto/hmac"
 	"encoding/csv"
 	"encoding/json"
 	"errors"
@@ -116,15 +117,38 @@ func (s *service) callbackURL(configured, path string) string {
 		raw = s.backendOrigin() + path
 	}
 	parsed, err := url.Parse(raw)
-	if err != nil || s.cfg == nil || s.cfg.MpesaCallbackSecret == "" {
+	if err != nil || s.cfg == nil {
+		return raw
+	}
+	// Prefer a dedicated token so the HMAC signing secret is not placed in a URL.
+	// Fall back to the secret only when no token is configured.
+	token := strings.TrimSpace(s.cfg.MpesaCallbackToken)
+	if token == "" {
+		token = strings.TrimSpace(s.cfg.MpesaCallbackSecret)
+	}
+	if token == "" {
 		return raw
 	}
 	query := parsed.Query()
-	// Always write the current secret so a configured URL that carries a stale
-	// token is corrected rather than left to fail signature validation.
-	query.Set("token", s.cfg.MpesaCallbackSecret)
+	query.Set("token", token)
 	parsed.RawQuery = query.Encode()
 	return parsed.String()
+}
+
+// validCallback accepts either an HMAC/direct-secret signature or the dedicated
+// callback token embedded in the provider URL.
+func (s *service) validCallback(body []byte, signatureHeader string) bool {
+	if s.cfg == nil {
+		return false
+	}
+	if ValidateCallbackSignature(s.cfg.MpesaCallbackSecret, body, signatureHeader) {
+		return true
+	}
+	token := strings.TrimSpace(s.cfg.MpesaCallbackToken)
+	if token == "" {
+		return false
+	}
+	return hmac.Equal([]byte(strings.TrimSpace(signatureHeader)), []byte(token))
 }
 
 // InitiateSTKPush starts an M-Pesa STK push prompt with idempotency protection.
@@ -261,7 +285,7 @@ func (s *service) InitiateSTKPush(ctx context.Context, businessID uuid.UUID, inp
 
 // HandleSTKCallback processes M-Pesa STK push callback with signature and idempotency checks.
 func (s *service) HandleSTKCallback(signatureHeader string, body []byte) error {
-	if !ValidateCallbackSignature(s.cfg.MpesaCallbackSecret, body, signatureHeader) {
+	if !s.validCallback(body, signatureHeader) {
 		return ErrInvalidSignature
 	}
 
@@ -362,7 +386,7 @@ func (s *service) HandleSTKCallback(signatureHeader string, body []byte) error {
 
 // HandleC2BValidation validates incoming C2B payment before acceptance.
 func (s *service) HandleC2BValidation(signatureHeader string, req C2BValidationRequest) (C2BValidationResponse, error) {
-	if !ValidateCallbackSignature(s.cfg.MpesaCallbackSecret, nil, signatureHeader) {
+	if !s.validCallback(nil, signatureHeader) {
 		return C2BValidationResponse{ResultCode: 1, ResultDesc: DescInvalidSignature}, ErrInvalidSignature
 	}
 
@@ -376,7 +400,7 @@ func (s *service) HandleC2BValidation(signatureHeader string, req C2BValidationR
 
 // HandleC2BConfirmation handles confirmed C2B payment with automatic reconciliation.
 func (s *service) HandleC2BConfirmation(signatureHeader string, req C2BConfirmationRequest, businessID uuid.UUID) (C2BConfirmationResponse, error) {
-	if !ValidateCallbackSignature(s.cfg.MpesaCallbackSecret, nil, signatureHeader) {
+	if !s.validCallback(nil, signatureHeader) {
 		return C2BConfirmationResponse{ResultCode: 1, ResultDesc: DescInvalidSignature}, ErrInvalidSignature
 	}
 
@@ -591,7 +615,7 @@ func (s *service) InitiateB2C(ctx context.Context, businessID uuid.UUID, input B
 
 // HandleB2CResult processes the B2C callback from Safaricom.
 func (s *service) HandleB2CResult(signatureHeader string, body []byte) error {
-	if !ValidateCallbackSignature(s.cfg.MpesaCallbackSecret, body, signatureHeader) {
+	if !s.validCallback(body, signatureHeader) {
 		return ErrInvalidSignature
 	}
 
@@ -731,7 +755,7 @@ func (s *service) applyB2CPayout(tx *MpesaTransaction) error {
 // ambiguous, so it becomes StatusTimedOut and never overwrites a completed
 // payout. Any later result callback may still settle the transaction.
 func (s *service) HandleB2CTimeout(signatureHeader string, body []byte) error {
-	if !ValidateCallbackSignature(s.cfg.MpesaCallbackSecret, body, signatureHeader) {
+	if !s.validCallback(body, signatureHeader) {
 		return ErrInvalidSignature
 	}
 
@@ -779,7 +803,7 @@ func (s *service) autoReconcileMpesa(tx *MpesaTransaction) error {
 	// (invoice, customer credit, or supplier), do not re-apply it. This
 	// prevents double-settlement when reconciliation is retried after a save
 	// failure leaves the receipt eligible in the review queue.
-	allNotes, err := s.repo.ListAllMpesaPaymentNotes(tx.BusinessID)
+	allNotes, err := s.repo.ListMpesaPaymentNotesByPrefix(tx.BusinessID, marker)
 	if err != nil {
 		return fmt.Errorf("list mpesa payment notes: %w", err)
 	}
@@ -859,6 +883,13 @@ func mpesaMarker(tx *MpesaTransaction) string {
 		ref = tx.ID.String()
 	}
 	return "M-Pesa " + ref
+}
+
+// bankMarker is the stable prefix that identifies payments applied for one bank
+// transaction, mirroring mpesaMarker so manual review retries dedupe instead of
+// recording a second payment.
+func bankMarker(tx *BankTransaction) string {
+	return "Bank tx " + tx.ID.String()
 }
 
 // resolveC2BBusiness finds the tenant that owns a public C2B confirmation. It
@@ -942,13 +973,13 @@ func (s *service) receiptAlreadyApplied(receipt string, businessID uuid.UUID) (b
 	if receipt == "" {
 		return false, nil
 	}
-	notes, err := s.repo.ListAllMpesaPaymentNotes(businessID)
+	marker := "M-Pesa " + receipt
+	notes, err := s.repo.ListMpesaPaymentNotesByPrefix(businessID, marker)
 	if err != nil {
 		// Fail closed: if we cannot verify, stop reconciliation rather than risk
 		// applying the receipt a second time.
 		return false, fmt.Errorf("list mpesa payment notes: %w", err)
 	}
-	marker := "M-Pesa " + receipt
 	for _, note := range notes {
 		if strings.HasPrefix(note, marker) {
 			return true, nil
@@ -1047,14 +1078,21 @@ func (s *service) RecordManualBankTransfer(businessID uuid.UUID, input BankManua
 		ReconciliationStatus: Unmatched,
 	}
 
-	// Automatic reconciliation matching on Reference and Description
-	s.autoReconcileBank(tx)
-
+	// Persist as Unmatched first so reconciliation effects are only applied to a
+	// durable row; a failed insert must not leave money applied with no record.
 	if err := s.repo.CreateBankTransaction(tx); err != nil {
 		if errors.Is(err, gorm.ErrDuplicatedKey) {
 			return nil, ErrDuplicateReference
 		}
 		return nil, err
+	}
+
+	// Automatic reconciliation matching on Reference and Description.
+	s.autoReconcileBank(tx)
+	if tx.ReconciliationStatus == Reconciled {
+		if err := s.repo.UpdateBankTransaction(tx); err != nil {
+			log.Printf("payments: save manual bank reconciliation for %s failed: %v", tx.ID, err)
+		}
 	}
 
 	return tx, nil
@@ -1260,15 +1298,22 @@ func (s *service) ImportBankStatement(businessID uuid.UUID, bankName string, r i
 			ReconciliationStatus: Unmatched,
 		}
 
+		// Persist the row first so a reconciliation effect is never applied
+		// without a durable transaction to dedupe against on a retry.
+		if err := s.repo.CreateBankTransaction(tx); err != nil {
+			continue
+		}
 		s.autoReconcileBank(tx)
-
-		if err := s.repo.CreateBankTransaction(tx); err == nil {
-			res.Imported++
-			if tx.ReconciliationStatus == Reconciled {
-				res.Reconciled++
-			} else {
-				res.Unmatched++
+		if tx.ReconciliationStatus == Reconciled {
+			if err := s.repo.UpdateBankTransaction(tx); err != nil {
+				log.Printf("payments: save statement reconciliation for %s failed: %v", tx.ID, err)
 			}
+		}
+		res.Imported++
+		if tx.ReconciliationStatus == Reconciled {
+			res.Reconciled++
+		} else {
+			res.Unmatched++
 		}
 	}
 
@@ -1637,27 +1682,29 @@ func (s *service) reconcileReviewInvoice(businessID uuid.UUID, ctx *reviewReconc
 		return errors.New("invoice service not configured")
 	}
 
-	paymentNote := note
+	marker := ""
 	if ctx.mpesaTx != nil {
-		marker := mpesaMarker(ctx.mpesaTx)
+		marker = mpesaMarker(ctx.mpesaTx)
+	} else if ctx.bankTx != nil {
+		marker = bankMarker(ctx.bankTx)
+	}
+	paymentNote := note
+	exists := false
+	if marker != "" {
 		paymentNote = marker + " invoice payment: " + note
-		exists, err := s.invoicePaymentExists(targetUUID, businessID, marker)
+		found, err := s.invoicePaymentExists(targetUUID, businessID, marker)
 		if err != nil {
 			return err
 		}
-		if !exists {
-			if _, err := s.invoicesSvc.RecordPayment(targetUUID, businessID, invoices.RecordPaymentInput{
-				Amount: ctx.amount,
-				Note:   paymentNote,
-			}); err != nil {
-				return fmt.Errorf("record invoice payment: %w", err)
-			}
+		exists = found
+	}
+	if !exists {
+		if _, err := s.invoicesSvc.RecordPayment(targetUUID, businessID, invoices.RecordPaymentInput{
+			Amount: ctx.amount,
+			Note:   paymentNote,
+		}); err != nil {
+			return fmt.Errorf("record invoice payment: %w", err)
 		}
-	} else if _, err := s.invoicesSvc.RecordPayment(targetUUID, businessID, invoices.RecordPaymentInput{
-		Amount: ctx.amount,
-		Note:   paymentNote,
-	}); err != nil {
-		return fmt.Errorf("record invoice payment: %w", err)
 	}
 
 	if ctx.mpesaTx != nil {
@@ -1678,21 +1725,26 @@ func (s *service) reconcileReviewCustomerCredit(businessID uuid.UUID, ctx *revie
 		return errors.New("customer service not configured")
 	}
 
-	paymentNote := note
+	marker := ""
 	if ctx.mpesaTx != nil {
-		marker := mpesaMarker(ctx.mpesaTx)
+		marker = mpesaMarker(ctx.mpesaTx)
+	} else if ctx.bankTx != nil {
+		marker = bankMarker(ctx.bankTx)
+	}
+	paymentNote := note
+	exists := false
+	if marker != "" {
 		paymentNote = marker + " customer payment: " + note
-		exists, err := s.customerPaymentExists(targetUUID, businessID, marker)
+		found, err := s.customerPaymentExists(targetUUID, businessID, marker)
 		if err != nil {
 			return err
 		}
-		if !exists {
-			if _, err := s.customersSvc.RecordPayment(targetUUID, businessID, ctx.amount, paymentNote); err != nil {
-				return fmt.Errorf("record customer payment: %w", err)
-			}
+		exists = found
+	}
+	if !exists {
+		if _, err := s.customersSvc.RecordPayment(targetUUID, businessID, ctx.amount, paymentNote); err != nil {
+			return fmt.Errorf("record customer payment: %w", err)
 		}
-	} else if _, err := s.customersSvc.RecordPayment(targetUUID, businessID, ctx.amount, paymentNote); err != nil {
-		return fmt.Errorf("record customer payment: %w", err)
 	}
 
 	if ctx.mpesaTx != nil {
@@ -1781,21 +1833,26 @@ func (s *service) reconcileReviewSupplierPayment(businessID uuid.UUID, ctx *revi
 		return errors.New("supplier service not configured")
 	}
 
-	paymentNote := note
+	marker := ""
 	if ctx.mpesaTx != nil {
-		marker := mpesaMarker(ctx.mpesaTx)
+		marker = mpesaMarker(ctx.mpesaTx)
+	} else if ctx.bankTx != nil {
+		marker = bankMarker(ctx.bankTx)
+	}
+	paymentNote := note
+	exists := false
+	if marker != "" {
 		paymentNote = marker + " supplier payment: " + note
-		exists, err := s.supplierPaymentExists(supplierUUID, businessID, marker)
+		found, err := s.supplierPaymentExists(supplierUUID, businessID, marker)
 		if err != nil {
 			return err
 		}
-		if !exists {
-			if _, err := s.suppliersSvc.RecordPayment(supplierUUID, businessID, ctx.amount, paymentNote); err != nil {
-				return fmt.Errorf("record supplier payment: %w", err)
-			}
+		exists = found
+	}
+	if !exists {
+		if _, err := s.suppliersSvc.RecordPayment(supplierUUID, businessID, ctx.amount, paymentNote); err != nil {
+			return fmt.Errorf("record supplier payment: %w", err)
 		}
-	} else if _, err := s.suppliersSvc.RecordPayment(supplierUUID, businessID, ctx.amount, paymentNote); err != nil {
-		return fmt.Errorf("record supplier payment: %w", err)
 	}
 
 	if ctx.mpesaTx != nil {

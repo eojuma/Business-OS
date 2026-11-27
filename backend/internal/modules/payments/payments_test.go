@@ -24,6 +24,9 @@ import (
 // PhoneNumberTestConst is a test phone number used in test fixtures.
 const PhoneNumberTestConst = "0712345678"
 
+// passkeyTestConst is a placeholder M-Pesa passkey used in test configurations.
+const passkeyTestConst = "passkey"
+
 // In-memory fake repository for payments testing
 type fakePaymentRepository struct {
 	mpesaTxs          map[string]*MpesaTransaction
@@ -291,11 +294,16 @@ func (f *fakePaymentRepository) FindCustomerByPhone(businessID uuid.UUID, phone 
 	return nil, gorm.ErrRecordNotFound
 }
 
-// ListAllMpesaPaymentNotes returns every payment note stored across invoices,
-// customer credit, and supplier payments for one business. The fake keeps a
-// flat slice so the receipt-already-applied check can scan it.
-func (f *fakePaymentRepository) ListAllMpesaPaymentNotes(businessID uuid.UUID) ([]string, error) {
-	return f.paymentNotes, nil
+// ListMpesaPaymentNotesByPrefix returns the fake's flat notes filtered to the
+// prefix, mirroring the SQL prefix filter used in production.
+func (f *fakePaymentRepository) ListMpesaPaymentNotesByPrefix(businessID uuid.UUID, prefix string) ([]string, error) {
+	matched := make([]string, 0, len(f.paymentNotes))
+	for _, note := range f.paymentNotes {
+		if strings.HasPrefix(note, prefix) {
+			matched = append(matched, note)
+		}
+	}
+	return matched, nil
 }
 
 // Mock MpesaClient
@@ -949,7 +957,7 @@ func TestCallbackURLsIncludeSecret(t *testing.T) {
 		BackendURL:          "https://api.example.com/",
 		MpesaCallbackSecret: "callback-token",
 		MpesaShortCode:      "174379",
-		MpesaPasskey:        "passkey",
+		MpesaPasskey:        passkeyTestConst,
 	}
 	svc := NewService(repo, client, cfg, nil, nil, nil, nil)
 
@@ -1458,7 +1466,7 @@ func TestInitiateSTKAmbiguousKeepsPending(t *testing.T) {
 	}
 	cfg := &config.Config{
 		MpesaShortCode:      "174379",
-		MpesaPasskey:        "passkey",
+		MpesaPasskey:        passkeyTestConst,
 		MpesaStkCallbackURL: "https://example.com/callback",
 	}
 	svc := NewService(repo, client, cfg, nil, nil, nil, nil)
@@ -1483,7 +1491,7 @@ func TestInitiateB2CAmbiguousUsesTimedOut(t *testing.T) {
 		b2cResp: &DarajaB2CResponse{ConversationID: "CONV-AMB", ResponseCode: "0"},
 		b2cErr:  ErrTransactionAmbiguous,
 	}
-	cfg := &config.Config{MpesaShortCode: "174379", MpesaPasskey: "passkey"}
+	cfg := &config.Config{MpesaShortCode: "174379", MpesaPasskey: passkeyTestConst}
 	svc := NewService(repo, client, cfg, nil, nil, nil, nil)
 
 	if _, err := svc.InitiateB2C(context.Background(), uuid.New(), B2CPayoutInput{
@@ -1537,7 +1545,7 @@ func TestInitiateSTKPreDispatchReleasesReservation(t *testing.T) {
 	}
 	cfg := &config.Config{
 		MpesaShortCode:      "174379",
-		MpesaPasskey:        "passkey",
+		MpesaPasskey:        passkeyTestConst,
 		MpesaStkCallbackURL: "https://example.com/callback",
 	}
 	svc := NewService(repo, client, cfg, nil, nil, nil, nil)
@@ -1551,5 +1559,35 @@ func TestInitiateSTKPreDispatchReleasesReservation(t *testing.T) {
 	}
 	if len(repo.mpesaTxs) != 0 {
 		t.Fatalf("reservation should be released, %d rows remain", len(repo.mpesaTxs))
+	}
+}
+
+// Provider callback URLs must carry the dedicated token, not the HMAC secret.
+func TestCallbackURLUsesDedicatedToken(t *testing.T) {
+	repo := newFakePaymentRepository()
+	client := &mockMpesaClient{
+		stkResp: &DarajaSTKPushResponse{CheckoutRequestID: "ws_CO_TOKEN", ResponseCode: "0"},
+	}
+	cfg := &config.Config{
+		BackendURL:          "https://api.example.com",
+		MpesaCallbackSecret: "signing-secret",
+		MpesaCallbackToken:  "public-callback-token",
+		MpesaShortCode:      "174379",
+		MpesaPasskey:        passkeyTestConst,
+	}
+	svc := NewService(repo, client, cfg, nil, nil, nil, nil)
+
+	if _, err := svc.InitiateSTKPush(context.Background(), uuid.New(), STKPushInput{
+		PhoneNumber: PhoneNumberTestConst,
+		Amount:      1000,
+	}); err != nil {
+		t.Fatalf("InitiateSTKPush failed: %v", err)
+	}
+	got := client.lastReq.CallBackURL
+	if !strings.Contains(got, "token=public-callback-token") {
+		t.Fatalf("callback URL %q does not embed the dedicated token", got)
+	}
+	if strings.Contains(got, "signing-secret") {
+		t.Fatalf("callback URL %q leaks the signing secret", got)
 	}
 }

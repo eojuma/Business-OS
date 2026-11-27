@@ -66,12 +66,11 @@ type Repository interface {
 	ClaimBankReconciliation(tx *BankTransaction, from, to ReconciliationStatus) (bool, error)
 
 	ListReviewQueue(businessID uuid.UUID, source string, limit, offset int) ([]ReviewQueueItem, int64, error)
-	// ListAllMpesaPaymentNotes returns every payment note stored against
-	// invoices, customer credit, and supplier payments for one business. It is
-	// used to tell whether an M-Pesa receipt has already been applied to any
-	// target, so a failed reconciliation save cannot leave a receipt eligible
-	// for a second settlement in the review queue.
-	ListAllMpesaPaymentNotes(businessID uuid.UUID) ([]string, error)
+	// ListMpesaPaymentNotesByPrefix returns payment notes that start with prefix
+	// across invoices, customer credit, and supplier payments for one business.
+	// It is filtered in SQL so a callback or reconciliation does not load the
+	// whole payment history just to check one receipt.
+	ListMpesaPaymentNotesByPrefix(businessID uuid.UUID, prefix string) ([]string, error)
 	FindInvoiceByNumber(businessID uuid.UUID, invoiceNumber string) (*invoices.Invoice, error)
 	FindCustomerByPhone(businessID uuid.UUID, phone string) (*customers.Customer, error)
 }
@@ -348,12 +347,13 @@ func (r *repository) UpdateBankTransaction(tx *BankTransaction) error {
 	}).Error
 }
 
-func (r *repository) ListAllMpesaPaymentNotes(businessID uuid.UUID) ([]string, error) {
+func (r *repository) ListMpesaPaymentNotesByPrefix(businessID uuid.UUID, prefix string) ([]string, error) {
 	notes := make([]string, 0)
+	like := prefix + "%"
 
 	var invoiceNotes []string
 	if err := r.db.Model(&invoices.InvoicePayment{}).
-		Where("business_id = ?", businessID).
+		Where("business_id = ? AND note LIKE ?", businessID, like).
 		Pluck("note", &invoiceNotes).Error; err != nil {
 		return nil, err
 	}
@@ -361,7 +361,7 @@ func (r *repository) ListAllMpesaPaymentNotes(businessID uuid.UUID) ([]string, e
 
 	var customerNotes []string
 	if err := r.db.Model(&customers.Payment{}).
-		Where("business_id = ?", businessID).
+		Where("business_id = ? AND note LIKE ?", businessID, like).
 		Pluck("note", &customerNotes).Error; err != nil {
 		return nil, err
 	}
@@ -369,7 +369,7 @@ func (r *repository) ListAllMpesaPaymentNotes(businessID uuid.UUID) ([]string, e
 
 	var supplierNotes []string
 	if err := r.db.Model(&suppliers.Payment{}).
-		Where("business_id = ?", businessID).
+		Where("business_id = ? AND note LIKE ?", businessID, like).
 		Pluck("note", &supplierNotes).Error; err != nil {
 		return nil, err
 	}

@@ -69,13 +69,17 @@ type Config struct {
 	AIOCRModel string
 
 	// M-Pesa configuration
-	MpesaEnv                   string
-	MpesaConsumerKey           string
-	MpesaConsumerSecret        string
-	MpesaPasskey               string
-	MpesaShortCode             string
-	MpesaStkCallbackURL        string
-	MpesaCallbackSecret        string
+	MpesaEnv            string
+	MpesaConsumerKey    string
+	MpesaConsumerSecret string
+	MpesaPasskey        string
+	MpesaShortCode      string
+	MpesaStkCallbackURL string
+	MpesaCallbackSecret string
+	// MpesaCallbackToken is the value embedded in provider callback URLs. Keep it
+	// separate from MpesaCallbackSecret so the HMAC signing secret is not exposed
+	// in URLs (which end up in logs and provider dashboards).
+	MpesaCallbackToken         string
 	MpesaB2CInitiatorName      string
 	MpesaB2CSecurityCredential string
 	MpesaB2CShortCode          string
@@ -148,6 +152,7 @@ func Load() *Config {
 		MpesaShortCode:             getEnv("MPESA_SHORTCODE", ""),
 		MpesaStkCallbackURL:        getEnv("MPESA_STK_CALLBACK_URL", ""),
 		MpesaCallbackSecret:        getEnv("MPESA_CALLBACK_SECRET", ""),
+		MpesaCallbackToken:         getEnv("MPESA_CALLBACK_TOKEN", ""),
 		MpesaB2CInitiatorName:      getEnv("MPESA_B2C_INITIATOR_NAME", ""),
 		MpesaB2CSecurityCredential: getEnv("MPESA_B2C_SECURITY_CREDENTIAL", ""),
 		MpesaB2CShortCode:          getEnv("MPESA_B2C_SHORTCODE", ""),

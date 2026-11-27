@@ -384,14 +384,10 @@ func (s *service) HandleC2BConfirmation(signatureHeader string, req C2BConfirmat
 	// Previously this code looked up invoices with uuid.Nil, which never matched,
 	// causing every C2B confirmation to fail with "Could not resolve business".
 	if billRef != "" {
-		if _, err := s.repo.FindInvoiceByNumber(businessID, billRef); err != nil {
-			// invoice not found - continue; we may still match by phone below
-		}
+		_, _ = s.repo.FindInvoiceByNumber(businessID, billRef)
 	}
 	if phone != "" {
-		if _, err := s.repo.FindCustomerByPhone(businessID, phone); err != nil {
-			// customer not found - continue
-		}
+		_, _ = s.repo.FindCustomerByPhone(businessID, phone)
 	}
 
 	raw, _ := json.Marshal(req)

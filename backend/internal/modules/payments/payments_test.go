@@ -20,6 +20,9 @@ import (
 	"gorm.io/gorm"
 )
 
+// PhoneNumberTestConst is a test phone number used in test fixtures.
+const PhoneNumberTestConst = "0712345678"
+
 // In-memory fake repository for payments testing
 type fakePaymentRepository struct {
 	mpesaTxs          map[string]*MpesaTransaction
@@ -465,7 +468,7 @@ func TestSTKPushInitiationAndIdempotency(t *testing.T) {
 
 	businessID := uuid.New()
 	input := STKPushInput{
-		PhoneNumber:      "0712345678",
+		PhoneNumber:      PhoneNumberTestConst,
 		Amount:           50000, // KSh 500
 		AccountReference: "INV-2026-0001",
 		TransactionDesc:  "Payment",
@@ -897,7 +900,7 @@ func TestCallbackURLsIncludeSecret(t *testing.T) {
 	svc := NewService(repo, client, cfg, nil, nil, nil, nil)
 
 	if _, err := svc.InitiateSTKPush(context.Background(), uuid.New(), STKPushInput{
-		PhoneNumber: "0712345678",
+		PhoneNumber: PhoneNumberTestConst,
 		Amount:      1000,
 	}); err != nil {
 		t.Fatalf("InitiateSTKPush failed: %v", err)
@@ -907,7 +910,7 @@ func TestCallbackURLsIncludeSecret(t *testing.T) {
 	}
 
 	if _, err := svc.InitiateB2C(context.Background(), uuid.New(), B2CPayoutInput{
-		PhoneNumber: "0712345678",
+		PhoneNumber: PhoneNumberTestConst,
 		Amount:      1000,
 	}); err != nil {
 		t.Fatalf("InitiateB2C failed: %v", err)
@@ -937,7 +940,7 @@ func TestB2CSupplierPayoutSettlesSupplier(t *testing.T) {
 	supSvc.paidSupplierID = supplierID
 
 	tx, err := svc.InitiateB2C(context.Background(), businessID, B2CPayoutInput{
-		PhoneNumber: "0712345678",
+		PhoneNumber: PhoneNumberTestConst,
 		Amount:      25000,
 		SupplierID:  supplierID.String(),
 	})
@@ -1179,7 +1182,7 @@ func TestIdempotencyKeyConflictDetection(t *testing.T) {
 
 	// Replay with identical params returns the same transaction
 	identical, err := svc.InitiateSTKPush(context.Background(), businessID, STKPushInput{
-		PhoneNumber:    "0712345678",
+		PhoneNumber:    PhoneNumberTestConst,
 		Amount:         5000,
 		IdempotencyKey: "shared-key-1",
 	})
@@ -1189,7 +1192,7 @@ func TestIdempotencyKeyConflictDetection(t *testing.T) {
 
 	// Replay with different amount fails with conflict
 	_, err = svc.InitiateSTKPush(context.Background(), businessID, STKPushInput{
-		PhoneNumber:    "0712345678",
+		PhoneNumber:    PhoneNumberTestConst,
 		Amount:         6000,
 		IdempotencyKey: "shared-key-1",
 	})
@@ -1199,7 +1202,7 @@ func TestIdempotencyKeyConflictDetection(t *testing.T) {
 
 	// Replay for B2C with the STK key fails with conflict
 	_, err = svc.InitiateB2C(context.Background(), businessID, B2CPayoutInput{
-		PhoneNumber:    "0712345678",
+		PhoneNumber:    PhoneNumberTestConst,
 		Amount:         5000,
 		IdempotencyKey: "shared-key-1",
 	})

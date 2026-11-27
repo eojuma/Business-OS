@@ -1591,3 +1591,90 @@ func TestCallbackURLUsesDedicatedToken(t *testing.T) {
 		t.Fatalf("callback URL %q leaks the signing secret", got)
 	}
 }
+
+// A numeric Daraja phone value must be stored normalized, not in scientific
+// notation ("%v" on a float64).
+func TestSTKCallbackNormalizesNumericPhone(t *testing.T) {
+	repo := newFakePaymentRepository()
+	cfg := &config.Config{MpesaCallbackSecret: "phone-secret"}
+	svc := NewService(repo, nil, cfg, nil, nil, nil, nil)
+	businessID := uuid.New()
+
+	tx := &MpesaTransaction{
+		ID:                   uuid.New(),
+		BusinessID:           businessID,
+		TransactionType:      TypeSTKPush,
+		CheckoutRequestID:    "ws_CO_PHONE",
+		Amount:               5000,
+		Status:               StatusPending,
+		ReconciliationStatus: Unmatched,
+	}
+	_ = repo.CreateMpesaTransaction(tx)
+
+	body := []byte(`{"Body":{"stkCallback":{"CheckoutRequestID":"ws_CO_PHONE","ResultCode":0,"ResultDesc":"ok","CallbackMetadata":{"Item":[{"Name":"MpesaReceiptNumber","Value":"PHONE1"},{"Name":"Amount","Value":50.0},{"Name":"PhoneNumber","Value":254708374149}]}}}}`)
+	if err := svc.HandleSTKCallback(computeHMAC(cfg.MpesaCallbackSecret, body), body); err != nil {
+		t.Fatalf("callback failed: %v", err)
+	}
+	stored, _ := repo.GetMpesaTransactionByID(tx.ID, businessID)
+	if stored.PhoneNumber != "254708374149" {
+		t.Fatalf("phone = %q, want 254708374149", stored.PhoneNumber)
+	}
+}
+
+// A C2B validation that cannot attribute the payment must reject it instead of
+// letting Daraja capture money that confirmation would drop.
+func TestC2BValidationRejectsUnknownAccount(t *testing.T) {
+	repo := newFakePaymentRepository()
+	cfg := &config.Config{MpesaCallbackSecret: "c2b-secret"}
+	svc := NewService(repo, nil, cfg, nil, &mockCustomersService{}, nil, nil)
+
+	req := C2BValidationRequest{
+		TransAmount:   "250.00",
+		MSISDN:        "254799999999",
+		BillRefNumber: "NO-SUCH-INVOICE",
+	}
+	res, err := svc.HandleC2BValidation("c2b-secret", req)
+	if err != nil {
+		t.Fatalf("validation returned error: %v", err)
+	}
+	if res.ResultCode == 0 {
+		t.Fatal("expected unknown account to be rejected at validation")
+	}
+}
+
+// The automatic bank path must tag its payment note with the bank marker so a
+// later manual review can dedupe instead of booking the money twice.
+func TestAutoReconcileBankTagsInvoiceNoteWithMarker(t *testing.T) {
+	repo := newFakePaymentRepository()
+	invSvc := &mockInvoicesService{}
+	svc := NewService(repo, nil, &config.Config{}, invSvc, nil, nil, nil)
+
+	businessID := uuid.New()
+	invID := uuid.New()
+	repo.invoices["INV-BANK-1"] = &invoices.Invoice{
+		ID:            invID,
+		BusinessID:    businessID,
+		InvoiceNumber: "INV-BANK-1",
+		TotalAmount:   5000,
+		Status:        invoices.StatusUnpaid,
+	}
+
+	tx, err := svc.RecordManualBankTransfer(businessID, BankManualInput{
+		BankName:  "Equity",
+		Reference: "INV-BANK-1",
+		Type:      "deposit",
+		Amount:    5000,
+	})
+	if err != nil {
+		t.Fatalf("manual transfer failed: %v", err)
+	}
+	if tx.ReconciliationStatus != Reconciled {
+		t.Fatalf("status = %s, want reconciled", tx.ReconciliationStatus)
+	}
+	if len(invSvc.payments) != 1 {
+		t.Fatalf("expected 1 invoice payment, got %d", len(invSvc.payments))
+	}
+	if !strings.HasPrefix(invSvc.payments[0].Note, bankMarker(tx)) {
+		t.Fatalf("payment note %q is not tagged with %q", invSvc.payments[0].Note, bankMarker(tx))
+	}
+}

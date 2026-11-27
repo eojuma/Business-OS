@@ -337,7 +337,7 @@ func (s *service) HandleSTKCallback(signatureHeader string, body []byte) error {
 						confirmedReceipt = strings.TrimSpace(val)
 					}
 				case "PhoneNumber":
-					tx.PhoneNumber = fmt.Sprintf("%v", item.Value)
+					tx.PhoneNumber = formatPhoneValue(item.Value)
 				case "Amount":
 					// Round half away from zero so 0.29 -> 29 cents (not 28 via
 					// float truncation). M-Pesa may return the value as a number
@@ -393,6 +393,17 @@ func (s *service) HandleC2BValidation(signatureHeader string, req C2BValidationR
 	amount, err := parseMoneyString(req.TransAmount)
 	if err != nil || amount <= 0 {
 		return C2BValidationResponse{ResultCode: 1, ResultDesc: "Invalid amount"}, nil
+	}
+
+	// Reject a payment we could not attribute at confirmation time, otherwise
+	// Daraja captures it but the confirmation silently drops it. The configured
+	// deployment business acts as the fallback.
+	billRef := strings.TrimSpace(req.BillRefNumber)
+	if billRef == "" {
+		billRef = strings.TrimSpace(req.InvoiceNumber)
+	}
+	if s.resolveC2BBusiness(billRef, NormalizePhone(req.MSISDN)) == uuid.Nil {
+		return C2BValidationResponse{ResultCode: 1, ResultDesc: "Unknown account"}, nil
 	}
 
 	return C2BValidationResponse{ResultCode: 0, ResultDesc: DescAccepted}, nil
@@ -892,6 +903,25 @@ func bankMarker(tx *BankTransaction) string {
 	return "Bank tx " + tx.ID.String()
 }
 
+// formatPhoneValue renders a Daraja callback phone value without the scientific
+// notation that "%v" produces for a JSON float64, then normalizes it.
+func formatPhoneValue(v any) string {
+	switch n := v.(type) {
+	case string:
+		return NormalizePhone(n)
+	case float64:
+		return NormalizePhone(strconv.FormatInt(int64(n), 10))
+	case int64:
+		return NormalizePhone(strconv.FormatInt(n, 10))
+	case int:
+		return NormalizePhone(strconv.Itoa(n))
+	case json.Number:
+		return NormalizePhone(n.String())
+	default:
+		return NormalizePhone(fmt.Sprintf("%v", v))
+	}
+}
+
 // resolveC2BBusiness finds the tenant that owns a public C2B confirmation. It
 // prefers an invoice matched by BillRefNumber, then a customer matched by phone,
 // then the deployment-wide MPESA_BUSINESS_ID. A nil result means the payment
@@ -1003,8 +1033,9 @@ func (s *service) findBankExpense(businessID uuid.UUID, ctx *reviewReconcileCont
 	if err != nil {
 		return nil, fmt.Errorf("list expenses for dedupe: %w", err)
 	}
+	marker := bankMarker(ctx.bankTx)
 	for i := range expenses {
-		if expenses[i].Amount == ctx.amount && expenses[i].Description == description {
+		if expenses[i].Amount == ctx.amount && strings.HasPrefix(expenses[i].Description, marker) {
 			return &expenses[i], nil
 		}
 	}
@@ -1123,7 +1154,7 @@ func (s *service) autoReconcileBank(tx *BankTransaction) {
 			}
 			if inv, err := s.repo.FindInvoiceByNumber(tx.BusinessID, token); err == nil && inv != nil && inv.Status != invoices.StatusPaid && tx.Amount == inv.TotalAmount-inv.AmountPaid {
 				if s.invoicesSvc != nil {
-					note := fmt.Sprintf("Bank transfer %s (%s)", tx.Reference, tx.BankName)
+					note := bankMarker(tx) + " invoice payment: " + fmt.Sprintf("Bank transfer %s (%s)", tx.Reference, tx.BankName)
 					_, err := s.invoicesSvc.RecordPayment(inv.ID, tx.BusinessID, invoices.RecordPaymentInput{
 						Amount: tx.Amount,
 						Note:   note,
@@ -1154,7 +1185,7 @@ func (s *service) autoReconcileBank(tx *BankTransaction) {
 		exp, err := s.financeSvc.CreateExpense(finance.CreateExpenseInput{
 			BusinessID:  tx.BusinessID,
 			Category:    "Operations",
-			Description: fmt.Sprintf("Bank outflow %s: %s", tx.Reference, tx.Description),
+			Description: bankMarker(tx) + " Bank outflow " + tx.Reference + ": " + tx.Description,
 			Amount:      tx.Amount,
 			IncurredAt:  tx.TransactedAt,
 		})
@@ -1804,7 +1835,7 @@ func (s *service) reconcileReviewExpense(businessID uuid.UUID, ctx *reviewReconc
 			exp, err := s.financeSvc.CreateExpense(finance.CreateExpenseInput{
 				BusinessID:  businessID,
 				Category:    strings.TrimSpace(input.ExpenseCategory),
-				Description: description,
+				Description: bankMarker(ctx.bankTx) + " " + description,
 				Amount:      ctx.amount,
 				IncurredAt:  incurredAt,
 			})

@@ -79,7 +79,11 @@ type Config struct {
 	// MpesaCallbackToken is the value embedded in provider callback URLs. Keep it
 	// separate from MpesaCallbackSecret so the HMAC signing secret is not exposed
 	// in URLs (which end up in logs and provider dashboards).
-	MpesaCallbackToken         string
+	MpesaCallbackToken string
+	// MpesaCallbackIPAllowlist restricts public callback endpoints to these
+	// CIDRs/IPs. When empty, callbacks are accepted from any source (the token
+	// and HMAC still apply).
+	MpesaCallbackIPAllowlist   []string
 	MpesaB2CInitiatorName      string
 	MpesaB2CSecurityCredential string
 	MpesaB2CShortCode          string
@@ -153,6 +157,7 @@ func Load() *Config {
 		MpesaStkCallbackURL:        getEnv("MPESA_STK_CALLBACK_URL", ""),
 		MpesaCallbackSecret:        getEnv("MPESA_CALLBACK_SECRET", ""),
 		MpesaCallbackToken:         getEnv("MPESA_CALLBACK_TOKEN", ""),
+		MpesaCallbackIPAllowlist:   splitList(getEnv("MPESA_CALLBACK_IP_ALLOWLIST", "")),
 		MpesaB2CInitiatorName:      getEnv("MPESA_B2C_INITIATOR_NAME", ""),
 		MpesaB2CSecurityCredential: getEnv("MPESA_B2C_SECURITY_CREDENTIAL", ""),
 		MpesaB2CShortCode:          getEnv("MPESA_B2C_SHORTCODE", ""),
@@ -373,4 +378,16 @@ func parseRedisURL(raw string) (host, port, password string) {
 		password, _ = u.User.Password()
 	}
 	return
+}
+
+// splitList splits a comma-separated env value into trimmed, non-empty items.
+func splitList(value string) []string {
+	parts := strings.Split(value, ",")
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if trimmed := strings.TrimSpace(part); trimmed != "" {
+			out = append(out, trimmed)
+		}
+	}
+	return out
 }

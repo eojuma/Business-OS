@@ -6,6 +6,7 @@ import (
 	"github.com/businessos/backend/internal/modules/finance"
 	"github.com/businessos/backend/internal/modules/invoices"
 	"github.com/businessos/backend/internal/modules/suppliers"
+	"github.com/businessos/backend/internal/shared/middleware"
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 )
@@ -35,8 +36,10 @@ func RegisterRoutes(public *gin.RouterGroup, protected *gin.RouterGroup, db *gor
 	svc := NewService(repo, client, cfg, invSvc, custSvc, finSvc, supSvc)
 	h := NewHandler(svc)
 
-	// Public M-Pesa webhooks (called by Safaricom without user JWT)
+	// Public M-Pesa webhooks (called by Safaricom without user JWT). An optional
+	// IP allowlist narrows the source beyond the callback token/HMAC.
 	callbacks := public.Group("/payments/mpesa/callback")
+	callbacks.Use(middleware.RequireIPAllowlist(cfg.MpesaCallbackIPAllowlist))
 	{
 		callbacks.POST("/stk", h.HandleSTKCallback)
 		callbacks.POST("/c2b-validate", h.HandleC2BValidate)

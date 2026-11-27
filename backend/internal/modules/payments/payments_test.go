@@ -248,7 +248,7 @@ func (f *fakePaymentRepository) ListReviewQueue(businessID uuid.UUID, source str
 	items := make([]ReviewQueueItem, 0)
 	if source == "" || source == "all" || source == "mpesa" {
 		for _, m := range f.mpesaTxs {
-			if m.BusinessID == businessID && m.ReconciliationStatus == Unmatched && m.Status == StatusCompleted {
+			if m.BusinessID == businessID && m.ReconciliationStatus == Unmatched && (m.Status == StatusCompleted || m.Status == StatusPending || m.Status == StatusTimedOut) {
 				items = append(items, ReviewQueueItem{
 					ID:        m.ID,
 					Source:    "mpesa",
@@ -673,7 +673,7 @@ func TestC2BValidationAndConfirmation(t *testing.T) {
 		TransAmount: "250.00",
 		MSISDN:      "254700112233",
 	}
-	vRes, err := svc.HandleC2BValidation("c2b-secret", vReq)
+	vRes, err := svc.HandleC2BValidation(DeriveCallbackToken("c2b-secret"), vReq)
 	if err != nil || vRes.ResultCode != 0 {
 		t.Fatalf("validation failed: res=%+v err=%v", vRes, err)
 	}
@@ -685,7 +685,7 @@ func TestC2BValidationAndConfirmation(t *testing.T) {
 		MSISDN:        "254700112233",
 		BillRefNumber: "ACC-CUST",
 	}
-	cRes, err := svc.HandleC2BConfirmation("c2b-secret", cReq, uuid.Nil)
+	cRes, err := svc.HandleC2BConfirmation(DeriveCallbackToken("c2b-secret"), cReq, uuid.Nil)
 	if err != nil || cRes.ResultCode != 0 {
 		t.Fatalf("confirmation failed: res=%+v err=%v", cRes, err)
 	}
@@ -710,7 +710,7 @@ func TestC2BValidationAndConfirmation(t *testing.T) {
 	}
 
 	// Duplicate TransID handling: idempotent
-	cResDup, err := svc.HandleC2BConfirmation("c2b-secret", cReq, uuid.Nil)
+	cResDup, err := svc.HandleC2BConfirmation(DeriveCallbackToken("c2b-secret"), cReq, uuid.Nil)
 	if err != nil || cResDup.ResultCode != 0 {
 		t.Fatalf("duplicate confirmation failed: %v", err)
 	}
@@ -946,7 +946,7 @@ func TestSTKCallbackLeavesCompletedUnmatchedWhenPaymentFails(t *testing.T) {
 	}
 }
 
-// Test 9: callback URLs embed the configured secret when no explicit URL is set.
+// Test 9: callback URLs embed a derived token (never the signing secret).
 func TestCallbackURLsIncludeSecret(t *testing.T) {
 	repo := newFakePaymentRepository()
 	client := &mockMpesaClient{
@@ -967,7 +967,8 @@ func TestCallbackURLsIncludeSecret(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("InitiateSTKPush failed: %v", err)
 	}
-	if got, want := client.lastReq.CallBackURL, "https://api.example.com/api/v1/payments/mpesa/callback/stk?token=callback-token"; got != want {
+	derived := DeriveCallbackToken("callback-token")
+	if got, want := client.lastReq.CallBackURL, "https://api.example.com/api/v1/payments/mpesa/callback/stk?token="+derived; got != want {
 		t.Fatalf("STK callback URL = %q, want %q", got, want)
 	}
 
@@ -977,10 +978,10 @@ func TestCallbackURLsIncludeSecret(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("InitiateB2C failed: %v", err)
 	}
-	if got, want := client.lastB2CReq.ResultURL, "https://api.example.com/api/v1/payments/mpesa/callback/b2c-result?token=callback-token"; got != want {
+	if got, want := client.lastB2CReq.ResultURL, "https://api.example.com/api/v1/payments/mpesa/callback/b2c-result?token="+derived; got != want {
 		t.Fatalf("B2C result URL = %q, want %q", got, want)
 	}
-	if got, want := client.lastB2CReq.QueueTimeOutURL, "https://api.example.com/api/v1/payments/mpesa/callback/b2c-timeout?token=callback-token"; got != want {
+	if got, want := client.lastB2CReq.QueueTimeOutURL, "https://api.example.com/api/v1/payments/mpesa/callback/b2c-timeout?token="+derived; got != want {
 		t.Fatalf("B2C timeout URL = %q, want %q", got, want)
 	}
 }
@@ -1232,13 +1233,14 @@ func TestIdempotencyKeyConflictDetection(t *testing.T) {
 
 	// Initial STK push
 	stkTx := &MpesaTransaction{
-		ID:              uuid.New(),
-		BusinessID:      businessID,
-		TransactionType: TypeSTKPush,
-		PhoneNumber:     "254712345678",
-		Amount:          5000,
-		IdempotencyKey:  "shared-key-1",
-		Status:          StatusPending,
+		ID:                uuid.New(),
+		BusinessID:        businessID,
+		TransactionType:   TypeSTKPush,
+		PhoneNumber:       "254712345678",
+		Amount:            5000,
+		IdempotencyKey:    "shared-key-1",
+		Status:            StatusPending,
+		CheckoutRequestID: "ws_CO_EXISTING",
 	}
 	_ = repo.CreateMpesaTransaction(stkTx)
 
@@ -1633,7 +1635,7 @@ func TestC2BValidationRejectsUnknownAccount(t *testing.T) {
 		MSISDN:        "254799999999",
 		BillRefNumber: "NO-SUCH-INVOICE",
 	}
-	res, err := svc.HandleC2BValidation("c2b-secret", req)
+	res, err := svc.HandleC2BValidation(DeriveCallbackToken("c2b-secret"), req)
 	if err != nil {
 		t.Fatalf("validation returned error: %v", err)
 	}
@@ -1676,5 +1678,44 @@ func TestAutoReconcileBankTagsInvoiceNoteWithMarker(t *testing.T) {
 	}
 	if !strings.HasPrefix(invSvc.payments[0].Note, bankMarker(tx)) {
 		t.Fatalf("payment note %q is not tagged with %q", invSvc.payments[0].Note, bankMarker(tx))
+	}
+}
+
+// An ambiguous STK dispatch with no response must land in a recoverable
+// timed-out state, surface in the review queue, and not masquerade as a
+// successful replay.
+func TestInitiateSTKAmbiguousNetworkUsesTimedOut(t *testing.T) {
+	repo := newFakePaymentRepository()
+	client := &mockMpesaClient{stkErr: ErrMpesaClientFailed}
+	cfg := &config.Config{
+		MpesaShortCode:      "174379",
+		MpesaPasskey:        passkeyTestConst,
+		MpesaStkCallbackURL: "https://example.com/cb",
+	}
+	svc := NewService(repo, client, cfg, nil, nil, nil, nil)
+	businessID := uuid.New()
+	input := STKPushInput{
+		PhoneNumber:    PhoneNumberTestConst,
+		Amount:         1000,
+		IdempotencyKey: "amb-1",
+	}
+
+	if _, err := svc.InitiateSTKPush(context.Background(), businessID, input); err == nil {
+		t.Fatal("expected ambiguous dispatch error")
+	}
+	for _, m := range repo.mpesaTxs {
+		if m.Status != StatusTimedOut {
+			t.Fatalf("status = %s, want timed_out", m.Status)
+		}
+	}
+
+	// A replay with the same key must not look like a sent prompt.
+	if _, err := svc.InitiateSTKPush(context.Background(), businessID, input); err == nil {
+		t.Fatal("expected unresolved replay to report an error")
+	}
+
+	items, total, err := svc.ListReviewQueue(businessID, "mpesa", 1, 10)
+	if err != nil || total != 1 || len(items) != 1 {
+		t.Fatalf("expected 1 review item for the timed-out STK, got %d (err %v)", total, err)
 	}
 }

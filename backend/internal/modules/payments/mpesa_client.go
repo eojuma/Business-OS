@@ -231,6 +231,39 @@ func NormalizePhone(phone string) string {
 	return cleaned
 }
 
+// ValidateHMACSignature checks only the HMAC-SHA256 representation of the body
+// (hex or base64). It deliberately does not accept the bare secret, so a URL
+// token can never double as a signing key.
+func ValidateHMACSignature(secret string, body []byte, signatureHeader string) bool {
+	secret = strings.TrimSpace(secret)
+	signatureHeader = strings.TrimSpace(signatureHeader)
+	if secret == "" || signatureHeader == "" {
+		return false
+	}
+	mac := hmac.New(sha256.New, []byte(secret))
+	mac.Write(body)
+	expectedMAC := mac.Sum(nil)
+	expectedHex := hex.EncodeToString(expectedMAC)
+	expectedB64 := base64.StdEncoding.EncodeToString(expectedMAC)
+	if hmac.Equal([]byte(strings.ToLower(signatureHeader)), []byte(strings.ToLower(expectedHex))) {
+		return true
+	}
+	return hmac.Equal([]byte(signatureHeader), []byte(expectedB64))
+}
+
+// DeriveCallbackToken returns a stable token for provider callback URLs without
+// exposing the HMAC signing secret. It is HMAC(secret, label), so it cannot be
+// reversed into the secret.
+func DeriveCallbackToken(secret string) string {
+	secret = strings.TrimSpace(secret)
+	if secret == "" {
+		return ""
+	}
+	mac := hmac.New(sha256.New, []byte(secret))
+	mac.Write([]byte("mpesa-callback-url"))
+	return hex.EncodeToString(mac.Sum(nil))
+}
+
 // ValidateCallbackSignature validates callback signature against MPESA_CALLBACK_SECRET.
 // Supports direct shared secret token header or HMAC-SHA256 (hex or base64).
 func ValidateCallbackSignature(secret string, body []byte, signatureHeader string) bool {

@@ -120,12 +120,7 @@ func (s *service) callbackURL(configured, path string) string {
 	if err != nil || s.cfg == nil {
 		return raw
 	}
-	// Prefer a dedicated token so the HMAC signing secret is not placed in a URL.
-	// Fall back to the secret only when no token is configured.
-	token := strings.TrimSpace(s.cfg.MpesaCallbackToken)
-	if token == "" {
-		token = strings.TrimSpace(s.cfg.MpesaCallbackSecret)
-	}
+	token := s.callbackToken()
 	if token == "" {
 		return raw
 	}
@@ -135,20 +130,39 @@ func (s *service) callbackURL(configured, path string) string {
 	return parsed.String()
 }
 
+// callbackToken returns the value embedded in provider callback URLs. It is the
+// explicit MPESA_CALLBACK_TOKEN when set, otherwise a derived token, and never
+// the raw HMAC signing secret.
+func (s *service) callbackToken() string {
+	if s.cfg == nil {
+		return ""
+	}
+	if token := strings.TrimSpace(s.cfg.MpesaCallbackToken); token != "" {
+		return token
+	}
+	return DeriveCallbackToken(s.cfg.MpesaCallbackSecret)
+}
+
 // validCallback accepts either an HMAC/direct-secret signature or the dedicated
 // callback token embedded in the provider URL.
 func (s *service) validCallback(body []byte, signatureHeader string) bool {
 	if s.cfg == nil {
 		return false
 	}
-	if ValidateCallbackSignature(s.cfg.MpesaCallbackSecret, body, signatureHeader) {
-		return true
-	}
-	token := strings.TrimSpace(s.cfg.MpesaCallbackToken)
-	if token == "" {
+	sig := strings.TrimSpace(signatureHeader)
+	if sig == "" {
 		return false
 	}
-	return hmac.Equal([]byte(strings.TrimSpace(signatureHeader)), []byte(token))
+	// Strong path: HMAC over the body (hex or base64).
+	if ValidateHMACSignature(s.cfg.MpesaCallbackSecret, body, sig) {
+		return true
+	}
+	// Otherwise accept the dedicated URL token (explicit or derived). The raw
+	// signing secret is never accepted as a bearer credential.
+	if token := s.callbackToken(); token != "" {
+		return hmac.Equal([]byte(sig), []byte(token))
+	}
+	return false
 }
 
 // InitiateSTKPush starts an M-Pesa STK push prompt with idempotency protection.
@@ -170,6 +184,11 @@ func (s *service) InitiateSTKPush(ctx context.Context, businessID uuid.UUID, inp
 			// Do not return a failed transaction as a successful replay.
 			if existing.Status == StatusFailed {
 				return nil, ErrIdempotencyKeyConflict
+			}
+			// An unresolved ambiguous dispatch has no checkout id and no prompt was
+			// confirmed; do not report it as a successful replay.
+			if existing.Status != StatusCompleted && existing.CheckoutRequestID == "" {
+				return nil, fmt.Errorf("%w: previous attempt is unresolved", ErrTransactionAmbiguous)
 			}
 			return existing, nil
 		}
@@ -267,6 +286,14 @@ func (s *service) InitiateSTKPush(ctx context.Context, businessID uuid.UUID, inp
 			}
 			if saveErr := s.repo.UpdateMpesaTransaction(tx); saveErr != nil {
 				log.Printf("payments: save stk failure for %s failed: %v", tx.ID, saveErr)
+			}
+		} else {
+			// No response at all (e.g. a timeout after the request may have
+			// reached Daraja). Keep a recoverable non-final state so the row is
+			// surfaced for manual resolution; never report it as a success.
+			tx.Status = StatusTimedOut
+			if saveErr := s.repo.UpdateMpesaTransaction(tx); saveErr != nil {
+				log.Printf("payments: save ambiguous stk for %s failed: %v", tx.ID, saveErr)
 			}
 		}
 		return nil, fmt.Errorf("initiate stk push: %w", err)
@@ -1645,7 +1672,7 @@ func (s *service) loadReviewReconcileContext(businessID uuid.UUID, itemID uuid.U
 		if tx.ReconciliationStatus == Reconciled {
 			return nil, ErrAlreadyReconciled
 		}
-		if tx.Status != StatusCompleted {
+		if tx.Status != StatusCompleted && tx.Status != StatusTimedOut {
 			return nil, ErrTransactionNotCompleted
 		}
 		ctx.mpesaTx = tx

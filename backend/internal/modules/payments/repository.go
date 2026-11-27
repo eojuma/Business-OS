@@ -386,7 +386,7 @@ func (r *repository) ListReviewQueue(businessID uuid.UUID, source string, limit,
 	if source == "" || source == "all" || source == "mpesa" {
 		var mpesaList []MpesaTransaction
 		var mpesaCount int64
-		mq := r.db.Model(&MpesaTransaction{}).Where("business_id = ? AND status = ? AND reconciliation_status = ?", businessID, StatusCompleted, Unmatched)
+		mq := r.db.Model(&MpesaTransaction{}).Where("business_id = ? AND status IN ? AND reconciliation_status = ?", businessID, []TransactionStatus{StatusCompleted, StatusPending, StatusTimedOut}, Unmatched)
 		if err := mq.Count(&mpesaCount).Error; err != nil {
 			return nil, 0, err
 		}

@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/businessos/backend/internal/shared/middleware"
+	"github.com/businessos/backend/internal/shared/permissions"
 	"github.com/businessos/backend/internal/shared/response"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -102,11 +103,9 @@ func (h *Handler) HandleC2BConfirm(c *gin.Context) {
 		return
 	}
 
-	businessID, err := middleware.CurrentBusinessID(c)
-	if err != nil {
-		c.JSON(http.StatusUnauthorized, err)
-		return
-	}
+	// C2B confirmations are called by Safaricom without a user JWT, so a
+	// missing business context is expected; the service resolves the tenant.
+	businessID, _ := middleware.CurrentBusinessID(c)
 
 	res, err := h.service.HandleC2BConfirmation(sig, req, businessID)
 	if err != nil && errors.Is(err, ErrInvalidSignature) {
@@ -192,6 +191,17 @@ func (h *Handler) InitiateB2C(c *gin.Context) {
 	if err := c.ShouldBindJSON(&input); err != nil {
 		response.Error(c, http.StatusBadRequest, err.Error())
 		return
+	}
+
+	// A supplier-targeted payout settles a supplier payable, so it must require
+	// the SupplierPayment capability in addition to PaymentManage.
+	if strings.TrimSpace(input.SupplierID) != "" {
+		role, _ := c.Get(middleware.ContextRoleKey)
+		roleStr, _ := role.(string)
+		if !permissions.Allows(roleStr, permissions.SupplierPayment) {
+			response.Error(c, http.StatusForbidden, "insufficient permissions")
+			return
+		}
 	}
 
 	tx, err := h.service.InitiateB2C(c.Request.Context(), businessID, input)

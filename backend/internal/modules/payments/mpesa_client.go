@@ -29,6 +29,10 @@ var (
 	// must stay in a non-final state so a late callback can still settle it and
 	// a retry cannot trigger a second payout.
 	ErrTransactionAmbiguous = errors.New("m-pesa transaction outcome is ambiguous")
+	// ErrMpesaPreDispatch means the request failed before it was sent to the
+	// payment endpoint (for example OAuth/token acquisition). The reservation can
+	// safely be released so a retry may dispatch.
+	ErrMpesaPreDispatch = errors.New("m-pesa request failed before dispatch")
 )
 
 type MpesaClient interface {
@@ -97,7 +101,8 @@ func (c *mpesaClient) getOAuthToken(ctx context.Context) (string, error) {
 func (c *mpesaClient) InitiateSTKPush(ctx context.Context, req DarajaSTKPushRequest) (*DarajaSTKPushResponse, error) {
 	token, err := c.getOAuthToken(ctx)
 	if err != nil {
-		return nil, err
+		// Token acquisition happens before the payment POST is sent.
+		return nil, fmt.Errorf("%w: %v", ErrMpesaPreDispatch, err)
 	}
 
 	//nolint:gosec // G117: Daraja STK push protocol requires password field in JSON body
@@ -155,7 +160,8 @@ func (c *mpesaClient) InitiateSTKPush(ctx context.Context, req DarajaSTKPushRequ
 func (c *mpesaClient) InitiateB2CPayout(ctx context.Context, req DarajaB2CRequest) (*DarajaB2CResponse, error) {
 	token, err := c.getOAuthToken(ctx)
 	if err != nil {
-		return nil, err
+		// Token acquisition happens before the payment POST is sent.
+		return nil, fmt.Errorf("%w: %v", ErrMpesaPreDispatch, err)
 	}
 
 	payloadBytes, err := json.Marshal(req)

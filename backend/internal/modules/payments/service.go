@@ -226,6 +226,14 @@ func (s *service) InitiateSTKPush(ctx context.Context, businessID uuid.UUID, inp
 	// Make call to Daraja gateway
 	resp, err := s.mpesaClient.InitiateSTKPush(ctx, darajaReq)
 	if err != nil {
+		if errors.Is(err, ErrMpesaPreDispatch) {
+			// Proven pre-dispatch failure: release the reservation so a retry can
+			// dispatch instead of replaying a stuck pending row.
+			if delErr := s.repo.DeleteMpesaTransaction(tx.ID); delErr != nil {
+				log.Printf("payments: release stk reservation %s failed: %v", tx.ID, delErr)
+			}
+			return nil, fmt.Errorf("initiate stk push: %w", err)
+		}
 		if resp != nil {
 			tx.MerchantRequestID = resp.MerchantRequestID
 			tx.CheckoutRequestID = resp.CheckoutRequestID
@@ -233,7 +241,9 @@ func (s *service) InitiateSTKPush(ctx context.Context, businessID uuid.UUID, inp
 			if errors.Is(err, ErrTransactionFailed) || (resp.ResponseCode != "" && resp.ResponseCode != "0") {
 				tx.Status = StatusFailed
 			}
-			_ = s.repo.UpdateMpesaTransaction(tx)
+			if saveErr := s.repo.UpdateMpesaTransaction(tx); saveErr != nil {
+				log.Printf("payments: save stk failure for %s failed: %v", tx.ID, saveErr)
+			}
 		}
 		return nil, fmt.Errorf("initiate stk push: %w", err)
 	}
@@ -261,6 +271,12 @@ func (s *service) HandleSTKCallback(signatureHeader string, body []byte) error {
 	}
 	cb := wrapper.Body.StkCallback
 
+	// A signed callback without an explicit ResultCode is not success; decoding
+	// a missing integer would otherwise default to 0.
+	if cb.ResultCode == nil {
+		return fmt.Errorf("stk callback missing ResultCode")
+	}
+
 	tx, err := s.repo.GetMpesaTransactionByCheckoutRequestID(cb.CheckoutRequestID)
 	if err != nil {
 		return fmt.Errorf("transaction not found for checkout %s: %w", cb.CheckoutRequestID, err)
@@ -272,14 +288,14 @@ func (s *service) HandleSTKCallback(signatureHeader string, body []byte) error {
 		return nil
 	}
 
-	tx.ResultCode = &cb.ResultCode
+	tx.ResultCode = cb.ResultCode
 	tx.ResultDesc = cb.ResultDesc
 	tx.RawPayload = string(body)
 
 	terminal := StatusCompleted
-	if cb.ResultCode != 0 {
+	if *cb.ResultCode != 0 {
 		terminal = StatusFailed
-		if cb.ResultCode == 1032 { // Cancelled by user
+		if *cb.ResultCode == 1032 { // Cancelled by user
 			terminal = StatusCancelled
 		}
 	}
@@ -385,14 +401,14 @@ func (s *service) HandleC2BConfirmation(signatureHeader string, req C2BConfirmat
 		billRef = strings.TrimSpace(req.InvoiceNumber)
 	}
 
-	// Use the provided business ID to resolve invoices/customers.
-	// Previously this code looked up invoices with uuid.Nil, which never matched,
-	// causing every C2B confirmation to fail with "Could not resolve business".
-	if billRef != "" {
-		_, _ = s.repo.FindInvoiceByNumber(businessID, billRef)
+	// C2B confirmations arrive on the public webhook route with no user JWT, so
+	// the business must be resolved from the payment details (or the configured
+	// deployment business) rather than from request context.
+	if businessID == uuid.Nil {
+		businessID = s.resolveC2BBusiness(billRef, phone)
 	}
-	if phone != "" {
-		_, _ = s.repo.FindCustomerByPhone(businessID, phone)
+	if businessID == uuid.Nil {
+		return C2BConfirmationResponse{ResultCode: 1, ResultDesc: "Could not resolve business"}, errors.New("resolve business for c2b confirmation")
 	}
 
 	raw, _ := json.Marshal(req)
@@ -538,6 +554,14 @@ func (s *service) InitiateB2C(ctx context.Context, businessID uuid.UUID, input B
 
 	resp, err := s.mpesaClient.InitiateB2CPayout(ctx, darajaReq)
 	if err != nil {
+		if errors.Is(err, ErrMpesaPreDispatch) {
+			// Proven pre-dispatch failure: release the reservation so a retry can
+			// dispatch instead of replaying a stuck pending row.
+			if delErr := s.repo.DeleteMpesaTransaction(tx.ID); delErr != nil {
+				log.Printf("payments: release b2c reservation %s failed: %v", tx.ID, delErr)
+			}
+			return nil, fmt.Errorf("initiate b2c: %w", err)
+		}
 		if resp != nil {
 			tx.CheckoutRequestID = resp.ConversationID
 			tx.ResultDesc = resp.ResponseDescription
@@ -548,7 +572,9 @@ func (s *service) InitiateB2C(ctx context.Context, businessID uuid.UUID, input B
 				// still settle the payout without risking a second send.
 				tx.Status = StatusTimedOut
 			}
-			_ = s.repo.UpdateMpesaTransaction(tx)
+			if saveErr := s.repo.UpdateMpesaTransaction(tx); saveErr != nil {
+				log.Printf("payments: save b2c failure for %s failed: %v", tx.ID, saveErr)
+			}
 		}
 		return nil, fmt.Errorf("initiate b2c: %w", err)
 	}
@@ -835,6 +861,29 @@ func mpesaMarker(tx *MpesaTransaction) string {
 	return "M-Pesa " + ref
 }
 
+// resolveC2BBusiness finds the tenant that owns a public C2B confirmation. It
+// prefers an invoice matched by BillRefNumber, then a customer matched by phone,
+// then the deployment-wide MPESA_BUSINESS_ID. A nil result means the payment
+// cannot be attributed and must be rejected.
+func (s *service) resolveC2BBusiness(billRef, phone string) uuid.UUID {
+	if billRef != "" {
+		if inv, err := s.repo.FindInvoiceByNumber(uuid.Nil, billRef); err == nil && inv != nil {
+			return inv.BusinessID
+		}
+	}
+	if phone != "" {
+		if cust, err := s.repo.FindCustomerByPhone(uuid.Nil, phone); err == nil && cust != nil {
+			return cust.BusinessID
+		}
+	}
+	if s.cfg != nil && s.cfg.MpesaBusinessID != "" {
+		if id, err := uuid.Parse(s.cfg.MpesaBusinessID); err == nil {
+			return id
+		}
+	}
+	return uuid.Nil
+}
+
 func (s *service) invoicePaymentExists(invoiceID, businessID uuid.UUID, marker string) (bool, error) {
 	if s.invoicesSvc == nil {
 		return false, errors.New("invoice service not configured")
@@ -906,6 +955,29 @@ func (s *service) receiptAlreadyApplied(receipt string, businessID uuid.UUID) (b
 		}
 	}
 	return false, nil
+}
+
+// findBankExpense reuses an operating expense already posted for this bank
+// transaction so a retry after a failed reconciliation link does not duplicate
+// it. It matches on the exact description and amount within a bounded window.
+func (s *service) findBankExpense(businessID uuid.UUID, ctx *reviewReconcileContext, description string) (*finance.Expense, error) {
+	if s.financeSvc == nil || ctx.bankTx == nil {
+		return nil, nil
+	}
+	base := ctx.bankTx.TransactedAt
+	if base.IsZero() {
+		base = time.Now()
+	}
+	expenses, err := s.financeSvc.ListExpenses(businessID, base.Add(-24*time.Hour), base.Add(24*time.Hour))
+	if err != nil {
+		return nil, fmt.Errorf("list expenses for dedupe: %w", err)
+	}
+	for i := range expenses {
+		if expenses[i].Amount == ctx.amount && expenses[i].Description == description {
+			return &expenses[i], nil
+		}
+	}
+	return nil, nil
 }
 
 // findMpesaExpense checks a bounded window around the transaction for an
@@ -1373,8 +1445,14 @@ func (s *service) ListReviewQueue(businessID uuid.UUID, source string, page, lim
 		return nil, 0, errors.New("page out of bounds")
 	}
 	offset := (page - 1) * limit
+	// Sweep interrupted reconciliation claims so stranded rows become reviewable.
+	_ = s.repo.ReleaseStaleReconciliationClaims(time.Now().Add(-reconciliationClaimTTL))
 	return s.repo.ListReviewQueue(businessID, source, limit, offset)
 }
+
+// reconciliationClaimTTL is how long a Claiming row may sit before it is
+// considered abandoned and released back to Unmatched.
+const reconciliationClaimTTL = 5 * time.Minute
 
 // ReconcileReviewItem manually settles an unmatched transaction. Inflows may
 // only settle invoices or customer credit; outflows may only record an expense.
@@ -1388,44 +1466,54 @@ func (s *service) ReconcileReviewItem(businessID uuid.UUID, itemID uuid.UUID, in
 		return err
 	}
 
+	// Release any claim abandoned by an interrupted prior attempt so it becomes
+	// reviewable again before we try to take a new claim.
+	_ = s.repo.ReleaseStaleReconciliationClaims(time.Now().Add(-reconciliationClaimTTL))
+
 	// Claim the reconciliation slot before applying any financial effect. The
-	// claim is a compare-and-set on reconciliation_status, so only one
-	// concurrent request can move the row out of Unmatched. The callback path
-	// claims the transaction status before saving, but if that save fails the
-	// receipt can remain unmatched and be applied again here - this claim
-	// serializes the retry so the same money is never applied twice.
-	if ctx.mpesaTx != nil && ctx.mpesaTx.MpesaReceiptNumber != "" {
-		claimed, claimErr := s.repo.ClaimMpesaReconciliation(ctx.mpesaTx, Unmatched, Manual)
+	// claim is a compare-and-set on reconciliation_status (Unmatched -> Claiming),
+	// so only one concurrent request can settle the row. The claim is keyed on
+	// the row id, not the receipt, so a blank-receipt payout is still serialized.
+	var release func()
+	if ctx.mpesaTx != nil {
+		claimed, claimErr := s.repo.ClaimMpesaReconciliation(ctx.mpesaTx, Unmatched, Claiming)
 		if claimErr != nil {
 			return claimErr
 		}
 		if !claimed {
 			return ErrAlreadyReconciled
 		}
-		// Release the claim if the financial write fails so a retry can run.
-		defer func() {
-			if err != nil {
-				_, _ = s.repo.ClaimMpesaReconciliation(ctx.mpesaTx, Manual, Unmatched)
-			}
-		}()
+		release = func() {
+			_, _ = s.repo.ClaimMpesaReconciliation(ctx.mpesaTx, Claiming, Unmatched)
+		}
 	} else if ctx.bankTx != nil {
-		claimed, claimErr := s.repo.ClaimBankReconciliation(ctx.bankTx, Unmatched, Manual)
+		claimed, claimErr := s.repo.ClaimBankReconciliation(ctx.bankTx, Unmatched, Claiming)
 		if claimErr != nil {
 			return claimErr
 		}
 		if !claimed {
 			return ErrAlreadyReconciled
 		}
-		// Release the claim if the financial write fails so a retry can run.
+		release = func() {
+			_, _ = s.repo.ClaimBankReconciliation(ctx.bankTx, Claiming, Unmatched)
+		}
+	}
+
+	committed := false
+	if release != nil {
+		// Runs on error, panic, or a bare return. A successful settlement sets
+		// committed, and the transient state is replaced with Reconciled by the
+		// finalize step. A release that fails is swept by the stale-claim cleanup.
 		defer func() {
-			if err != nil {
-				_, _ = s.repo.ClaimBankReconciliation(ctx.bankTx, Manual, Unmatched)
+			if !committed {
+				release()
 			}
 		}()
 	}
 
 	// One M-Pesa receipt must settle exactly one target. Check the receipt against
-	// every payment table, not just the selected target.
+	// every payment table, not just the selected target. This needs a receipt, so
+	// it stays guarded even though the claim above does not.
 	if ctx.mpesaTx != nil && ctx.mpesaTx.MpesaReceiptNumber != "" {
 		already, chkErr := s.receiptAlreadyApplied(ctx.mpesaTx.MpesaReceiptNumber, businessID)
 		if chkErr != nil {
@@ -1443,18 +1531,22 @@ func (s *service) ReconcileReviewItem(businessID uuid.UUID, itemID uuid.UUID, in
 
 	switch input.TargetType {
 	case "invoice":
-		return s.reconcileReviewInvoice(businessID, ctx, input, note)
+		err = s.reconcileReviewInvoice(businessID, ctx, input, note)
 	case "customer_credit":
-		return s.reconcileReviewCustomerCredit(businessID, ctx, input, note)
+		err = s.reconcileReviewCustomerCredit(businessID, ctx, input, note)
 	case "expense":
-		return s.reconcileReviewExpense(businessID, ctx, input, note)
+		err = s.reconcileReviewExpense(businessID, ctx, input, note)
 	case "supplier_payment":
-		return s.reconcileReviewSupplierPayment(businessID, ctx, input, note)
+		err = s.reconcileReviewSupplierPayment(businessID, ctx, input, note)
 	case "dismiss":
-		return s.reconcileReviewDismiss(ctx)
+		err = s.reconcileReviewDismiss(ctx)
 	default:
-		return ErrInvalidTarget
+		err = ErrInvalidTarget
 	}
+	if err == nil {
+		committed = true
+	}
+	return err
 }
 
 type reviewReconcileContext struct {
@@ -1642,17 +1734,33 @@ func (s *service) reconcileReviewExpense(businessID uuid.UUID, ctx *reviewReconc
 			expenseID = exp.ID
 		}
 	} else {
-		exp, err := s.financeSvc.CreateExpense(finance.CreateExpenseInput{
-			BusinessID:  businessID,
-			Category:    strings.TrimSpace(input.ExpenseCategory),
-			Description: description,
-			Amount:      ctx.amount,
-			IncurredAt:  time.Now(),
-		})
-		if err != nil {
-			return fmt.Errorf("create expense: %w", err)
+		// Bank path: reuse an expense posted by an earlier attempt (for example a
+		// retry after the reconciliation link failed) and post to the
+		// transaction's own date so review does not shift the accounting period.
+		incurredAt := time.Now()
+		if ctx.bankTx != nil {
+			incurredAt = ctx.bankTx.TransactedAt
+			existing, findErr := s.findBankExpense(businessID, ctx, description)
+			if findErr != nil {
+				return findErr
+			}
+			if existing != nil {
+				expenseID = existing.ID
+			}
 		}
-		expenseID = exp.ID
+		if expenseID == uuid.Nil {
+			exp, err := s.financeSvc.CreateExpense(finance.CreateExpenseInput{
+				BusinessID:  businessID,
+				Category:    strings.TrimSpace(input.ExpenseCategory),
+				Description: description,
+				Amount:      ctx.amount,
+				IncurredAt:  incurredAt,
+			})
+			if err != nil {
+				return fmt.Errorf("create expense: %w", err)
+			}
+			expenseID = exp.ID
+		}
 	}
 
 	if ctx.mpesaTx != nil {

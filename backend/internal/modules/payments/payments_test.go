@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"math"
 	"strings"
 	"testing"
@@ -54,6 +55,25 @@ func (f *fakePaymentRepository) CreateMpesaTransaction(tx *MpesaTransaction) err
 
 func (f *fakePaymentRepository) UpdateMpesaTransaction(tx *MpesaTransaction) error {
 	f.mpesaTxs[tx.ID.String()] = tx
+	return nil
+}
+
+func (f *fakePaymentRepository) DeleteMpesaTransaction(id uuid.UUID) error {
+	delete(f.mpesaTxs, id.String())
+	return nil
+}
+
+func (f *fakePaymentRepository) ReleaseStaleReconciliationClaims(before time.Time) error {
+	for _, tx := range f.mpesaTxs {
+		if tx.ReconciliationStatus == Claiming && tx.UpdatedAt.Before(before) {
+			tx.ReconciliationStatus = Unmatched
+		}
+	}
+	for _, tx := range f.bankTxs {
+		if tx.ReconciliationStatus == Claiming && tx.UpdatedAt.Before(before) {
+			tx.ReconciliationStatus = Unmatched
+		}
+	}
 	return nil
 }
 
@@ -135,6 +155,7 @@ func (f *fakePaymentRepository) ClaimMpesaReconciliation(tx *MpesaTransaction, f
 		return false, nil
 	}
 	stored.ReconciliationStatus = to
+	stored.UpdatedAt = time.Now()
 	return true, nil
 }
 
@@ -147,6 +168,7 @@ func (f *fakePaymentRepository) ClaimBankReconciliation(tx *BankTransaction, fro
 		return false, nil
 	}
 	stored.ReconciliationStatus = to
+	stored.UpdatedAt = time.Now()
 	return true, nil
 }
 
@@ -666,6 +688,11 @@ func TestC2BValidationAndConfirmation(t *testing.T) {
 	}
 	if tx.Amount != 25000 {
 		t.Fatalf("expected amount 25000 cents, got %d", tx.Amount)
+	}
+	// A public callback (uuid.Nil) must resolve the owning tenant, not persist a
+	// nil business id.
+	if tx.BusinessID != businessID {
+		t.Fatalf("expected resolved business %s, got %s", businessID, tx.BusinessID)
 	}
 	if tx.ReconciliationStatus != Reconciled || tx.ReconciledEntityType != EntityCustomerCredit {
 		t.Fatalf("expected reconciled to customer credit, got %s / %s", tx.ReconciliationStatus, tx.ReconciledEntityType)
@@ -1469,5 +1496,60 @@ func TestInitiateB2CAmbiguousUsesTimedOut(t *testing.T) {
 		if m.Status != StatusTimedOut {
 			t.Fatalf("status = %s, want timed_out", m.Status)
 		}
+	}
+}
+
+// A signed STK callback without an explicit ResultCode must not be treated as
+// success (a missing integer would otherwise decode to zero).
+func TestSTKCallbackRequiresResultCode(t *testing.T) {
+	repo := newFakePaymentRepository()
+	cfg := &config.Config{MpesaCallbackSecret: "sec"}
+	svc := NewService(repo, nil, cfg, nil, nil, nil, nil)
+	businessID := uuid.New()
+
+	tx := &MpesaTransaction{
+		ID:                   uuid.New(),
+		BusinessID:           businessID,
+		TransactionType:      TypeSTKPush,
+		CheckoutRequestID:    "ws_CO_NO_CODE",
+		Amount:               5000,
+		Status:               StatusPending,
+		ReconciliationStatus: Unmatched,
+	}
+	_ = repo.CreateMpesaTransaction(tx)
+
+	body := []byte(`{"Body":{"stkCallback":{"CheckoutRequestID":"ws_CO_NO_CODE","ResultDesc":"ok","CallbackMetadata":{"Item":[{"Name":"MpesaReceiptNumber","Value":"R1"},{"Name":"Amount","Value":50.0}]}}}}`)
+	if err := svc.HandleSTKCallback(computeHMAC(cfg.MpesaCallbackSecret, body), body); err == nil {
+		t.Fatal("expected error when ResultCode is missing")
+	}
+	stored, _ := repo.GetMpesaTransactionByID(tx.ID, businessID)
+	if stored.Status != StatusPending {
+		t.Fatalf("status = %s, want pending", stored.Status)
+	}
+}
+
+// A proven pre-dispatch failure must release the idempotency reservation so a
+// retry can dispatch instead of replaying a stuck pending row.
+func TestInitiateSTKPreDispatchReleasesReservation(t *testing.T) {
+	repo := newFakePaymentRepository()
+	client := &mockMpesaClient{
+		stkErr: fmt.Errorf("%w: oauth unavailable", ErrMpesaPreDispatch),
+	}
+	cfg := &config.Config{
+		MpesaShortCode:      "174379",
+		MpesaPasskey:        "passkey",
+		MpesaStkCallbackURL: "https://example.com/callback",
+	}
+	svc := NewService(repo, client, cfg, nil, nil, nil, nil)
+
+	if _, err := svc.InitiateSTKPush(context.Background(), uuid.New(), STKPushInput{
+		PhoneNumber:    PhoneNumberTestConst,
+		Amount:         1000,
+		IdempotencyKey: "pre-dispatch-1",
+	}); err == nil {
+		t.Fatal("expected pre-dispatch error to surface")
+	}
+	if len(repo.mpesaTxs) != 0 {
+		t.Fatalf("reservation should be released, %d rows remain", len(repo.mpesaTxs))
 	}
 }

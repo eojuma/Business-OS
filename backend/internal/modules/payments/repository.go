@@ -23,7 +23,10 @@ var (
 
 // colUpdatedAt is the shared updated_at column name used by the repository's
 // compare-and-set and reconciliation updates.
-const colUpdatedAt = "updated_at"
+const (
+	colUpdatedAt            = "updated_at"
+	colReconciliationStatus = "reconciliation_status"
+)
 
 type Repository interface {
 	CreateMpesaTransaction(tx *MpesaTransaction) error
@@ -41,6 +44,12 @@ type Repository interface {
 	// claimed the row, which serializes the manual-review settle path so one
 	// receipt can never be applied twice by concurrent requests.
 	ClaimMpesaReconciliation(tx *MpesaTransaction, from, to ReconciliationStatus) (bool, error)
+	// ReleaseStaleReconciliationClaims returns in-progress claims older than the
+	// cutoff to Unmatched so an interrupted process cannot strand an item.
+	ReleaseStaleReconciliationClaims(before time.Time) error
+	// DeleteMpesaTransaction removes a reservation that never reached the
+	// provider (pre-dispatch failure), freeing its idempotency key for a retry.
+	DeleteMpesaTransaction(id uuid.UUID) error
 	// UpdateMpesaReconciliation persists reconciliation fields without touching
 	// the transaction status.
 	UpdateMpesaReconciliation(tx *MpesaTransaction) error
@@ -109,7 +118,43 @@ func (r *repository) mpesaReceiptExists(tx *MpesaTransaction) bool {
 }
 
 func (r *repository) UpdateMpesaTransaction(tx *MpesaTransaction) error {
-	return r.db.Save(tx).Error
+	// Use a targeted update instead of Save: Save writes every column, and for a
+	// new row ReconciledEntityType is "" which violates the reconciled_entity_type
+	// CHECK constraint (it allows NULL or the four enum values).
+	return r.db.Model(&MpesaTransaction{}).Where("id = ?", tx.ID).Updates(map[string]any{
+		"status":                 tx.Status,
+		"result_code":            tx.ResultCode,
+		"result_desc":            tx.ResultDesc,
+		"merchant_request_id":    tx.MerchantRequestID,
+		"checkout_request_id":    tx.CheckoutRequestID,
+		"mpesa_receipt_number":   tx.MpesaReceiptNumber,
+		"phone_number":           tx.PhoneNumber,
+		"amount":                 tx.Amount,
+		"raw_payload":            tx.RawPayload,
+		"supplier_id":            tx.SupplierID,
+		"expense_category":       tx.ExpenseCategory,
+		colReconciliationStatus:  tx.ReconciliationStatus,
+		"reconciled_entity_type": nullableEntityType(tx.ReconciledEntityType),
+		"reconciled_entity_id":   tx.ReconciledEntityID,
+		colUpdatedAt:             time.Now(),
+	}).Error
+}
+
+// DeleteMpesaTransaction removes a reservation that never reached the provider.
+func (r *repository) DeleteMpesaTransaction(id uuid.UUID) error {
+	return r.db.Where("id = ?", id).Delete(&MpesaTransaction{}).Error
+}
+
+// ReleaseStaleReconciliationClaims releases interrupted in-progress claims.
+func (r *repository) ReleaseStaleReconciliationClaims(before time.Time) error {
+	if err := r.db.Model(&MpesaTransaction{}).
+		Where("reconciliation_status = ? AND updated_at < ?", Claiming, before).
+		Update(colReconciliationStatus, Unmatched).Error; err != nil {
+		return err
+	}
+	return r.db.Model(&BankTransaction{}).
+		Where("reconciliation_status = ? AND updated_at < ?", Claiming, before).
+		Update(colReconciliationStatus, Unmatched).Error
 }
 
 // isMpesaReceiptConflict reports whether a create error is a violation of the
@@ -198,7 +243,7 @@ func (r *repository) ClaimMpesaReconciliation(tx *MpesaTransaction, from, to Rec
 	result := r.db.Model(&MpesaTransaction{}).
 		Where("id = ? AND reconciliation_status = ?", tx.ID, from).
 		Updates(map[string]any{
-			"reconciliation_status": to,
+			colReconciliationStatus: to,
 			colUpdatedAt:            time.Now(),
 		})
 	if result.Error != nil {
@@ -213,7 +258,7 @@ func (r *repository) ClaimBankReconciliation(tx *BankTransaction, from, to Recon
 	result := r.db.Model(&BankTransaction{}).
 		Where("id = ? AND reconciliation_status = ?", tx.ID, from).
 		Updates(map[string]any{
-			"reconciliation_status": to,
+			colReconciliationStatus: to,
 			colUpdatedAt:            time.Now(),
 		})
 	if result.Error != nil {
@@ -224,7 +269,7 @@ func (r *repository) ClaimBankReconciliation(tx *BankTransaction, from, to Recon
 
 func (r *repository) UpdateMpesaReconciliation(tx *MpesaTransaction) error {
 	updates := map[string]any{
-		"reconciliation_status":  tx.ReconciliationStatus,
+		colReconciliationStatus:  tx.ReconciliationStatus,
 		"reconciled_entity_type": nullableEntityType(tx.ReconciledEntityType),
 		"reconciled_entity_id":   tx.ReconciledEntityID,
 		colUpdatedAt:             time.Now(),
@@ -296,7 +341,7 @@ func (r *repository) ListBankTransactions(businessID uuid.UUID, txType string, s
 func (r *repository) UpdateBankTransaction(tx *BankTransaction) error {
 	tx.UpdatedAt = time.Now()
 	return r.db.Model(&BankTransaction{}).Where("id = ?", tx.ID).Updates(map[string]any{
-		"reconciliation_status":  tx.ReconciliationStatus,
+		colReconciliationStatus:  tx.ReconciliationStatus,
 		"reconciled_entity_type": nullableEntityType(tx.ReconciledEntityType),
 		"reconciled_entity_id":   tx.ReconciledEntityID,
 		colUpdatedAt:             tx.UpdatedAt,
@@ -416,7 +461,11 @@ func (r *repository) FindInvoiceByNumber(businessID uuid.UUID, invoiceNumber str
 		return nil, gorm.ErrRecordNotFound
 	}
 	var inv invoices.Invoice
-	if err := r.db.Where("business_id = ? AND LOWER(invoice_number) = LOWER(?)", businessID, invoiceNumber).First(&inv).Error; err != nil {
+	q := r.db.Where("LOWER(invoice_number) = LOWER(?)", invoiceNumber)
+	if businessID != uuid.Nil {
+		q = q.Where("business_id = ?", businessID)
+	}
+	if err := q.First(&inv).Error; err != nil {
 		return nil, err
 	}
 	return &inv, nil
@@ -431,10 +480,11 @@ func (r *repository) FindCustomerByPhone(businessID uuid.UUID, phone string) (*c
 	}
 	last9 := digits[len(digits)-9:]
 	var matches []customers.Customer
-	err := r.db.
-		Where("business_id = ? AND (phone = ? OR phone LIKE ?)", businessID, normalized, "%"+last9).
-		Limit(2).
-		Find(&matches).Error
+	q := r.db.Where("(phone = ? OR phone LIKE ?)", normalized, "%"+last9)
+	if businessID != uuid.Nil {
+		q = q.Where("business_id = ?", businessID)
+	}
+	err := q.Limit(2).Find(&matches).Error
 	if err != nil {
 		return nil, err
 	}

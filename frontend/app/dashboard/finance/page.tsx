@@ -103,6 +103,9 @@ export default function FinancePage() {
   // Request counter held in a ref so callbacks always compare against the
   // latest value (state captured in a closure would be stale).
   const requestVersion = useRef(0);
+  // Reuse one STK idempotency key across retries of the same attempt (same
+  // phone and amount) so a retried submit cannot prompt the customer twice.
+  const stkKeyRef = useRef<{ signature: string; key: string }>({ signature: "", key: "" });
 
   // Modals
   const [showExpenseForm, setShowExpenseForm] = useState(false);
@@ -205,13 +208,23 @@ export default function FinancePage() {
       return;
     }
     try {
+      const signature = `${stkPhone}|${cents}`;
+      if (stkKeyRef.current.signature !== signature) {
+        const random =
+          typeof crypto !== "undefined" && "randomUUID" in crypto
+            ? crypto.randomUUID()
+            : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+        stkKeyRef.current = { signature, key: `stk-${random}` };
+      }
       await api.post("/payments/mpesa/stk-push", {
         phone_number: stkPhone,
         amount: cents,
         account_reference: stkRef || "BusinessOS",
         transaction_desc: "Direct M-Pesa Payment",
-        idempotency_key: `stk-${stkPhone}-${cents}-${Date.now()}`,
+        idempotency_key: stkKeyRef.current.key,
       });
+      // A new attempt after a successful initiation gets a fresh key.
+      stkKeyRef.current = { signature: "", key: "" };
       setShowSTKModal(false);
       setStkPhone("");
       setStkAmount("");

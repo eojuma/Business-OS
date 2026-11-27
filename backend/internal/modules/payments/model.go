@@ -41,6 +41,11 @@ const (
 	Unmatched  ReconciliationStatus = "unmatched"
 	Ignored    ReconciliationStatus = "ignored"
 	Manual     ReconciliationStatus = "manual"
+	// Claiming is a transient in-progress state used to serialize manual
+	// reconciliation. A stale Claiming row is released back to Unmatched so an
+	// interrupted process cannot strand the item (unlike Manual, which is the
+	// terminal dismissal state).
+	Claiming ReconciliationStatus = "claiming"
 )
 
 type ReconciledEntityType string
@@ -84,7 +89,7 @@ type MpesaTransaction struct {
 	// can settle a supplier payable instead of guessing at an expense.
 	SupplierID      *uuid.UUID `gorm:"type:uuid" json:"supplier_id,omitempty"`
 	ExpenseCategory string     `gorm:"not null;default:''" json:"expense_category,omitempty"`
-	RawPayload      string     `gorm:"not null;default:''" json:"raw_payload,omitempty"`
+	RawPayload      string     `gorm:"not null;default:''" json:"-"`
 	CreatedAt       time.Time  `json:"created_at"`
 	UpdatedAt       time.Time  `json:"updated_at"`
 }
@@ -210,7 +215,7 @@ type DarajaCallbackMetadata struct {
 type DarajaSTKCallbackBody struct {
 	MerchantRequestID string                  `json:"MerchantRequestID"`
 	CheckoutRequestID string                  `json:"CheckoutRequestID"`
-	ResultCode        int                     `json:"ResultCode"`
+	ResultCode        *int                    `json:"ResultCode"`
 	ResultDesc        string                  `json:"ResultDesc"`
 	CallbackMetadata  *DarajaCallbackMetadata `json:"CallbackMetadata,omitempty"`
 }

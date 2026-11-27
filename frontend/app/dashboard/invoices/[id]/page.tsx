@@ -46,6 +46,9 @@ export default function InvoiceDetailPage() {
   // Tracks mount state so a poll GET that resolves after unmount does not
   // schedule another timeout.
   const mountedRef = useRef(true);
+  // Identifies the current polling window so a callback from a superseded
+  // window cannot schedule timers into the new one.
+  const pollTokenRef = useRef(0);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -166,20 +169,25 @@ export default function InvoiceDetailPage() {
       // window until the payment settles. That avoids leaving the page with stale
       // status while preventing infinite polling or resetting form state.
       if (pollTimer) clearTimeout(pollTimer);
+      pollTokenRef.current += 1;
+      const token = pollTokenRef.current;
       const initialBalance = invoice.remaining_balance;
       let attempts = 0;
       const maxAttempts = 15; // 30 seconds max polling window (15 * 2s)
       const poll = () => {
         const timer = setTimeout(async () => {
+          if (token !== pollTokenRef.current) return;
           attempts++;
           const next = await loadInvoice(true);
           if (!mountedRef.current) return;
+          if (token !== pollTokenRef.current) return;
           const keepPolling = next ? shouldKeepPollingInvoicePayment(next, initialBalance) : true;
           if (keepPolling && attempts < maxAttempts) {
             poll();
           }
         }, 2000);
-        setPollTimer(timer);
+        // Only the active window may own the timer.
+        if (token === pollTokenRef.current) setPollTimer(timer);
       };
       poll();
     } catch (e) {

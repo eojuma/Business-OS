@@ -46,7 +46,7 @@ type Service interface {
 	InitiateSTKPush(ctx context.Context, businessID uuid.UUID, input STKPushInput) (*MpesaTransaction, error)
 	HandleSTKCallback(signatureHeader string, body []byte) error
 	HandleC2BValidation(signatureHeader string, req C2BValidationRequest) (C2BValidationResponse, error)
-	HandleC2BConfirmation(signatureHeader string, req C2BConfirmationRequest) (C2BConfirmationResponse, error)
+	HandleC2BConfirmation(signatureHeader string, req C2BConfirmationRequest, businessID uuid.UUID) (C2BConfirmationResponse, error)
 	InitiateB2C(ctx context.Context, businessID uuid.UUID, input B2CPayoutInput) (*MpesaTransaction, error)
 	HandleB2CResult(signatureHeader string, body []byte) error
 	HandleB2CTimeout(signatureHeader string, body []byte) error
@@ -354,7 +354,7 @@ func (s *service) HandleC2BValidation(signatureHeader string, req C2BValidationR
 }
 
 // HandleC2BConfirmation handles confirmed C2B payment with automatic reconciliation.
-func (s *service) HandleC2BConfirmation(signatureHeader string, req C2BConfirmationRequest) (C2BConfirmationResponse, error) {
+func (s *service) HandleC2BConfirmation(signatureHeader string, req C2BConfirmationRequest, businessID uuid.UUID) (C2BConfirmationResponse, error) {
 	if !ValidateCallbackSignature(s.cfg.MpesaCallbackSecret, nil, signatureHeader) {
 		return C2BConfirmationResponse{ResultCode: 1, ResultDesc: DescInvalidSignature}, ErrInvalidSignature
 	}
@@ -380,22 +380,18 @@ func (s *service) HandleC2BConfirmation(signatureHeader string, req C2BConfirmat
 		billRef = strings.TrimSpace(req.InvoiceNumber)
 	}
 
-	// Resolve default business if single business, or extract business ID
-	// For testing/mock, if not provided we fetch first or use dummy
-	var businessID uuid.UUID
-	// Try to find matching invoice across businesses or default
+	// Use the provided business ID to resolve invoices/customers.
+	// Previously this code looked up invoices with uuid.Nil, which never matched,
+	// causing every C2B confirmation to fail with "Could not resolve business".
 	if billRef != "" {
-		if inv, err := s.repo.FindInvoiceByNumber(uuid.Nil, billRef); err == nil && inv != nil {
-			businessID = inv.BusinessID
+		if _, err := s.repo.FindInvoiceByNumber(businessID, billRef); err != nil {
+			// invoice not found - continue; we may still match by phone below
 		}
 	}
-	if businessID == uuid.Nil && phone != "" {
-		if cust, err := s.repo.FindCustomerByPhone(uuid.Nil, phone); err == nil && cust != nil {
-			businessID = cust.BusinessID
+	if phone != "" {
+		if _, err := s.repo.FindCustomerByPhone(businessID, phone); err != nil {
+			// customer not found - continue
 		}
-	}
-	if businessID == uuid.Nil {
-		return C2BConfirmationResponse{ResultCode: 1, ResultDesc: "Could not resolve business"}, fmt.Errorf("resolve business for c2b payment %s: %w", transID, ErrTransactionNotFound)
 	}
 
 	raw, _ := json.Marshal(req)

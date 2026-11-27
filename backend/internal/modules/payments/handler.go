@@ -101,7 +101,13 @@ func (h *Handler) HandleC2BConfirm(c *gin.Context) {
 		return
 	}
 
-	res, err := h.service.HandleC2BConfirmation(sig, req)
+	businessID, err := middleware.CurrentBusinessID(c)
+	if err != nil {
+		c.JSON(http.StatusUnauthorized, err)
+		return
+	}
+
+	res, err := h.service.HandleC2BConfirmation(sig, req, businessID)
 	if err != nil && errors.Is(err, ErrInvalidSignature) {
 		c.JSON(http.StatusUnauthorized, res)
 		return

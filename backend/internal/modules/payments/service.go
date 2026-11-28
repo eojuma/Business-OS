@@ -61,7 +61,7 @@ type Service interface {
 	HandleB2CTimeout(signatureHeader string, body []byte) error
 
 	RecordManualBankTransfer(businessID uuid.UUID, input BankManualInput, canPostExpenses bool) (*BankTransaction, error)
-	ImportBankStatement(businessID uuid.UUID, bankName string, r io.Reader, canPostExpenses bool) (*StatementImportResult, error)
+	ImportBankStatement(businessID uuid.UUID, bankName string, r io.Reader) (*StatementImportResult, error)
 	ListBankTransactions(businessID uuid.UUID, txType string, status string, page, limit int) ([]BankTransaction, int64, error)
 	ListMpesaTransactions(businessID uuid.UUID, page, limit int) ([]MpesaTransaction, int64, error)
 
@@ -202,6 +202,20 @@ func sameUUIDPtr(a, b *uuid.UUID) bool {
 		return a == b
 	}
 	return *a == *b
+}
+
+// resolvePayableRejection distinguishes a genuine overpayment from a concurrent
+// identical request whose reservation consumed the payable between our lookup
+// and the check. An identical keyed request returns its existing dispatch.
+func (s *service) resolvePayableRejection(businessID uuid.UUID, input B2CPayoutInput, phone string, supplierID *uuid.UUID, expenseCategory string) (*MpesaTransaction, error) {
+	if input.IdempotencyKey != "" {
+		if existing, err := s.repo.GetMpesaTransactionByIdempotency(businessID, input.IdempotencyKey); err == nil && existing != nil {
+			if b2cReplayMatches(existing, input, phone, supplierID, expenseCategory) {
+				return replayResolvedMpesa(existing)
+			}
+		}
+	}
+	return nil, ErrPayoutExceedsPayable
 }
 
 // replayResolvedMpesa applies one replay policy: a failed row conflicts, an
@@ -406,7 +420,21 @@ func (s *service) HandleSTKCallback(signatureHeader string, body []byte) error {
 
 	tx, err := s.repo.GetMpesaTransactionByCheckoutRequestID(cb.CheckoutRequestID)
 	if err != nil {
-		return fmt.Errorf("transaction not found for checkout %s: %w", cb.CheckoutRequestID, err)
+		if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return fmt.Errorf("lookup stk callback checkout %s: %w", cb.CheckoutRequestID, err)
+		}
+		// The initiation response may have been lost, leaving the original
+		// reservation without a checkout id. Do not guess an association: a
+		// signed success is preserved as its own unmatched transaction so the
+		// receipt can still be reviewed.
+		if *cb.ResultCode != 0 {
+			return nil
+		}
+		receipt, amount, phone, metaErr := parseSTKCallbackMeta(&cb)
+		if metaErr != nil {
+			return metaErr
+		}
+		return s.preserveUnmatchedSTKCallback(cb, body, receipt, amount, phone)
 	}
 
 	// Idempotency: a terminal status means another delivery already settled
@@ -430,32 +458,15 @@ func (s *service) HandleSTKCallback(signatureHeader string, body []byte) error {
 	if terminal == StatusCompleted {
 		// Extract receipt and metadata before claiming so the durable row has
 		// everything needed to reconcile later.
-		var confirmedReceipt string
-		var confirmedAmount int64
-		if cb.CallbackMetadata != nil {
-			for _, item := range cb.CallbackMetadata.Item {
-				switch item.Name {
-				case "MpesaReceiptNumber":
-					if val, ok := item.Value.(string); ok {
-						confirmedReceipt = strings.TrimSpace(val)
-					}
-				case "PhoneNumber":
-					tx.PhoneNumber = formatPhoneValue(item.Value)
-				case "Amount":
-					// Round half away from zero so 0.29 -> 29 cents (not 28 via
-					// float truncation). M-Pesa may return the value as a number
-					// or string depending on the callback type.
-					if cents, err := parseMoneyCents(item.Value); err == nil && cents > 0 {
-						confirmedAmount = cents
-					}
-				}
-			}
+		receipt, amount, phone, metaErr := parseSTKCallbackMeta(&cb)
+		if metaErr != nil {
+			return metaErr
 		}
-		if confirmedReceipt == "" || confirmedAmount <= 0 {
-			return fmt.Errorf("stk callback missing confirmed receipt or valid amount")
+		tx.MpesaReceiptNumber = receipt
+		tx.Amount = amount
+		if phone != "" {
+			tx.PhoneNumber = phone
 		}
-		tx.MpesaReceiptNumber = confirmedReceipt
-		tx.Amount = confirmedAmount
 	}
 
 	// Persist the terminal status before touching invoices or customer credit.
@@ -498,6 +509,71 @@ func (s *service) HandleSTKCallback(signatureHeader string, body []byte) error {
 	// open row through the guarded update.
 	if err := s.repo.AdoptMpesaReconciliation(tx); err != nil {
 		return err
+	}
+	return s.repo.UpdateMpesaReconciliation(tx)
+}
+
+// parseSTKCallbackMeta extracts the confirmed receipt, amount, and phone from
+// an STK callback. The amount is rounded half away from zero so 0.29 becomes
+// 29 cents rather than 28 via float truncation.
+func parseSTKCallbackMeta(cb *DarajaSTKCallbackBody) (string, int64, string, error) {
+	var receipt, phone string
+	var amount int64
+	if cb.CallbackMetadata != nil {
+		for _, item := range cb.CallbackMetadata.Item {
+			switch item.Name {
+			case "MpesaReceiptNumber":
+				if val, ok := item.Value.(string); ok {
+					receipt = strings.TrimSpace(val)
+				}
+			case "PhoneNumber":
+				phone = formatPhoneValue(item.Value)
+			case "Amount":
+				if cents, err := parseMoneyCents(item.Value); err == nil && cents > 0 {
+					amount = cents
+				}
+			}
+		}
+	}
+	if receipt == "" || amount <= 0 {
+		return "", 0, phone, fmt.Errorf("stk callback missing confirmed receipt or valid amount")
+	}
+	return receipt, amount, phone, nil
+}
+
+// preserveUnmatchedSTKCallback stores a signed success whose checkout id does
+// not match any reservation (for example after a lost initiation response).
+// It does not guess which timed-out row it belongs to; the receipt becomes its
+// own unmatched transaction so it stays visible for manual reconciliation.
+func (s *service) preserveUnmatchedSTKCallback(cb DarajaSTKCallbackBody, body []byte, receipt string, amount int64, phone string) error {
+	// A redelivery of the same receipt is already preserved.
+	if existing, err := s.repo.GetMpesaTransactionByReceipt(receipt); err == nil && existing != nil {
+		return nil
+	}
+	businessID := s.resolveC2BBusiness("", phone)
+	if businessID == uuid.Nil {
+		return fmt.Errorf("unmatched stk callback %s cannot be attributed to a business", cb.CheckoutRequestID)
+	}
+	tx := &MpesaTransaction{
+		BusinessID:           businessID,
+		TransactionType:      TypeSTKPush,
+		CheckoutRequestID:    cb.CheckoutRequestID,
+		MpesaReceiptNumber:   receipt,
+		PhoneNumber:          phone,
+		Amount:               amount,
+		Status:               StatusCompleted,
+		ReconciliationStatus: Unmatched,
+		RawPayload:           string(body),
+	}
+	if err := s.repo.CreateMpesaTransaction(tx); err != nil {
+		if isMpesaReceiptConflict(err) {
+			return nil
+		}
+		return fmt.Errorf("preserve unmatched stk callback: %w", err)
+	}
+	if err := s.autoReconcileMpesa(tx); err != nil {
+		log.Printf("payments: unmatched stk reconciliation for %s failed: %v", tx.ID, err)
+		return nil
 	}
 	return s.repo.UpdateMpesaReconciliation(tx)
 }
@@ -676,7 +752,7 @@ func (s *service) InitiateB2C(ctx context.Context, businessID uuid.UUID, input B
 			return nil, fmt.Errorf("read pending supplier payouts: %w", err)
 		}
 		if input.Amount > supplier.OutstandingBalance-pending {
-			return nil, ErrPayoutExceedsPayable
+			return s.resolvePayableRejection(businessID, input, phone, supplierID, expenseCategory)
 		}
 	}
 
@@ -722,7 +798,7 @@ func (s *service) InitiateB2C(ctx context.Context, businessID uuid.UUID, input B
 	}
 	if createErr != nil {
 		if errors.Is(createErr, ErrPayoutExceedsPayable) {
-			return nil, ErrPayoutExceedsPayable
+			return s.resolvePayableRejection(businessID, input, phone, supplierID, expenseCategory)
 		}
 		if input.IdempotencyKey != "" {
 			if existing, lookupErr := s.repo.GetMpesaTransactionByIdempotency(businessID, input.IdempotencyKey); lookupErr == nil && existing != nil {
@@ -992,7 +1068,18 @@ func (s *service) autoReconcileMpesa(tx *MpesaTransaction) error {
 	}
 	for _, note := range allNotes {
 		if strings.HasPrefix(note, marker) {
-			return nil // already settled; leave transaction as-is
+			// Recover the target of the existing posting so a caller that owns
+			// the row can link it instead of leaving the settlement unlinked.
+			entityType, entityID, found, findErr := s.repo.FindReconciliationApplication(tx.BusinessID, marker)
+			if findErr != nil {
+				return fmt.Errorf("find existing mpesa posting: %w", findErr)
+			}
+			if found {
+				tx.ReconciliationStatus = Reconciled
+				tx.ReconciledEntityType = entityType
+				tx.ReconciledEntityID = &entityID
+			}
+			return nil
 		}
 	}
 
@@ -1296,7 +1383,11 @@ func (s *service) RecordManualBankTransfer(businessID uuid.UUID, input BankManua
 	// posting may have committed even if linking the reconciliation failed, so
 	// report the durable row as unmatched for the review queue rather than
 	// claiming a reconciliation that was not stored.
-	if err := s.autoReconcileBank(tx, canPostExpenses); err != nil {
+	// An outflow is only auto-booked as an expense when the caller explicitly
+	// selects that settlement intent and holds FinanceManage. Otherwise it stays
+	// unmatched so a supplier transfer can be allocated in review.
+	autoPostExpense := canPostExpenses && strings.EqualFold(strings.TrimSpace(input.SettlementIntent), "expense")
+	if err := s.autoReconcileBank(tx, autoPostExpense); err != nil {
 		log.Printf("payments: automatic bank reconciliation for %s failed: %v", tx.ID, err)
 		tx.ReconciliationStatus = Unmatched
 		tx.ReconciledEntityType = ""
@@ -1420,7 +1511,7 @@ func (s *service) matchBankTransaction(tx *BankTransaction, canPostExpenses bool
 }
 
 // ImportBankStatement imports a CSV bank statement, skipping duplicate references and auto-reconciling.
-func (s *service) ImportBankStatement(businessID uuid.UUID, bankName string, r io.Reader, canPostExpenses bool) (*StatementImportResult, error) {
+func (s *service) ImportBankStatement(businessID uuid.UUID, bankName string, r io.Reader) (*StatementImportResult, error) {
 	reader := csv.NewReader(r)
 	records, err := reader.ReadAll()
 	if err != nil || len(records) < 2 {
@@ -1552,7 +1643,9 @@ func (s *service) ImportBankStatement(businessID uuid.UUID, bankName string, r i
 		if err := s.repo.CreateBankTransaction(tx); err != nil {
 			continue
 		}
-		if err := s.autoReconcileBank(tx, canPostExpenses); err != nil {
+		// A CSV row has no explicit settlement intent, so outflows stay unmatched
+		// for review instead of being silently booked as operating expenses.
+		if err := s.autoReconcileBank(tx, false); err != nil {
 			log.Printf("payments: automatic statement reconciliation for %s failed: %v", tx.ID, err)
 			tx.ReconciliationStatus = Unmatched
 			tx.ReconciledEntityType = ""
@@ -1925,7 +2018,7 @@ func (s *service) ReconcileReviewItem(businessID uuid.UUID, itemID uuid.UUID, in
 	case "supplier_payment":
 		err = s.reconcileReviewSupplierPayment(businessID, ctx, input, note)
 	case "dismiss":
-		err = s.reconcileReviewDismiss(ctx)
+		err = s.reconcileReviewDismiss(businessID, ctx)
 	default:
 		err = ErrInvalidTarget
 	}
@@ -1951,7 +2044,10 @@ func (s *service) loadReviewReconcileContext(businessID uuid.UUID, itemID uuid.U
 	case "mpesa":
 		tx, err := s.repo.GetMpesaTransactionByID(itemID, businessID)
 		if err != nil {
-			return nil, ErrTransactionNotFound
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return nil, ErrTransactionNotFound
+			}
+			return nil, fmt.Errorf("load mpesa transaction %s: %w", itemID, err)
 		}
 		if tx.ReconciliationStatus == Reconciled {
 			return nil, ErrAlreadyReconciled
@@ -1969,7 +2065,10 @@ func (s *service) loadReviewReconcileContext(businessID uuid.UUID, itemID uuid.U
 	case "bank":
 		tx, err := s.repo.GetBankTransactionByID(itemID, businessID)
 		if err != nil {
-			return nil, ErrTransactionNotFound
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return nil, ErrTransactionNotFound
+			}
+			return nil, fmt.Errorf("load bank transaction %s: %w", itemID, err)
 		}
 		if tx.ReconciliationStatus == Reconciled {
 			return nil, ErrAlreadyReconciled
@@ -2220,8 +2319,30 @@ func (s *service) reconcileReviewSupplierPayment(businessID uuid.UUID, ctx *revi
 	return nil
 }
 
-func (s *service) reconcileReviewDismiss(ctx *reviewReconcileContext) error {
+func (s *service) reconcileReviewDismiss(businessID uuid.UUID, ctx *reviewReconcileContext) error {
 	if ctx.mpesaTx != nil {
+		// A callback may have posted the receipt while this dismissal was in
+		// flight and been blocked from linking it. Link the committed posting
+		// instead of hiding it behind Manual.
+		if ctx.mpesaTx.MpesaReceiptNumber != "" {
+			already, err := s.receiptAlreadyApplied(ctx.mpesaTx.MpesaReceiptNumber, businessID)
+			if err != nil {
+				return err
+			}
+			if already {
+				entityType, entityID, found, findErr := s.repo.FindReconciliationApplication(businessID, mpesaMarker(ctx.mpesaTx))
+				if findErr != nil {
+					return findErr
+				}
+				if !found {
+					// The money is posted but its target is unknown; leave the row
+					// reviewable rather than dismissing a real settlement.
+					return ErrAlreadyReconciled
+				}
+				return s.finalizeMpesaReconciliation(ctx.mpesaTx, entityType, entityID, ctx.claimID)
+			}
+		}
+
 		// Only commit Manual when the transaction status still matches the one
 		// observed at load time. A payout that completed while this dismissal was
 		// in flight changes the status, so this fails and the deferred release

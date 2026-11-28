@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"net/url"
 	"os"
 	"strings"
 	"testing"
@@ -317,12 +318,13 @@ func (f *fakePaymentRepository) AdoptMpesaReconciliation(tx *MpesaTransaction) e
 	if !ok {
 		return gorm.ErrRecordNotFound
 	}
-	if stored.ReconciliationStatus != Manual {
+	if stored.ReconciliationStatus != Manual && stored.ReconciliationStatus != Claiming {
 		return nil
 	}
 	stored.ReconciliationStatus = tx.ReconciliationStatus
 	stored.ReconciledEntityType = tx.ReconciledEntityType
 	stored.ReconciledEntityID = tx.ReconciledEntityID
+	stored.ReconciliationClaimID = nil
 	return nil
 }
 
@@ -926,12 +928,13 @@ func TestBankTransferManualEntry(t *testing.T) {
 
 	businessID := uuid.New()
 	input := BankManualInput{
-		BankName:     "Equity Bank",
-		Reference:    "EQ-987654",
-		Type:         "outflow",
-		Amount:       150000,
-		Description:  "Office supplies payment",
-		TransactedAt: time.Now(),
+		BankName:         "Equity Bank",
+		Reference:        "EQ-987654",
+		Type:             "outflow",
+		Amount:           150000,
+		Description:      "Office supplies payment",
+		TransactedAt:     time.Now(),
+		SettlementIntent: string(EntityExpense),
 	}
 
 	tx, err := svc.RecordManualBankTransfer(businessID, input, true)
@@ -983,7 +986,7 @@ func TestBankStatementCSVImport(t *testing.T) {
 2026-11-16,REF-INVOICE,INV-2026-999 payment,750.00,0
 2026-11-17,REF-UNMATCHED,Walk in deposit,300.00,0
 `
-	result, err := svc.ImportBankStatement(businessID, "KCB Bank", strings.NewReader(csvData), true)
+	result, err := svc.ImportBankStatement(businessID, "KCB Bank", strings.NewReader(csvData))
 	if err != nil {
 		t.Fatalf("statement import failed: %v", err)
 	}
@@ -1421,10 +1424,11 @@ func TestBankOutflowExpenseRequiresFinancePermission(t *testing.T) {
 	businessID := uuid.New()
 
 	tx, err := svc.RecordManualBankTransfer(businessID, BankManualInput{
-		Reference:   "OUT-NO-PERM",
-		Type:        "withdrawal",
-		Amount:      2500,
-		Description: "Supplier payment",
+		Reference:        "OUT-NO-PERM",
+		Type:             "withdrawal",
+		Amount:           2500,
+		Description:      "Supplier payment",
+		SettlementIntent: string(EntityExpense),
 	}, false)
 	if err != nil {
 		t.Fatalf("recording an outflow without finance permission failed: %v", err)
@@ -1437,10 +1441,11 @@ func TestBankOutflowExpenseRequiresFinancePermission(t *testing.T) {
 	}
 
 	tx, err = svc.RecordManualBankTransfer(businessID, BankManualInput{
-		Reference:   "OUT-PERM",
-		Type:        "withdrawal",
-		Amount:      2500,
-		Description: "Supplier payment",
+		Reference:        "OUT-PERM",
+		Type:             "withdrawal",
+		Amount:           2500,
+		Description:      "Supplier payment",
+		SettlementIntent: string(EntityExpense),
 	}, true)
 	if err != nil {
 		t.Fatalf("recording an outflow with finance permission failed: %v", err)
@@ -1487,13 +1492,13 @@ func TestReconcileRejectsDirectionMismatch(t *testing.T) {
 		t.Fatalf("outflow -> invoice error = %v, want ErrTargetDirectionMismatch", err)
 	}
 	if err := svc.ReconcileReviewItem(businessID, inflow.ID, ReconcileInput{
-		Source: "bank", TargetType: "expense",
+		Source: "bank", TargetType: string(EntityExpense),
 	}); !errors.Is(err, ErrTargetDirectionMismatch) {
 		t.Fatalf("inflow -> expense error = %v, want ErrTargetDirectionMismatch", err)
 	}
 
 	if err := svc.ReconcileReviewItem(businessID, outflow.ID, ReconcileInput{
-		Source: "bank", TargetType: "expense", ExpenseCategory: "Transport",
+		Source: "bank", TargetType: string(EntityExpense), ExpenseCategory: "Transport",
 	}); err != nil {
 		t.Fatalf("outflow -> expense should succeed: %v", err)
 	}
@@ -1558,12 +1563,16 @@ func TestParseMoneyStringSignAndMagnitude(t *testing.T) {
 
 func TestValidateCallbackSignatureRejectsEmptySecret(t *testing.T) {
 	body := []byte(`{"hello":"world"}`)
-	sig := "any-signature"
-	if ValidateCallbackSignature("", body, sig) {
-		t.Fatal("empty secret must reject signature")
+	// A matching signature over an empty or whitespace-only secret must still be
+	// rejected; a nonblank secret keeps its matching signature as the control.
+	if ValidateCallbackSignature("", body, computeHMAC("", body)) {
+		t.Fatal("empty secret must reject a matching signature")
 	}
-	if ValidateCallbackSignature("   ", body, sig) {
-		t.Fatal("whitespace secret must reject signature")
+	if ValidateCallbackSignature("   ", body, computeHMAC("   ", body)) {
+		t.Fatal("whitespace secret must reject a matching signature")
+	}
+	if !ValidateCallbackSignature("secret", body, computeHMAC("secret", body)) {
+		t.Fatal("nonblank secret must accept its matching signature")
 	}
 }
 
@@ -1680,7 +1689,7 @@ func TestTimedOutPayoutCannotBePosted(t *testing.T) {
 
 	err := svc.ReconcileReviewItem(businessID, tx.ID, ReconcileInput{
 		Source:     sourceMpesaTestConst,
-		TargetType: "expense",
+		TargetType: string(EntityExpense),
 	})
 	if !errors.Is(err, ErrTransactionNotCompleted) {
 		t.Fatalf("expected timed-out payout posting to be rejected, got %v", err)
@@ -1958,7 +1967,7 @@ func TestStatementImportValidationAndInvalidRows(t *testing.T) {
 
 	// Missing amount column
 	noAmountCSV := strings.NewReader("date,reference,description\n2026-11-01,REF1,desc\n")
-	_, err := svc.ImportBankStatement(businessID, "TestBank", noAmountCSV, true)
+	_, err := svc.ImportBankStatement(businessID, "TestBank", noAmountCSV)
 	if err == nil {
 		t.Fatal("expected error when amount column is missing")
 	}
@@ -1970,7 +1979,7 @@ func TestStatementImportValidationAndInvalidRows(t *testing.T) {
 2026-11-01,,50.00,missing ref
 2026-11-01,REF-OK,100.00,duplicate
 `
-	result, err := svc.ImportBankStatement(businessID, "TestBank", strings.NewReader(csvData), true)
+	result, err := svc.ImportBankStatement(businessID, "TestBank", strings.NewReader(csvData))
 	if err != nil {
 		t.Fatalf("import failed: %v", err)
 	}
@@ -1989,7 +1998,7 @@ func TestStatementImportValidationAndInvalidRows(t *testing.T) {
 	invalidCreditCSV := `date,reference,credit,debit
 2026-11-02,REF-BAD-CREDIT,broken,25.00
 `
-	result, err = svc.ImportBankStatement(businessID, "TestBank", strings.NewReader(invalidCreditCSV), true)
+	result, err = svc.ImportBankStatement(businessID, "TestBank", strings.NewReader(invalidCreditCSV))
 	if err != nil {
 		t.Fatalf("import failed: %v", err)
 	}
@@ -2025,7 +2034,7 @@ func TestStatementImportRejectsCreditAndDebit(t *testing.T) {
 2026-11-01,REF-BOTH,100.00,25.00
 2026-11-02,REF-OK,100.00,
 `
-	result, err := svc.ImportBankStatement(businessID, "TestBank", strings.NewReader(csv), true)
+	result, err := svc.ImportBankStatement(businessID, "TestBank", strings.NewReader(csv))
 	if err != nil {
 		t.Fatalf("import failed: %v", err)
 	}
@@ -2096,6 +2105,9 @@ func TestInitiateSTKAmbiguousKeepsPending(t *testing.T) {
 		if m.Status != StatusPending {
 			t.Fatalf("status = %s, want pending", m.Status)
 		}
+		if m.CheckoutRequestID != "ws_CO_AMB" {
+			t.Fatalf("checkout id = %q, want the provider id ws_CO_AMB", m.CheckoutRequestID)
+		}
 	}
 
 	// A retry with the same key must not resend, and must keep reporting the
@@ -2150,6 +2162,9 @@ func TestInitiateB2CAmbiguousUsesTimedOut(t *testing.T) {
 	for _, m := range repo.mpesaTxs {
 		if m.Status != StatusTimedOut {
 			t.Fatalf("status = %s, want timed_out", m.Status)
+		}
+		if m.CheckoutRequestID != "CONV-AMB" {
+			t.Fatalf("conversation id = %q, want the provider id CONV-AMB", m.CheckoutRequestID)
 		}
 	}
 
@@ -2564,12 +2579,13 @@ func TestDismissalCannotHideConcurrentCompletion(t *testing.T) {
 // than being mistaken for an already-reconciled item.
 func TestStaleClaimCleanupFailureIsSurfaced(t *testing.T) {
 	repo := newFakePaymentRepository()
-	repo.releaseErr = errors.New("database unavailable")
+	injected := errors.New("database unavailable")
+	repo.releaseErr = injected
 	svc := NewService(repo, nil, &config.Config{}, nil, nil, nil, nil)
 	businessID := uuid.New()
 
-	if _, _, err := svc.ListReviewQueue(businessID, "", 1, 20); err == nil {
-		t.Fatal("expected ListReviewQueue to surface the cleanup failure")
+	if _, _, err := svc.ListReviewQueue(businessID, "", 1, 20); !errors.Is(err, injected) {
+		t.Fatalf("ListReviewQueue error = %v, want the injected cleanup failure", err)
 	}
 
 	tx := &MpesaTransaction{
@@ -2583,9 +2599,25 @@ func TestStaleClaimCleanupFailureIsSurfaced(t *testing.T) {
 	_ = repo.CreateMpesaTransaction(tx)
 	if err := svc.ReconcileReviewItem(businessID, tx.ID, ReconcileInput{
 		Source: sourceMpesaTestConst, TargetType: targetDismissTestConst,
-	}); err == nil {
-		t.Fatal("expected ReconcileReviewItem to surface the cleanup failure")
+	}); !errors.Is(err, injected) {
+		t.Fatalf("ReconcileReviewItem error = %v, want the injected cleanup failure", err)
 	}
+}
+
+// withSearchPath overrides search_path on a URL-style PostgreSQL DSN so an
+// existing value cannot win over the disposable test schema.
+func withSearchPath(dsn, schema string) (string, error) {
+	u, err := url.Parse(dsn)
+	if err != nil {
+		return "", err
+	}
+	if u.Scheme != "postgres" && u.Scheme != "postgresql" {
+		return "", fmt.Errorf("TEST_DATABASE_URL must be a postgres URL")
+	}
+	q := u.Query()
+	q.Set("search_path", schema)
+	u.RawQuery = q.Encode()
+	return u.String(), nil
 }
 
 // The status predicate on the guarded reconciliation writes must live in SQL,
@@ -2598,20 +2630,30 @@ func TestReconciliationGuardsAgainstDatabase(t *testing.T) {
 	schema := fmt.Sprintf("payments_guard_%d", time.Now().UnixNano())
 	admin, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})
 	if err != nil {
-		t.Skipf("test database unavailable: %v", err)
+		t.Fatalf("open configured test database: %v", err)
 	}
 	if err := admin.Exec("CREATE SCHEMA " + schema).Error; err != nil {
 		t.Fatalf("create schema: %v", err)
 	}
 	t.Cleanup(func() { _ = admin.Exec("DROP SCHEMA " + schema + " CASCADE").Error })
 
-	sep := "?"
-	if strings.Contains(dsn, "?") {
-		sep = "&"
+	// Override the search path on the connection URL instead of appending a
+	// second parameter: pgx takes the first value, so an existing
+	// search_path=public would otherwise win and fixtures would land in public.
+	scopedDSN, err := withSearchPath(dsn, schema)
+	if err != nil {
+		t.Fatalf("set search path: %v", err)
 	}
-	scoped, err := gorm.Open(postgres.Open(dsn+sep+"search_path="+schema), &gorm.Config{TranslateError: true})
+	scoped, err := gorm.Open(postgres.Open(scopedDSN), &gorm.Config{TranslateError: true})
 	if err != nil {
 		t.Fatalf("open scoped database: %v", err)
+	}
+	var current string
+	if err := scoped.Raw("SELECT current_schema()").Scan(&current).Error; err != nil {
+		t.Fatalf("read current schema: %v", err)
+	}
+	if current != schema {
+		t.Fatalf("current_schema = %q, want the disposable schema %q", current, schema)
 	}
 	if err := scoped.AutoMigrate(&MpesaTransaction{}, &suppliers.Supplier{}); err != nil {
 		t.Fatalf("migrate: %v", err)
@@ -2701,6 +2743,16 @@ func TestReconciliationGuardsAgainstDatabase(t *testing.T) {
 	if err != nil || !ok {
 		t.Fatalf("matching dismissal = %v, %v; want committed", ok, err)
 	}
+	got = MpesaTransaction{}
+	if err := scoped.First(&got, "id = ?", claimed.ID).Error; err != nil {
+		t.Fatalf("read dismissed row: %v", err)
+	}
+	if got.ReconciliationStatus != Manual {
+		t.Fatalf("dismissed status = %s, want manual", got.ReconciliationStatus)
+	}
+	if got.ReconciliationClaimID != nil {
+		t.Fatalf("dismissed row kept its claim id: %v", got.ReconciliationClaimID)
+	}
 
 	// The supplier payable check and the in-flight sum must also hold in SQL.
 	supplier := suppliers.Supplier{ID: uuid.New(), BusinessID: businessID, Name: "Supplier", OutstandingBalance: 10000}
@@ -2731,6 +2783,22 @@ func TestReconciliationGuardsAgainstDatabase(t *testing.T) {
 	}
 	if err := repo.CreateSupplierPayout(second); !errors.Is(err, ErrPayoutExceedsPayable) {
 		t.Fatalf("reserved overpayment error = %v, want ErrPayoutExceedsPayable", err)
+	}
+
+	// A confirmed payout remains reserved until its supplier payment is linked.
+	if err := scoped.Model(&MpesaTransaction{}).Where("id = ?", payout.ID).
+		Updates(map[string]any{"status": StatusCompleted, "reconciled_entity_id": nil}).Error; err != nil {
+		t.Fatalf("complete the first payout: %v", err)
+	}
+	if total, err := repo.PendingSupplierPayoutTotal(businessID, supplierID); err != nil || total != 5000 {
+		t.Fatalf("completed-unposted total = %d, %v; want 5000", total, err)
+	}
+	afterCompletion := &MpesaTransaction{
+		ID: uuid.New(), BusinessID: businessID, TransactionType: TypeB2C,
+		Amount: 6000, Status: StatusPending, SupplierID: &supplierID,
+	}
+	if err := repo.CreateSupplierPayout(afterCompletion); !errors.Is(err, ErrPayoutExceedsPayable) {
+		t.Fatalf("completed-unposted overpayment error = %v, want ErrPayoutExceedsPayable", err)
 	}
 }
 
@@ -2766,5 +2834,114 @@ func TestB2CSupplierPayoutReplayDoesNotCountItsOwnReservation(t *testing.T) {
 	}
 	if client.b2cCalls != 1 {
 		t.Fatalf("gateway calls = %d, want 1", client.b2cCalls)
+	}
+}
+
+// An outflow without an explicit expense intent stays unmatched even when the
+// caller holds FinanceManage, so a supplier transfer can be allocated in review.
+func TestBankOutflowWithoutIntentStaysUnmatched(t *testing.T) {
+	repo := newFakePaymentRepository()
+	finSvc := &mockFinanceService{}
+	svc := NewService(repo, nil, &config.Config{}, nil, nil, finSvc, nil)
+	businessID := uuid.New()
+
+	tx, err := svc.RecordManualBankTransfer(businessID, BankManualInput{
+		Reference:   "OUT-UNASSIGNED",
+		Type:        "withdrawal",
+		Amount:      4000,
+		Description: "Transfer to supplier",
+	}, true)
+	if err != nil {
+		t.Fatalf("recording the transfer failed: %v", err)
+	}
+	if tx.ReconciliationStatus != Unmatched {
+		t.Fatalf("status = %s, want unmatched", tx.ReconciliationStatus)
+	}
+	if len(finSvc.expenses) != 0 {
+		t.Fatal("an unassigned outflow must not post an operating expense")
+	}
+}
+
+// A signed STK success whose checkout id matches no reservation (for example
+// after a lost initiation response) must be preserved for review.
+func TestUnmatchedSTKCallbackIsPreserved(t *testing.T) {
+	repo := newFakePaymentRepository()
+	businessID := uuid.New()
+	cfg := &config.Config{MpesaCallbackSecret: "sec", MpesaBusinessID: businessID.String()}
+	svc := NewService(repo, nil, cfg, nil, nil, nil, nil)
+
+	body := []byte(`{"Body":{"stkCallback":{"CheckoutRequestID":"ws_CO_LOST","ResultCode":0,"ResultDesc":"ok","CallbackMetadata":{"Item":[{"Name":"MpesaReceiptNumber","Value":"QK-LOST-1"},{"Name":"Amount","Value":50.0},{"Name":"PhoneNumber","Value":"254712345678"}]}}}}`)
+	if err := svc.HandleSTKCallback(computeHMAC(cfg.MpesaCallbackSecret, body), body); err != nil {
+		t.Fatalf("callback failed: %v", err)
+	}
+	stored, err := repo.GetMpesaTransactionByReceipt("QK-LOST-1")
+	if err != nil {
+		t.Fatalf("the receipt was not preserved: %v", err)
+	}
+	if stored.BusinessID != businessID || stored.Status != StatusCompleted || stored.ReconciliationStatus != Unmatched {
+		t.Fatalf("preserved row = %s/%s for %s, want completed/unmatched for %s",
+			stored.Status, stored.ReconciliationStatus, stored.BusinessID, businessID)
+	}
+	if stored.CheckoutRequestID != "ws_CO_LOST" {
+		t.Fatalf("checkout id = %q, want ws_CO_LOST", stored.CheckoutRequestID)
+	}
+
+	// A redelivery must not create a second row.
+	if err := svc.HandleSTKCallback(computeHMAC(cfg.MpesaCallbackSecret, body), body); err != nil {
+		t.Fatalf("duplicate callback failed: %v", err)
+	}
+	if len(repo.mpesaTxs) != 1 {
+		t.Fatalf("rows = %d, want 1", len(repo.mpesaTxs))
+	}
+}
+
+// A concurrent identical payout that consumed the payable between lookup and
+// check must return its existing dispatch instead of a payable error.
+func TestPayableRejectionReturnsExistingIdenticalDispatch(t *testing.T) {
+	repo := newFakePaymentRepository()
+	supSvc := &mockSuppliersService{outstanding: 10000}
+	svc := NewService(repo, nil, &config.Config{}, nil, nil, nil, supSvc)
+	businessID := uuid.New()
+	supplierID := uuid.New()
+	supSvc.paidSupplierID = supplierID
+
+	existing := &MpesaTransaction{
+		ID:                   uuid.New(),
+		BusinessID:           businessID,
+		TransactionType:      TypeB2C,
+		PhoneNumber:          "254712345678",
+		Amount:               10000,
+		Status:               StatusPending,
+		DispatchAcknowledged: true,
+		IdempotencyKey:       "concurrent-payable-1",
+		SupplierID:           &supplierID,
+		ExpenseCategory:      defaultExpenseCategory,
+	}
+	_ = repo.CreateMpesaTransaction(existing)
+
+	input := B2CPayoutInput{
+		PhoneNumber:    PhoneNumberTestConst,
+		Amount:         10000,
+		SupplierID:     supplierID.String(),
+		IdempotencyKey: "concurrent-payable-1",
+	}
+	impl, ok := svc.(*service)
+	if !ok {
+		t.Fatal("expected the concrete payment service")
+	}
+	got, err := impl.resolvePayableRejection(businessID, input, NormalizePhone(input.PhoneNumber), &supplierID, defaultExpenseCategory)
+	if err != nil {
+		t.Fatalf("expected the existing dispatch, got %v", err)
+	}
+	if got == nil || got.ID != existing.ID {
+		t.Fatalf("returned %+v, want the existing reservation", got)
+	}
+
+	// With no matching reservation the payable error stands.
+	_, err = impl.resolvePayableRejection(businessID, B2CPayoutInput{
+		PhoneNumber: PhoneNumberTestConst, Amount: 10000, SupplierID: supplierID.String(),
+	}, NormalizePhone(PhoneNumberTestConst), &supplierID, defaultExpenseCategory)
+	if !errors.Is(err, ErrPayoutExceedsPayable) {
+		t.Fatalf("error = %v, want ErrPayoutExceedsPayable", err)
 	}
 }

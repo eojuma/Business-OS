@@ -94,7 +94,14 @@ func (c *mpesaClient) getOAuthToken(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("decode token response: %w", err)
 	}
 
-	return authResp.AccessToken, nil
+	// A 200 with an empty access_token is not a successful authentication. Fail
+	// before the payment request is sent so both callers return a pre-dispatch
+	// error instead of dispatching with an empty Bearer credential.
+	token := strings.TrimSpace(authResp.AccessToken)
+	if token == "" {
+		return "", fmt.Errorf("%w: empty access token", ErrMpesaAuthFailed)
+	}
+	return token, nil
 }
 
 // InitiateSTKPush sends Lipa Na M-Pesa Online STK push prompt.

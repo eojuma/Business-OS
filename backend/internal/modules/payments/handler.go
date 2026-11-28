@@ -312,13 +312,9 @@ func (h *Handler) ImportBankStatement(c *gin.Context) {
 		r = strings.NewReader(string(bodyBytes))
 	}
 
-	// Imported outflows may auto-post expenses, so the importer needs the same
-	// FinanceManage capability. Without it the rows still import as unmatched.
-	role, _ := c.Get(middleware.ContextRoleKey)
-	roleStr, _ := role.(string)
-	canPostExpenses := permissions.Allows(roleStr, permissions.FinanceManage)
-
-	result, err := h.service.ImportBankStatement(businessID, bankName, r, canPostExpenses)
+	// Imported rows have no explicit settlement intent, so outflows are left
+	// unmatched for review rather than auto-posted as expenses.
+	result, err := h.service.ImportBankStatement(businessID, bankName, r)
 	if err != nil {
 		response.Error(c, http.StatusBadRequest, err.Error())
 		return

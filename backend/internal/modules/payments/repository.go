@@ -419,16 +419,19 @@ func (r *repository) UpdateMpesaReconciliation(tx *MpesaTransaction) error {
 }
 
 // AdoptMpesaReconciliation writes the settlement for a late-completed payout
-// that was previously dismissed. It is deliberately scoped to Manual rows so
-// it cannot overwrite any other state.
+// that was dismissed or is being dismissed by a reviewer. It is scoped to
+// Manual and Claiming: a callback that has already posted money must not leave
+// the row hidden, and taking over a claim here makes the reviewer's finalize
+// fail safely instead of overwriting a committed settlement.
 func (r *repository) AdoptMpesaReconciliation(tx *MpesaTransaction) error {
 	return r.db.Model(&MpesaTransaction{}).
-		Where("id = ? AND reconciliation_status = ?", tx.ID, Manual).
+		Where("id = ? AND reconciliation_status IN ?", tx.ID, []ReconciliationStatus{Manual, Claiming}).
 		Updates(map[string]any{
-			colReconciliationStatus: tx.ReconciliationStatus,
-			colReconciledEntityType: nullableEntityType(tx.ReconciledEntityType),
-			colReconciledEntityID:   tx.ReconciledEntityID,
-			colUpdatedAt:            time.Now(),
+			colReconciliationStatus:  tx.ReconciliationStatus,
+			colReconciledEntityType:  nullableEntityType(tx.ReconciledEntityType),
+			colReconciledEntityID:    tx.ReconciledEntityID,
+			colReconciliationClaimID: nil,
+			colUpdatedAt:             time.Now(),
 		}).Error
 }
 
@@ -467,13 +470,16 @@ func (r *repository) FinalizeMpesaDismissal(tx *MpesaTransaction, claimID uuid.U
 	return result.RowsAffected == 1, nil
 }
 
-// PendingSupplierPayoutTotal returns the amount already reserved for a supplier
-// by payouts that have not reached a final state.
+// PendingSupplierPayoutTotal returns the amount already reserved for a supplier.
+// A payout stays reserved while it is pending or timed out, and also while it is
+// completed but not yet linked to the supplier payment it debits. Without the
+// latter, a second payout could pass the check in the window between the result
+// callback committing Completed and the payable debit.
 func (r *repository) PendingSupplierPayoutTotal(businessID, supplierID uuid.UUID) (int64, error) {
 	var total int64
 	err := r.db.Model(&MpesaTransaction{}).
-		Where("business_id = ? AND supplier_id = ? AND transaction_type = ? AND status IN ?",
-			businessID, supplierID, TypeB2C, []TransactionStatus{StatusPending, StatusTimedOut}).
+		Where("business_id = ? AND supplier_id = ? AND transaction_type = ? AND (status IN ? OR (status = ? AND reconciled_entity_id IS NULL))",
+			businessID, supplierID, TypeB2C, []TransactionStatus{StatusPending, StatusTimedOut}, StatusCompleted).
 		Select("COALESCE(SUM(amount), 0)").
 		Scan(&total).Error
 	return total, err
@@ -495,8 +501,8 @@ func (r *repository) CreateSupplierPayout(tx *MpesaTransaction) error {
 		}
 		var pending int64
 		if err := db.Model(&MpesaTransaction{}).
-			Where("business_id = ? AND supplier_id = ? AND transaction_type = ? AND status IN ?",
-				tx.BusinessID, *tx.SupplierID, TypeB2C, []TransactionStatus{StatusPending, StatusTimedOut}).
+			Where("business_id = ? AND supplier_id = ? AND transaction_type = ? AND (status IN ? OR (status = ? AND reconciled_entity_id IS NULL))",
+				tx.BusinessID, *tx.SupplierID, TypeB2C, []TransactionStatus{StatusPending, StatusTimedOut}, StatusCompleted).
 			Select("COALESCE(SUM(amount), 0)").
 			Scan(&pending).Error; err != nil {
 			return err

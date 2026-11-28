@@ -176,6 +176,11 @@ type BankManualInput struct {
 	Amount       int64     `json:"amount" binding:"required"` // in cents
 	Description  string    `json:"description"`
 	TransactedAt time.Time `json:"transacted_at"`
+	// SettlementIntent lets a caller explicitly choose how an outflow is booked.
+	// Only "expense" permits automatic expense posting; an empty or unrecognized
+	// value leaves the transfer unmatched for review, so a supplier transfer is
+	// not silently booked as an operating expense.
+	SettlementIntent string `json:"settlement_intent"`
 }
 
 type StatementImportResult struct {

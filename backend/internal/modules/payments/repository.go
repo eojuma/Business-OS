@@ -64,7 +64,8 @@ type Repository interface {
 	// provider (pre-dispatch failure), freeing its idempotency key for a retry.
 	DeleteMpesaTransaction(id uuid.UUID) error
 	// UpdateMpesaReconciliation persists reconciliation fields without touching
-	// the transaction status.
+	// the transaction status. It never overwrites a reconciliation that another
+	// writer has already finalized.
 	UpdateMpesaReconciliation(tx *MpesaTransaction) error
 	UpdateMpesaTransaction(tx *MpesaTransaction) error
 	ListMpesaTransactions(businessID uuid.UUID, limit, offset int) ([]MpesaTransaction, int64, error)
@@ -73,7 +74,6 @@ type Repository interface {
 	GetBankTransactionByID(id, businessID uuid.UUID) (*BankTransaction, error)
 	GetBankTransactionByReference(businessID uuid.UUID, ref string) (*BankTransaction, error)
 	ListBankTransactions(businessID uuid.UUID, txType string, status string, limit, offset int) ([]BankTransaction, int64, error)
-	UpdateBankTransaction(tx *BankTransaction) error
 	// ClaimBankReconciliation mirrors ClaimMpesaReconciliation for bank
 	// transactions so the manual-review and automatic settle paths are
 	// serialized there too.
@@ -88,11 +88,11 @@ type Repository interface {
 	// It is filtered in SQL so a callback or reconciliation does not load the
 	// whole payment history just to check one receipt.
 	ListMpesaPaymentNotesByPrefix(businessID uuid.UUID, prefix string) ([]string, error)
-	// FindBankReconciliationApplication recovers a posting that already committed
-	// for a bank transaction even if the reconciliation link update failed. It
-	// checks every ledger table by the stable bank marker so a reviewer selecting
-	// a different target cannot settle the same transfer twice.
-	FindBankReconciliationApplication(businessID uuid.UUID, marker string) (ReconciledEntityType, uuid.UUID, bool, error)
+	// FindReconciliationApplication recovers a posting that already committed for
+	// a source transaction (M-Pesa or bank) even if the reconciliation link
+	// update failed. It checks every ledger table by the stable source marker so
+	// a retry that selects a different target cannot settle the source twice.
+	FindReconciliationApplication(businessID uuid.UUID, marker string) (ReconciledEntityType, uuid.UUID, bool, error)
 	FindInvoiceByNumber(businessID uuid.UUID, invoiceNumber string) (*invoices.Invoice, error)
 	FindCustomerByPhone(businessID uuid.UUID, phone string) (*customers.Customer, error)
 }
@@ -390,7 +390,13 @@ func (r *repository) UpdateMpesaReconciliation(tx *MpesaTransaction) error {
 		colReconciledEntityID:   tx.ReconciledEntityID,
 		colUpdatedAt:            time.Now(),
 	}
-	return r.db.Model(&MpesaTransaction{}).Where("id = ?", tx.ID).Updates(updates).Error
+	// A callback may load a row before a reviewer finalizes it. Only write when
+	// the row is still open so a late callback cannot clear or replace a
+	// finalized link; a blocked write is a no-op because the callback's
+	// financial effect is already deduped by the receipt marker.
+	return r.db.Model(&MpesaTransaction{}).
+		Where("id = ? AND reconciliation_status NOT IN ?", tx.ID, []ReconciliationStatus{Reconciled, Manual, Claiming}).
+		Updates(updates).Error
 }
 
 // nullableEntityType stores an unset entity type as NULL so it satisfies the
@@ -454,16 +460,6 @@ func (r *repository) ListBankTransactions(businessID uuid.UUID, txType string, s
 	return list, total, nil
 }
 
-func (r *repository) UpdateBankTransaction(tx *BankTransaction) error {
-	tx.UpdatedAt = time.Now()
-	return r.db.Model(&BankTransaction{}).Where("id = ?", tx.ID).Updates(map[string]any{
-		colReconciliationStatus: tx.ReconciliationStatus,
-		colReconciledEntityType: nullableEntityType(tx.ReconciledEntityType),
-		colReconciledEntityID:   tx.ReconciledEntityID,
-		colUpdatedAt:            tx.UpdatedAt,
-	}).Error
-}
-
 func (r *repository) ListMpesaPaymentNotesByPrefix(businessID uuid.UUID, prefix string) ([]string, error) {
 	notes := make([]string, 0)
 	like := prefix + "%"
@@ -495,10 +491,11 @@ func (r *repository) ListMpesaPaymentNotesByPrefix(businessID uuid.UUID, prefix 
 	return notes, nil
 }
 
-// FindBankReconciliationApplication looks for an already-committed ledger entry
-// tagged with the bank transaction's stable marker. Recovering by source
-// transaction prevents a retry that picks a different target from paying twice.
-func (r *repository) FindBankReconciliationApplication(businessID uuid.UUID, marker string) (ReconciledEntityType, uuid.UUID, bool, error) {
+// FindReconciliationApplication looks for an already-committed ledger entry
+// tagged with a source transaction's stable marker (M-Pesa receipt or bank
+// transaction id). Recovering by source transaction prevents a retry that picks
+// a different target from paying the same money twice.
+func (r *repository) FindReconciliationApplication(businessID uuid.UUID, marker string) (ReconciledEntityType, uuid.UUID, bool, error) {
 	like := marker + "%"
 
 	var invoicePayment invoices.InvoicePayment

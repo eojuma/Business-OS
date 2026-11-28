@@ -422,8 +422,10 @@ func (s *service) HandleSTKCallback(signatureHeader string, body []byte) error {
 
 	// Persist the terminal status before touching invoices or customer credit.
 	// This is the compare-and-set that makes a redelivered callback a no-op and
-	// closes the double-apply window reported on the original ordering.
-	claimed, err := s.repo.ClaimMpesaTransactionStatus(tx, terminal, StatusPending)
+	// closes the double-apply window reported on the original ordering. A timed
+	// out push is not final: the prompt may have reached the customer, so a late
+	// success may still resolve it.
+	claimed, err := s.repo.ClaimMpesaTransactionStatus(tx, terminal, StatusPending, StatusTimedOut)
 	if err != nil {
 		return fmt.Errorf("save callback status: %w", err)
 	}
@@ -1650,13 +1652,6 @@ func (s *service) ReconcileReviewItem(businessID uuid.UUID, itemID uuid.UUID, in
 		return err
 	}
 
-	// A timed-out payout is ambiguous: the money may still move. Keep it visible
-	// in the review queue, but never post it until an authoritative result marks
-	// it completed. Dismissal is still allowed.
-	if ctx.mpesaTx != nil && ctx.mpesaTx.Status == StatusTimedOut && input.TargetType != "dismiss" {
-		return ErrTransactionNotCompleted
-	}
-
 	// Release any claim abandoned by an interrupted prior attempt so it becomes
 	// reviewable again before we try to take a new claim.
 	_ = s.repo.ReleaseStaleReconciliationClaims(time.Now().Add(-reconciliationClaimTTL))
@@ -1704,11 +1699,30 @@ func (s *service) ReconcileReviewItem(businessID uuid.UUID, itemID uuid.UUID, in
 		}()
 	}
 
-	// A bank posting may have committed before its reconciliation link update
-	// failed. Recover it by the stable source marker before considering the newly
-	// selected target, otherwise the same transfer could pay two targets.
+	// A posting may have committed before its reconciliation link update failed.
+	// Recover it by the stable source marker before considering the newly
+	// selected target, otherwise the same money could be applied twice. This
+	// applies to M-Pesa receipts as well as bank transactions, including a
+	// dismissal: the row is linked to the posting that actually exists instead
+	// of being stranded as unmatched.
+	if ctx.mpesaTx != nil {
+		entityType, entityID, found, findErr := s.repo.FindReconciliationApplication(businessID, mpesaMarker(ctx.mpesaTx))
+		if findErr != nil {
+			return findErr
+		}
+		if found {
+			ctx.mpesaTx.ReconciliationStatus = Reconciled
+			ctx.mpesaTx.ReconciledEntityType = entityType
+			ctx.mpesaTx.ReconciledEntityID = &entityID
+			if finalizeErr := s.finalizeMpesaReconciliation(ctx.mpesaTx, entityType, entityID, ctx.claimID); finalizeErr != nil {
+				return finalizeErr
+			}
+			committed = true
+			return nil
+		}
+	}
 	if ctx.bankTx != nil {
-		entityType, entityID, found, findErr := s.repo.FindBankReconciliationApplication(businessID, bankMarker(ctx.bankTx))
+		entityType, entityID, found, findErr := s.repo.FindReconciliationApplication(businessID, bankMarker(ctx.bankTx))
 		if findErr != nil {
 			return findErr
 		}
@@ -1722,6 +1736,13 @@ func (s *service) ReconcileReviewItem(businessID uuid.UUID, itemID uuid.UUID, in
 			committed = true
 			return nil
 		}
+	}
+
+	// A timed-out payout is ambiguous: the money may still move. If no posting
+	// exists yet, never post it until an authoritative result completes it.
+	// Dismissal, or linking the committed posting recovered above, is allowed.
+	if ctx.mpesaTx != nil && ctx.mpesaTx.Status == StatusTimedOut && input.TargetType != "dismiss" {
+		return ErrTransactionNotCompleted
 	}
 
 	// One M-Pesa receipt must settle exactly one target. Check the receipt against

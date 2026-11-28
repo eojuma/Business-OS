@@ -27,10 +27,16 @@ const PhoneNumberTestConst = "0712345678"
 // sourceMpesaTestConst is the M-Pesa review-queue source used in fixtures.
 const sourceMpesaTestConst = "mpesa"
 
+// Review target names used in fixtures.
+const (
+	targetInvoiceTestConst = "invoice"
+	targetDismissTestConst = "dismiss"
+)
+
 // passkeyTestConst is a placeholder M-Pesa passkey used in test configurations.
 const passkeyTestConst = "passkey"
 
-type fakeBankApplication struct {
+type fakeApplication struct {
 	marker     string
 	entityType ReconciledEntityType
 	entityID   uuid.UUID
@@ -43,7 +49,7 @@ type fakePaymentRepository struct {
 	invoices          map[string]*invoices.Invoice
 	custs             map[string]*customers.Customer
 	paymentNotes      []string
-	bankApplication   *fakeBankApplication
+	application       *fakeApplication
 	claimErr          error
 	reconciliationErr error
 }
@@ -281,6 +287,12 @@ func (f *fakePaymentRepository) UpdateMpesaReconciliation(tx *MpesaTransaction) 
 	if !ok {
 		return gorm.ErrRecordNotFound
 	}
+	// Mirror the production guard: never overwrite a finalized reconciliation.
+	if stored.ReconciliationStatus == Reconciled ||
+		stored.ReconciliationStatus == Manual ||
+		stored.ReconciliationStatus == Claiming {
+		return nil
+	}
 	stored.ReconciliationStatus = tx.ReconciliationStatus
 	stored.ReconciledEntityType = tx.ReconciledEntityType
 	stored.ReconciledEntityID = tx.ReconciledEntityID
@@ -337,11 +349,6 @@ func (f *fakePaymentRepository) ListBankTransactions(businessID uuid.UUID, txTyp
 	return list, int64(len(list)), nil
 }
 
-func (f *fakePaymentRepository) UpdateBankTransaction(tx *BankTransaction) error {
-	f.bankTxs[tx.ID.String()] = tx
-	return nil
-}
-
 func (f *fakePaymentRepository) ListReviewQueue(businessID uuid.UUID, source string, limit, offset int) ([]ReviewQueueItem, int64, error) {
 	items := make([]ReviewQueueItem, 0)
 	if source == "" || source == "all" || source == sourceMpesaTestConst {
@@ -392,11 +399,11 @@ func (f *fakePaymentRepository) FindCustomerByPhone(businessID uuid.UUID, phone 
 	return nil, gorm.ErrRecordNotFound
 }
 
-// FindBankReconciliationApplication returns a configured fake posting so a
-// retry can be shown to recover the original target.
-func (f *fakePaymentRepository) FindBankReconciliationApplication(businessID uuid.UUID, marker string) (ReconciledEntityType, uuid.UUID, bool, error) {
-	if f.bankApplication != nil && f.bankApplication.marker == marker {
-		return f.bankApplication.entityType, f.bankApplication.entityID, true, nil
+// FindReconciliationApplication returns a configured fake posting so a retry
+// can be shown to recover the original target.
+func (f *fakePaymentRepository) FindReconciliationApplication(businessID uuid.UUID, marker string) (ReconciledEntityType, uuid.UUID, bool, error) {
+	if f.application != nil && f.application.marker == marker {
+		return f.application.entityType, f.application.entityID, true, nil
 	}
 	return "", uuid.Nil, false, nil
 }
@@ -943,7 +950,7 @@ func TestReviewQueueAndManualReconcile(t *testing.T) {
 	// Manually reconcile to invoice
 	recInput := ReconcileInput{
 		Source:     sourceMpesaTestConst,
-		TargetType: "invoice",
+		TargetType: targetInvoiceTestConst,
 		TargetID:   invID.String(),
 		Note:       "Manual reconciliation",
 	}
@@ -1247,7 +1254,7 @@ func TestReconcileRejectsDirectionMismatch(t *testing.T) {
 	_ = repo.CreateBankTransaction(inflow)
 
 	if err := svc.ReconcileReviewItem(businessID, outflow.ID, ReconcileInput{
-		Source: "bank", TargetType: "invoice", TargetID: uuid.New().String(),
+		Source: "bank", TargetType: targetInvoiceTestConst, TargetID: uuid.New().String(),
 	}); !errors.Is(err, ErrTargetDirectionMismatch) {
 		t.Fatalf("outflow -> invoice error = %v, want ErrTargetDirectionMismatch", err)
 	}
@@ -1287,7 +1294,7 @@ func TestReconcileRejectsB2CInvoice(t *testing.T) {
 	_ = repo.CreateMpesaTransaction(tx)
 
 	if err := svc.ReconcileReviewItem(businessID, tx.ID, ReconcileInput{
-		Source: sourceMpesaTestConst, TargetType: "invoice", TargetID: uuid.New().String(),
+		Source: sourceMpesaTestConst, TargetType: targetInvoiceTestConst, TargetID: uuid.New().String(),
 	}); !errors.Is(err, ErrTargetDirectionMismatch) {
 		t.Fatalf("B2C -> invoice error = %v, want ErrTargetDirectionMismatch", err)
 	}
@@ -1453,7 +1460,7 @@ func TestTimedOutPayoutCannotBePosted(t *testing.T) {
 	}
 
 	// Dismissal is still allowed for a timed-out row.
-	if err := svc.ReconcileReviewItem(businessID, tx.ID, ReconcileInput{Source: sourceMpesaTestConst, TargetType: "dismiss"}); err != nil {
+	if err := svc.ReconcileReviewItem(businessID, tx.ID, ReconcileInput{Source: sourceMpesaTestConst, TargetType: targetDismissTestConst}); err != nil {
 		t.Fatalf("dismissing a timed-out payout failed: %v", err)
 	}
 	stored, _ := repo.GetMpesaTransactionByID(tx.ID, businessID)
@@ -1481,7 +1488,7 @@ func TestBankReconcileRecoversExistingPosting(t *testing.T) {
 	// Simulate a payment that committed for invoice A before the link update
 	// failed, then a reviewer selects invoice B.
 	existingInvoice := uuid.New()
-	repo.bankApplication = &fakeBankApplication{
+	repo.application = &fakeApplication{
 		marker:     bankMarker(tx),
 		entityType: EntityInvoice,
 		entityID:   existingInvoice,
@@ -1489,7 +1496,7 @@ func TestBankReconcileRecoversExistingPosting(t *testing.T) {
 
 	err := svc.ReconcileReviewItem(businessID, tx.ID, ReconcileInput{
 		Source:     "bank",
-		TargetType: "invoice",
+		TargetType: targetInvoiceTestConst,
 		TargetID:   uuid.New().String(),
 	})
 	if err != nil {
@@ -1504,6 +1511,106 @@ func TestBankReconcileRecoversExistingPosting(t *testing.T) {
 	}
 	if invSvc.paidInvoiceID != uuid.Nil {
 		t.Fatal("recovery must not post a second invoice payment")
+	}
+}
+
+// A posting may commit before its reconciliation link update fails. The review
+// path must recover that posting by receipt marker instead of returning
+// ErrAlreadyReconciled forever, including when the reviewer dismisses the item.
+func TestMpesaReviewRecoversCommittedPosting(t *testing.T) {
+	cases := []struct {
+		name   string
+		status TransactionStatus
+		target string
+	}{
+		{"completed invoice", StatusCompleted, targetInvoiceTestConst},
+		{"completed dismiss", StatusCompleted, targetDismissTestConst},
+		// A timed-out row may still have moved money; recover the posting
+		// instead of refusing the item as unpostable.
+		{"timed out invoice", StatusTimedOut, targetInvoiceTestConst},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			repo := newFakePaymentRepository()
+			invSvc := &mockInvoicesService{}
+			svc := NewService(repo, nil, &config.Config{}, invSvc, nil, nil, nil)
+			businessID := uuid.New()
+
+			tx := &MpesaTransaction{
+				ID:                   uuid.New(),
+				BusinessID:           businessID,
+				TransactionType:      TypeSTKPush,
+				MpesaReceiptNumber:   "QK-RECOVER-1",
+				Amount:               5000,
+				Status:               tc.status,
+				ReconciliationStatus: Unmatched,
+			}
+			_ = repo.CreateMpesaTransaction(tx)
+
+			// The payment committed for this invoice, but the link update failed.
+			existingInvoice := uuid.New()
+			repo.application = &fakeApplication{
+				marker:     mpesaMarker(tx),
+				entityType: EntityInvoice,
+				entityID:   existingInvoice,
+			}
+
+			input := ReconcileInput{Source: sourceMpesaTestConst, TargetType: tc.target}
+			if tc.target == targetInvoiceTestConst {
+				input.TargetID = uuid.New().String()
+			}
+			if err := svc.ReconcileReviewItem(businessID, tx.ID, input); err != nil {
+				t.Fatalf("recovering a committed mpesa posting failed: %v", err)
+			}
+
+			stored, _ := repo.GetMpesaTransactionByID(tx.ID, businessID)
+			if stored.ReconciliationStatus != Reconciled || stored.ReconciledEntityType != EntityInvoice {
+				t.Fatalf("expected reconciled to the existing invoice, got %s / %s", stored.ReconciliationStatus, stored.ReconciledEntityType)
+			}
+			if stored.ReconciledEntityID == nil || *stored.ReconciledEntityID != existingInvoice {
+				t.Fatalf("recovered the wrong entity: %v", stored.ReconciledEntityID)
+			}
+			if invSvc.paidInvoiceID != uuid.Nil {
+				t.Fatal("recovery must not post a second invoice payment")
+			}
+		})
+	}
+}
+
+// A callback that loaded an open row before a reviewer finalized it must not
+// clear or replace the finalized reconciliation link.
+func TestCallbackReconciliationDoesNotClobberFinalizedLink(t *testing.T) {
+	repo := newFakePaymentRepository()
+	businessID := uuid.New()
+	entityID := uuid.New()
+	tx := &MpesaTransaction{
+		ID:                   uuid.New(),
+		BusinessID:           businessID,
+		TransactionType:      TypeSTKPush,
+		MpesaReceiptNumber:   "QK-CLOBBER-1",
+		Amount:               5000,
+		Status:               StatusCompleted,
+		ReconciliationStatus: Reconciled,
+		ReconciledEntityType: EntityInvoice,
+		ReconciledEntityID:   &entityID,
+	}
+	_ = repo.CreateMpesaTransaction(tx)
+
+	// The callback loaded the row while it was still unmatched.
+	stale := *tx
+	stale.ReconciliationStatus = Unmatched
+	stale.ReconciledEntityType = ""
+	stale.ReconciledEntityID = nil
+	if err := repo.UpdateMpesaReconciliation(&stale); err != nil {
+		t.Fatalf("guarded reconciliation update failed: %v", err)
+	}
+
+	stored, _ := repo.GetMpesaTransactionByID(tx.ID, businessID)
+	if stored.ReconciliationStatus != Reconciled || stored.ReconciledEntityType != EntityInvoice {
+		t.Fatalf("finalized link was clobbered: %s / %s", stored.ReconciliationStatus, stored.ReconciledEntityType)
+	}
+	if stored.ReconciledEntityID == nil || *stored.ReconciledEntityID != entityID {
+		t.Fatalf("finalized entity was cleared: %v", stored.ReconciledEntityID)
 	}
 }
 
@@ -1971,5 +2078,38 @@ func TestInitiateSTKAmbiguousNetworkUsesTimedOut(t *testing.T) {
 	items, total, err := svc.ListReviewQueue(businessID, sourceMpesaTestConst, 1, 10)
 	if err != nil || total != 1 || len(items) != 1 {
 		t.Fatalf("expected 1 review item for the timed-out STK, got %d (err %v)", total, err)
+	}
+}
+
+// A timed-out STK push is not final: the prompt may still reach the customer,
+// so a late success callback must resolve it instead of being dropped.
+func TestLateSTKCallbackResolvesTimedOut(t *testing.T) {
+	repo := newFakePaymentRepository()
+	cfg := &config.Config{MpesaCallbackSecret: "sec"}
+	svc := NewService(repo, nil, cfg, nil, nil, nil, nil)
+	businessID := uuid.New()
+
+	tx := &MpesaTransaction{
+		ID:                   uuid.New(),
+		BusinessID:           businessID,
+		TransactionType:      TypeSTKPush,
+		CheckoutRequestID:    "ws_CO_LATE",
+		Amount:               5000,
+		Status:               StatusTimedOut,
+		ReconciliationStatus: Unmatched,
+	}
+	_ = repo.CreateMpesaTransaction(tx)
+
+	body := []byte(`{"Body":{"stkCallback":{"CheckoutRequestID":"ws_CO_LATE","ResultCode":0,"ResultDesc":"ok","CallbackMetadata":{"Item":[{"Name":"MpesaReceiptNumber","Value":"QK-LATE-1"},{"Name":"Amount","Value":50.0},{"Name":"PhoneNumber","Value":"254712345678"}]}}}}`)
+	if err := svc.HandleSTKCallback(computeHMAC(cfg.MpesaCallbackSecret, body), body); err != nil {
+		t.Fatalf("late callback failed: %v", err)
+	}
+
+	stored, _ := repo.GetMpesaTransactionByID(tx.ID, businessID)
+	if stored.Status != StatusCompleted {
+		t.Fatalf("status = %s, want completed", stored.Status)
+	}
+	if stored.MpesaReceiptNumber != "QK-LATE-1" {
+		t.Fatalf("receipt = %q, want QK-LATE-1", stored.MpesaReceiptNumber)
 	}
 }

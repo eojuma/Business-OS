@@ -112,6 +112,10 @@ export default function FinancePage() {
   // not the one captured when the request started, so switching tabs mid-flight
   // cannot reload the wrong resource or discard the new tab's load.
   const activeTabRef = useRef<TabType>("overview");
+  // Ownership token for modal submissions. Opening another modal or cancelling
+  // invalidates the token, so a slow completion cannot close or error a newer
+  // modal.
+  const submissionToken = useRef(0);
 
   /** Point the reload helper at the new tab before React renders it. */
   function selectTab(tab: TabType) {
@@ -198,6 +202,7 @@ export default function FinancePage() {
   /** Record expense */
   async function submitExpense(e: React.FormEvent) {
     e.preventDefault();
+    const token = ++submissionToken.current;
     setModalError("");
     const cents = parseCents(amount);
     if (!cents) {
@@ -206,12 +211,14 @@ export default function FinancePage() {
     }
     try {
       await api.post("/finance/expenses", { category, description, amount: cents });
+      if (token !== submissionToken.current) return;
       setAmount("");
       setDescription("");
       setShowExpenseForm(false);
       setMessage(`Expense recorded successfully for ${formatMoney(cents)}.`);
       await loadData();
     } catch (e: any) {
+      if (token !== submissionToken.current) return;
       setModalError(e.response?.data?.error || "Failed to save expense");
     }
   }
@@ -219,6 +226,7 @@ export default function FinancePage() {
   /** Send M-Pesa STK push */
   async function submitSTK(e: React.FormEvent) {
     e.preventDefault();
+    const token = ++submissionToken.current;
     setModalError("");
     const cents = parseCents(stkAmount);
     if (!cents) {
@@ -230,7 +238,8 @@ export default function FinancePage() {
       return;
     }
     try {
-      const signature = `${stkPhone}|${cents}`;
+      const reference = stkRef.trim() || "BusinessOS";
+      const signature = `${stkPhone}|${cents}|${reference}`;
       if (stkKeyRef.current.signature !== signature) {
         const random =
           typeof crypto !== "undefined" && "randomUUID" in crypto
@@ -241,10 +250,11 @@ export default function FinancePage() {
       await api.post("/payments/mpesa/stk-push", {
         phone_number: stkPhone,
         amount: cents,
-        account_reference: stkRef || "BusinessOS",
+        account_reference: reference,
         transaction_desc: "Direct M-Pesa Payment",
         idempotency_key: stkKeyRef.current.key,
       });
+      if (token !== submissionToken.current) return;
       // A new attempt after a successful initiation gets a fresh key.
       stkKeyRef.current = { signature: "", key: "" };
       setShowSTKModal(false);
@@ -254,6 +264,7 @@ export default function FinancePage() {
       setMessage(`STK push for ${formatMoney(cents)} initiated! The customer will be prompted on their phone.`);
       await loadData();
     } catch (e: any) {
+      if (token !== submissionToken.current) return;
       setModalError(e.response?.data?.error || "Failed to initiate STK push");
     }
   }
@@ -261,6 +272,7 @@ export default function FinancePage() {
   /** Record manual bank transfer */
   async function submitBankManual(e: React.FormEvent) {
     e.preventDefault();
+    const token = ++submissionToken.current;
     setModalError("");
     const cents = parseCents(bankAmount);
     if (!cents) {
@@ -275,6 +287,7 @@ export default function FinancePage() {
         amount: cents,
         description: bankDesc,
       });
+      if (token !== submissionToken.current) return;
       setShowBankManualModal(false);
       setBankRef("");
       setBankAmount("");
@@ -283,6 +296,7 @@ export default function FinancePage() {
       setMessage(bankTransferMessage(tx.amount, tx.reconciliation_status));
       await loadData();
     } catch (e: any) {
+      if (token !== submissionToken.current) return;
       setModalError(e.response?.data?.error || "Failed to record bank transfer");
     }
   }
@@ -290,6 +304,7 @@ export default function FinancePage() {
   /** Upload bank statement CSV */
   async function submitStatement(e: React.FormEvent) {
     e.preventDefault();
+    const token = ++submissionToken.current;
     setModalError("");
     if (!statementFile) return;
     const formData = new FormData();
@@ -300,6 +315,7 @@ export default function FinancePage() {
       const res = await api.post("/payments/bank/statement", formData, {
         headers: { "Content-Type": "multipart/form-data" },
       });
+      if (token !== submissionToken.current) return;
       setShowStatementModal(false);
       setStatementFile(null);
       const r = res.data.data;
@@ -308,6 +324,7 @@ export default function FinancePage() {
       );
       await loadData();
     } catch (e: any) {
+      if (token !== submissionToken.current) return;
       setModalError(e.response?.data?.error || "Failed to import bank statement");
     }
   }
@@ -315,6 +332,7 @@ export default function FinancePage() {
   /** Reconcile Review Item */
   async function submitReconcile(e: React.FormEvent) {
     e.preventDefault();
+    const token = ++submissionToken.current;
     setModalError("");
     if (!reconcileTarget) return;
     if (
@@ -342,6 +360,7 @@ export default function FinancePage() {
         expense_category: recExpenseCategory,
         note: recNote,
       });
+      if (token !== submissionToken.current) return;
       setReconcileTarget(null);
       const label = recType === "invoice" ? "invoice settlement" :
                     recType === "customer_credit" ? "customer credit" :
@@ -351,6 +370,7 @@ export default function FinancePage() {
       setMessage(`Transaction successfully reconciled as ${label}.`);
       await loadData();
     } catch (e: any) {
+      if (token !== submissionToken.current) return;
       setModalError(e.response?.data?.error || "Failed to reconcile transaction");
     }
   }
@@ -379,21 +399,21 @@ export default function FinancePage() {
           canManage ? (
             <div className="flex flex-wrap gap-2">
               {activeTab === "overview" && (
-                <button className="btn-primary" onClick={() => { setModalError(""); setShowExpenseForm(true); }}>
+                <button className="btn-primary" onClick={() => { submissionToken.current += 1; setModalError(""); setShowExpenseForm(true); }}>
                   <Plus size={16} /> Record expense
                 </button>
               )}
               {activeTab === "mpesa" && (
-                <button className="btn-primary" onClick={() => { setModalError(""); setShowSTKModal(true); }}>
+                <button className="btn-primary" onClick={() => { submissionToken.current += 1; setModalError(""); setShowSTKModal(true); }}>
                   <Smartphone size={16} /> Initiate STK Push
                 </button>
               )}
               {activeTab === "bank" && (
                 <>
-                  <button className="btn-secondary" onClick={() => { setModalError(""); setShowStatementModal(true); }}>
+                  <button className="btn-secondary" onClick={() => { submissionToken.current += 1; setModalError(""); setShowStatementModal(true); }}>
                     <Upload size={16} /> Import Statement
                   </button>
-                  <button className="btn-primary" onClick={() => { setModalError(""); setShowBankManualModal(true); }}>
+                  <button className="btn-primary" onClick={() => { submissionToken.current += 1; setModalError(""); setShowBankManualModal(true); }}>
                     <Building2 size={16} /> Record Bank Transfer
                   </button>
                 </>
@@ -512,6 +532,7 @@ export default function FinancePage() {
                   type="button"
                   className="btn-secondary"
                   onClick={() => {
+                    submissionToken.current += 1;
                     setShowExpenseForm(false);
                     setModalError("");
                   }}
@@ -741,6 +762,7 @@ export default function FinancePage() {
                             <button
                               className="btn-secondary py-1 text-xs"
                               onClick={() => {
+                                submissionToken.current += 1;
                                 setModalError("");
                                 setReconcileTarget(item);
                                 setRecType(item.type === "outflow" ? "expense" : "invoice");
@@ -815,6 +837,7 @@ export default function FinancePage() {
                 type="button"
                 className="btn-secondary"
                 onClick={() => {
+                  submissionToken.current += 1;
                   setShowSTKModal(false);
                   setModalError("");
                 }}
@@ -898,6 +921,7 @@ export default function FinancePage() {
                 type="button"
                 className="btn-secondary"
                 onClick={() => {
+                  submissionToken.current += 1;
                   setShowBankManualModal(false);
                   setModalError("");
                 }}
@@ -951,6 +975,7 @@ export default function FinancePage() {
                 type="button"
                 className="btn-secondary"
                 onClick={() => {
+                  submissionToken.current += 1;
                   setShowStatementModal(false);
                   setModalError("");
                 }}
@@ -1085,6 +1110,7 @@ export default function FinancePage() {
                 type="button"
                 className="btn-secondary"
                 onClick={() => {
+                  submissionToken.current += 1;
                   setReconcileTarget(null);
                   setModalError("");
                 }}

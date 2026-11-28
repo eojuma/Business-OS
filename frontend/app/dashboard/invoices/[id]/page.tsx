@@ -164,6 +164,9 @@ export default function InvoiceDetailPage() {
         // requests. The server accepts them as one idempotent operation.
         idempotency_key: `stk-${invoice.id}`,
       });
+      // Discard background reads that started before this submission so a
+      // stale unpaid snapshot cannot overwrite a newer paid invoice.
+      invoiceGeneration.current += 1;
       setStkSuccess("M-Pesa STK push prompt sent! Payment will automatically reconcile upon confirmation.");
       // Refresh after the callback window and keep polling within a bounded
       // window until the payment settles. That avoids leaving the page with stale

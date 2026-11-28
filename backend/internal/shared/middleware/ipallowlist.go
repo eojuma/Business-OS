@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"fmt"
 	"net/netip"
 	"strings"
 
@@ -10,10 +11,17 @@ import (
 
 // RequireIPAllowlist restricts a route to the configured IPs/CIDRs. An empty
 // allowlist disables the check so deployments that have not configured it keep
-// working; the callback token and HMAC still apply.
+// working; the callback token and HMAC still apply. A nonempty allowlist that
+// contains an invalid entry fails closed instead of silently becoming
+// unrestricted.
 func RequireIPAllowlist(entries []string) gin.HandlerFunc {
-	prefixes := parsePrefixes(entries)
+	prefixes, parseErr := parsePrefixes(entries)
 	return func(c *gin.Context) {
+		if parseErr != nil {
+			response.Error(c, 403, "callback source not allowed")
+			c.Abort()
+			return
+		}
 		if len(prefixes) == 0 {
 			c.Next()
 			return
@@ -35,7 +43,7 @@ func RequireIPAllowlist(entries []string) gin.HandlerFunc {
 	}
 }
 
-func parsePrefixes(entries []string) []netip.Prefix {
+func parsePrefixes(entries []string) ([]netip.Prefix, error) {
 	prefixes := make([]netip.Prefix, 0, len(entries))
 	for _, entry := range entries {
 		entry = strings.TrimSpace(entry)
@@ -47,10 +55,13 @@ func parsePrefixes(entries []string) []netip.Prefix {
 				prefixes = append(prefixes, netip.PrefixFrom(addr, addr.BitLen()))
 				continue
 			}
+			return nil, fmt.Errorf("invalid IP allowlist entry %q", entry)
 		}
-		if prefix, err := netip.ParsePrefix(entry); err == nil {
-			prefixes = append(prefixes, prefix)
+		prefix, err := netip.ParsePrefix(entry)
+		if err != nil {
+			return nil, fmt.Errorf("invalid IP allowlist entry %q: %w", entry, err)
 		}
+		prefixes = append(prefixes, prefix)
 	}
-	return prefixes
+	return prefixes, nil
 }

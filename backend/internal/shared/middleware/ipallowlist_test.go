@@ -51,3 +51,18 @@ func TestRequireIPAllowlistEmptyAllowsAll(t *testing.T) {
 		t.Fatalf("status = %d, want 200", w.Code)
 	}
 }
+
+func TestRequireIPAllowlistInvalidEntryFailsClosed(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.Use(RequireIPAllowlist([]string{"203.0.113.7/33"}))
+	router.POST("/callback", func(c *gin.Context) { c.Status(http.StatusOK) })
+
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/callback", nil)
+	req.RemoteAddr = "203.0.113.7:5555"
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403 for an invalid allowlist", w.Code)
+	}
+}

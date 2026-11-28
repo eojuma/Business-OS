@@ -67,6 +67,10 @@ type Repository interface {
 	// the transaction status. It never overwrites a reconciliation that another
 	// writer has already finalized.
 	UpdateMpesaReconciliation(tx *MpesaTransaction) error
+	// AdoptMpesaReconciliation records the settlement for a payout that
+	// completed after an operator dismissed it, reopening the terminal Manual
+	// state so the link is not silently lost.
+	AdoptMpesaReconciliation(tx *MpesaTransaction) error
 	UpdateMpesaTransaction(tx *MpesaTransaction) error
 	ListMpesaTransactions(businessID uuid.UUID, limit, offset int) ([]MpesaTransaction, int64, error)
 
@@ -399,6 +403,20 @@ func (r *repository) UpdateMpesaReconciliation(tx *MpesaTransaction) error {
 		Updates(updates).Error
 }
 
+// AdoptMpesaReconciliation writes the settlement for a late-completed payout
+// that was previously dismissed. It is deliberately scoped to Manual rows so
+// it cannot overwrite any other state.
+func (r *repository) AdoptMpesaReconciliation(tx *MpesaTransaction) error {
+	return r.db.Model(&MpesaTransaction{}).
+		Where("id = ? AND reconciliation_status = ?", tx.ID, Manual).
+		Updates(map[string]any{
+			colReconciliationStatus: tx.ReconciliationStatus,
+			colReconciledEntityType: nullableEntityType(tx.ReconciledEntityType),
+			colReconciledEntityID:   tx.ReconciledEntityID,
+			colUpdatedAt:            time.Now(),
+		}).Error
+}
+
 // nullableEntityType stores an unset entity type as NULL so it satisfies the
 // column check constraint.
 func nullableEntityType(entity ReconciledEntityType) any {
@@ -572,6 +590,8 @@ func (r *repository) ListReviewQueue(businessID uuid.UUID, source string, limit,
 				Description:  m.AccountReference + " " + m.BillRefNumber,
 				TransactedAt: m.CreatedAt,
 				Status:       string(m.ReconciliationStatus),
+				// The gateway status decides whether the row can be acted on.
+				TransactionStatus: string(m.Status),
 			})
 		}
 	}
@@ -622,12 +642,22 @@ func (r *repository) FindInvoiceByNumber(businessID uuid.UUID, invoiceNumber str
 	var inv invoices.Invoice
 	q := r.db.Where("LOWER(invoice_number) = LOWER(?)", invoiceNumber)
 	if businessID != uuid.Nil {
-		q = q.Where("business_id = ?", businessID)
+		if err := q.Where("business_id = ?", businessID).First(&inv).Error; err != nil {
+			return nil, err
+		}
+		return &inv, nil
 	}
-	if err := q.First(&inv).Error; err != nil {
+	// An unscoped lookup is used only for public C2B attribution. Invoice
+	// numbers are unique per business, not globally, so a match is usable only
+	// when exactly one business has it; otherwise the payment is unattributable.
+	var matches []invoices.Invoice
+	if err := q.Limit(2).Find(&matches).Error; err != nil {
 		return nil, err
 	}
-	return &inv, nil
+	if len(matches) != 1 {
+		return nil, gorm.ErrRecordNotFound
+	}
+	return &matches[0], nil
 }
 
 func (r *repository) FindCustomerByPhone(businessID uuid.UUID, phone string) (*customers.Customer, error) {

@@ -37,6 +37,10 @@ var (
 	ErrIdempotencyKeyConflict  = errors.New("idempotency key already used for different request")
 	ErrBusinessNotBound        = errors.New("business is not authorized to use deployment daraja account")
 	ErrPageOutOfBounds         = errors.New("page out of bounds")
+	// ErrAmountNotWholeKSh rejects amounts Daraja cannot send exactly: the API
+	// takes whole shillings, so a sub-shilling remainder would be silently
+	// rounded while the stored amount stayed in cents.
+	ErrAmountNotWholeKSh = errors.New("amount must be a whole number of shillings")
 )
 
 const (
@@ -47,14 +51,14 @@ const (
 type Service interface {
 	InitiateSTKPush(ctx context.Context, businessID uuid.UUID, input STKPushInput) (*MpesaTransaction, error)
 	HandleSTKCallback(signatureHeader string, body []byte) error
-	HandleC2BValidation(signatureHeader string, req C2BValidationRequest) (C2BValidationResponse, error)
-	HandleC2BConfirmation(signatureHeader string, req C2BConfirmationRequest, businessID uuid.UUID) (C2BConfirmationResponse, error)
+	HandleC2BValidation(signatureHeader string, body []byte, req C2BValidationRequest) (C2BValidationResponse, error)
+	HandleC2BConfirmation(signatureHeader string, body []byte, req C2BConfirmationRequest, businessID uuid.UUID) (C2BConfirmationResponse, error)
 	InitiateB2C(ctx context.Context, businessID uuid.UUID, input B2CPayoutInput) (*MpesaTransaction, error)
 	HandleB2CResult(signatureHeader string, body []byte) error
 	HandleB2CTimeout(signatureHeader string, body []byte) error
 
-	RecordManualBankTransfer(businessID uuid.UUID, input BankManualInput) (*BankTransaction, error)
-	ImportBankStatement(businessID uuid.UUID, bankName string, r io.Reader) (*StatementImportResult, error)
+	RecordManualBankTransfer(businessID uuid.UUID, input BankManualInput, canPostExpenses bool) (*BankTransaction, error)
+	ImportBankStatement(businessID uuid.UUID, bankName string, r io.Reader, canPostExpenses bool) (*StatementImportResult, error)
 	ListBankTransactions(businessID uuid.UUID, txType string, status string, page, limit int) ([]BankTransaction, int64, error)
 	ListMpesaTransactions(businessID uuid.UUID, page, limit int) ([]MpesaTransaction, int64, error)
 
@@ -214,6 +218,9 @@ func (s *service) InitiateSTKPush(ctx context.Context, businessID uuid.UUID, inp
 	if input.Amount <= 0 {
 		return nil, ErrInvalidAmount
 	}
+	if input.Amount%100 != 0 {
+		return nil, ErrAmountNotWholeKSh
+	}
 	phone := NormalizePhone(input.PhoneNumber)
 	if phone == "" {
 		return nil, ErrMissingPhone
@@ -250,11 +257,9 @@ func (s *service) InitiateSTKPush(ctx context.Context, businessID uuid.UUID, inp
 	passkey := s.cfg.MpesaPasskey
 	password := GeneratePassword(shortCode, passkey, timestamp)
 
-	// Daraja API takes whole KSh units (minimum 1)
+	// Daraja takes whole KSh units; the amount was validated as a positive
+	// whole-KSh value before reserving.
 	kshAmount := input.Amount / 100
-	if kshAmount <= 0 {
-		kshAmount = 1
-	}
 
 	desc := strings.TrimSpace(input.TransactionDesc)
 	if desc == "" {
@@ -452,8 +457,8 @@ func (s *service) HandleSTKCallback(signatureHeader string, body []byte) error {
 }
 
 // HandleC2BValidation validates incoming C2B payment before acceptance.
-func (s *service) HandleC2BValidation(signatureHeader string, req C2BValidationRequest) (C2BValidationResponse, error) {
-	if !s.validCallback(nil, signatureHeader) {
+func (s *service) HandleC2BValidation(signatureHeader string, body []byte, req C2BValidationRequest) (C2BValidationResponse, error) {
+	if !s.validCallback(body, signatureHeader) {
 		return C2BValidationResponse{ResultCode: 1, ResultDesc: DescInvalidSignature}, ErrInvalidSignature
 	}
 
@@ -477,8 +482,8 @@ func (s *service) HandleC2BValidation(signatureHeader string, req C2BValidationR
 }
 
 // HandleC2BConfirmation handles confirmed C2B payment with automatic reconciliation.
-func (s *service) HandleC2BConfirmation(signatureHeader string, req C2BConfirmationRequest, businessID uuid.UUID) (C2BConfirmationResponse, error) {
-	if !s.validCallback(nil, signatureHeader) {
+func (s *service) HandleC2BConfirmation(signatureHeader string, body []byte, req C2BConfirmationRequest, businessID uuid.UUID) (C2BConfirmationResponse, error) {
+	if !s.validCallback(body, signatureHeader) {
 		return C2BConfirmationResponse{ResultCode: 1, ResultDesc: DescInvalidSignature}, ErrInvalidSignature
 	}
 
@@ -555,6 +560,9 @@ func (s *service) InitiateB2C(ctx context.Context, businessID uuid.UUID, input B
 	if input.Amount <= 0 {
 		return nil, ErrInvalidAmount
 	}
+	if input.Amount%100 != 0 {
+		return nil, ErrAmountNotWholeKSh
+	}
 	phone := NormalizePhone(input.PhoneNumber)
 	if phone == "" {
 		return nil, ErrMissingPhone
@@ -607,9 +615,6 @@ func (s *service) InitiateB2C(ctx context.Context, businessID uuid.UUID, input B
 		shortCode = s.cfg.MpesaShortCode
 	}
 	kshAmount := input.Amount / 100
-	if kshAmount <= 0 {
-		kshAmount = 1
-	}
 
 	darajaReq := DarajaB2CRequest{
 		InitiatorName:      s.cfg.MpesaB2CInitiatorName,
@@ -755,6 +760,12 @@ func (s *service) HandleB2CResult(signatureHeader string, body []byte) error {
 		return nil
 	}
 
+	// Adopt a Manual row that was dismissed before this late result (the update
+	// is scoped to Manual, so it is a no-op otherwise); then persist an open
+	// row through the normal guarded update.
+	if err := s.repo.AdoptMpesaReconciliation(tx); err != nil {
+		return err
+	}
 	return s.repo.UpdateMpesaReconciliation(tx)
 }
 
@@ -1135,7 +1146,7 @@ func (s *service) findMpesaExpense(tx *MpesaTransaction, marker string) (*financ
 }
 
 // RecordManualBankTransfer records a single bank transfer and attempts auto-reconciliation.
-func (s *service) RecordManualBankTransfer(businessID uuid.UUID, input BankManualInput) (*BankTransaction, error) {
+func (s *service) RecordManualBankTransfer(businessID uuid.UUID, input BankManualInput, canPostExpenses bool) (*BankTransaction, error) {
 	ref := strings.TrimSpace(input.Reference)
 	if ref == "" {
 		return nil, ErrMissingReference
@@ -1189,7 +1200,7 @@ func (s *service) RecordManualBankTransfer(businessID uuid.UUID, input BankManua
 	// posting may have committed even if linking the reconciliation failed, so
 	// report the durable row as unmatched for the review queue rather than
 	// claiming a reconciliation that was not stored.
-	if err := s.autoReconcileBank(tx); err != nil {
+	if err := s.autoReconcileBank(tx, canPostExpenses); err != nil {
 		log.Printf("payments: automatic bank reconciliation for %s failed: %v", tx.ID, err)
 		tx.ReconciliationStatus = Unmatched
 		tx.ReconciledEntityType = ""
@@ -1203,7 +1214,7 @@ func (s *service) RecordManualBankTransfer(businessID uuid.UUID, input BankManua
 // manual review, then attempts automatic matching. If review already owns the
 // claim, automatic posting is skipped; if automatic posting loses its claim
 // before finalizing, it cannot overwrite the replacement attempt.
-func (s *service) autoReconcileBank(tx *BankTransaction) error {
+func (s *service) autoReconcileBank(tx *BankTransaction, canPostExpenses bool) error {
 	claimID := uuid.New()
 	claimed, err := s.repo.ClaimBankReconciliation(tx, Unmatched, Claiming, claimID)
 	if err != nil {
@@ -1220,7 +1231,7 @@ func (s *service) autoReconcileBank(tx *BankTransaction) error {
 		}
 	}()
 
-	s.matchBankTransaction(tx)
+	s.matchBankTransaction(tx, canPostExpenses)
 	if tx.ReconciliationStatus != Reconciled {
 		return nil
 	}
@@ -1240,7 +1251,7 @@ func (s *service) autoReconcileBank(tx *BankTransaction) error {
 
 // matchBankTransaction matches bank inflows against invoices and outflows
 // against expenses. It only mutates the in-memory row; the caller commits it.
-func (s *service) matchBankTransaction(tx *BankTransaction) {
+func (s *service) matchBankTransaction(tx *BankTransaction, canPostExpenses bool) {
 	candidates := []string{strings.TrimSpace(tx.Reference), strings.TrimSpace(tx.Description)}
 	for _, word := range strings.Fields(tx.Description) {
 		clean := strings.Trim(word, ",.:;()")
@@ -1290,8 +1301,10 @@ func (s *service) matchBankTransaction(tx *BankTransaction) {
 				}
 			}
 		}
-	} else if tx.Type == BankOutflow && s.financeSvc != nil {
-		// Outflow matched as expense
+	} else if tx.Type == BankOutflow && s.financeSvc != nil && canPostExpenses {
+		// Outflow matched as expense. The caller must hold FinanceManage: the
+		// expense boundary is enforced here because automatic matching skips
+		// the review-queue permission check.
 		exp, err := s.financeSvc.CreateExpense(finance.CreateExpenseInput{
 			BusinessID:  tx.BusinessID,
 			Category:    "Operations",
@@ -1311,7 +1324,7 @@ func (s *service) matchBankTransaction(tx *BankTransaction) {
 }
 
 // ImportBankStatement imports a CSV bank statement, skipping duplicate references and auto-reconciling.
-func (s *service) ImportBankStatement(businessID uuid.UUID, bankName string, r io.Reader) (*StatementImportResult, error) {
+func (s *service) ImportBankStatement(businessID uuid.UUID, bankName string, r io.Reader, canPostExpenses bool) (*StatementImportResult, error) {
 	reader := csv.NewReader(r)
 	records, err := reader.ReadAll()
 	if err != nil || len(records) < 2 {
@@ -1384,16 +1397,15 @@ func (s *service) ImportBankStatement(businessID uuid.UUID, bankName string, r i
 			transDate = time.Now()
 		}
 
-		var inflowCents, outflowCents int64
-		if inflowIdx >= 0 && inflowIdx < len(row) && strings.TrimSpace(row[inflowIdx]) != "" {
-			if v, err := parseMoneyString(row[inflowIdx]); err == nil && v > 0 {
-				inflowCents = v
-			}
+		inflowCents, ok := parseStatementAmount(row, inflowIdx)
+		if !ok {
+			res.InvalidRows++
+			continue
 		}
-		if outflowIdx >= 0 && outflowIdx < len(row) && strings.TrimSpace(row[outflowIdx]) != "" {
-			if v, err := parseMoneyString(row[outflowIdx]); err == nil && v > 0 {
-				outflowCents = v
-			}
+		outflowCents, ok := parseStatementAmount(row, outflowIdx)
+		if !ok {
+			res.InvalidRows++
+			continue
 		}
 
 		var amountCents int64
@@ -1444,7 +1456,7 @@ func (s *service) ImportBankStatement(businessID uuid.UUID, bankName string, r i
 		if err := s.repo.CreateBankTransaction(tx); err != nil {
 			continue
 		}
-		if err := s.autoReconcileBank(tx); err != nil {
+		if err := s.autoReconcileBank(tx, canPostExpenses); err != nil {
 			log.Printf("payments: automatic statement reconciliation for %s failed: %v", tx.ID, err)
 			tx.ReconciliationStatus = Unmatched
 			tx.ReconciledEntityType = ""
@@ -1468,6 +1480,25 @@ func getHeaderIdx(m map[string]int, aliases ...string) int {
 		}
 	}
 	return -1
+}
+
+// parseStatementAmount parses an optional credit or debit column. A blank cell
+// is zero so the other side can still be used; a nonblank value that is
+// unparseable or negative is invalid. Treating a broken value as zero would
+// otherwise import the opposite column and post the wrong movement.
+func parseStatementAmount(row []string, idx int) (int64, bool) {
+	if idx < 0 || idx >= len(row) {
+		return 0, true
+	}
+	raw := strings.TrimSpace(row[idx])
+	if raw == "" {
+		return 0, true
+	}
+	v, err := parseMoneyString(raw)
+	if err != nil || v < 0 {
+		return 0, false
+	}
+	return v, true
 }
 
 func parseMoneyString(s string) (int64, error) {
@@ -1632,7 +1663,11 @@ func (s *service) ListReviewQueue(businessID uuid.UUID, source string, page, lim
 	}
 	offset := (page - 1) * limit
 	// Sweep interrupted reconciliation claims so stranded rows become reviewable.
-	_ = s.repo.ReleaseStaleReconciliationClaims(time.Now().Add(-reconciliationClaimTTL))
+	// Surface a cleanup failure instead of returning a queue that may silently
+	// omit an expired claim.
+	if err := s.repo.ReleaseStaleReconciliationClaims(time.Now().Add(-reconciliationClaimTTL)); err != nil {
+		return nil, 0, fmt.Errorf("release stale reconciliation claims: %w", err)
+	}
 	return s.repo.ListReviewQueue(businessID, source, limit, offset)
 }
 

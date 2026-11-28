@@ -1,6 +1,7 @@
 package payments
 
 import (
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -78,14 +79,22 @@ func (h *Handler) HandleSTKCallback(c *gin.Context) {
 }
 
 func (h *Handler) HandleC2BValidate(c *gin.Context) {
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxCallbackBodyBytes)
 	sig := extractSignature(c)
+	// Read the raw body so a sender that signs the body can be authenticated,
+	// not just deployments that use the URL token.
+	body, err := c.GetRawData()
+	if err != nil {
+		c.JSON(http.StatusOK, C2BValidationResponse{ResultCode: 1, ResultDesc: DescInvalidPayload})
+		return
+	}
 	var req C2BValidationRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
+	if err := json.Unmarshal(body, &req); err != nil {
 		c.JSON(http.StatusOK, C2BValidationResponse{ResultCode: 1, ResultDesc: DescInvalidJSON})
 		return
 	}
 
-	res, err := h.service.HandleC2BValidation(sig, req)
+	res, err := h.service.HandleC2BValidation(sig, body, req)
 	if err != nil && errors.Is(err, ErrInvalidSignature) {
 		c.JSON(http.StatusUnauthorized, res)
 		return
@@ -97,8 +106,13 @@ func (h *Handler) HandleC2BValidate(c *gin.Context) {
 func (h *Handler) HandleC2BConfirm(c *gin.Context) {
 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxCallbackBodyBytes)
 	sig := extractSignature(c)
+	body, err := c.GetRawData()
+	if err != nil {
+		c.JSON(http.StatusOK, C2BConfirmationResponse{ResultCode: 1, ResultDesc: DescInvalidPayload})
+		return
+	}
 	var req C2BConfirmationRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
+	if err := json.Unmarshal(body, &req); err != nil {
 		c.JSON(http.StatusOK, C2BConfirmationResponse{ResultCode: 1, ResultDesc: DescInvalidJSON})
 		return
 	}
@@ -107,7 +121,7 @@ func (h *Handler) HandleC2BConfirm(c *gin.Context) {
 	// missing business context is expected; the service resolves the tenant.
 	businessID, _ := middleware.CurrentBusinessID(c)
 
-	res, err := h.service.HandleC2BConfirmation(sig, req, businessID)
+	res, err := h.service.HandleC2BConfirmation(sig, body, req, businessID)
 	if err != nil && errors.Is(err, ErrInvalidSignature) {
 		c.JSON(http.StatusUnauthorized, res)
 		return
@@ -194,14 +208,19 @@ func (h *Handler) InitiateB2C(c *gin.Context) {
 	}
 
 	// A supplier-targeted payout settles a supplier payable, so it must require
-	// the SupplierPayment capability in addition to PaymentManage.
+	// the SupplierPayment capability in addition to PaymentManage. A payout
+	// without a supplier target posts an operating expense when it completes,
+	// so it equally requires FinanceManage.
+	role, _ := c.Get(middleware.ContextRoleKey)
+	roleStr, _ := role.(string)
 	if strings.TrimSpace(input.SupplierID) != "" {
-		role, _ := c.Get(middleware.ContextRoleKey)
-		roleStr, _ := role.(string)
 		if !permissions.Allows(roleStr, permissions.SupplierPayment) {
 			response.Error(c, http.StatusForbidden, "insufficient permissions")
 			return
 		}
+	} else if !permissions.Allows(roleStr, permissions.FinanceManage) {
+		response.Error(c, http.StatusForbidden, "insufficient permissions")
+		return
 	}
 
 	tx, err := h.service.InitiateB2C(c.Request.Context(), businessID, input)
@@ -248,7 +267,14 @@ func (h *Handler) RecordManualBank(c *gin.Context) {
 		return
 	}
 
-	tx, err := h.service.RecordManualBankTransfer(businessID, input)
+	// Automatic outflow matching can create an expense, which needs the same
+	// FinanceManage capability as the explicit expense endpoint. Callers
+	// without it may still record the transfer; it stays unmatched for review.
+	role, _ := c.Get(middleware.ContextRoleKey)
+	roleStr, _ := role.(string)
+	canPostExpenses := permissions.Allows(roleStr, permissions.FinanceManage)
+
+	tx, err := h.service.RecordManualBankTransfer(businessID, input, canPostExpenses)
 	if err != nil {
 		if errors.Is(err, ErrDuplicateReference) {
 			response.Error(c, http.StatusConflict, err.Error())
@@ -286,7 +312,13 @@ func (h *Handler) ImportBankStatement(c *gin.Context) {
 		r = strings.NewReader(string(bodyBytes))
 	}
 
-	result, err := h.service.ImportBankStatement(businessID, bankName, r)
+	// Imported outflows may auto-post expenses, so the importer needs the same
+	// FinanceManage capability. Without it the rows still import as unmatched.
+	role, _ := c.Get(middleware.ContextRoleKey)
+	roleStr, _ := role.(string)
+	canPostExpenses := permissions.Allows(roleStr, permissions.FinanceManage)
+
+	result, err := h.service.ImportBankStatement(businessID, bankName, r, canPostExpenses)
 	if err != nil {
 		response.Error(c, http.StatusBadRequest, err.Error())
 		return

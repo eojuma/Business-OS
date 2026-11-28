@@ -140,6 +140,10 @@ type ReviewQueueItem struct {
 	Description  string    `json:"description"`
 	TransactedAt time.Time `json:"transacted_at"`
 	Status       string    `json:"status"`
+	// TransactionStatus is the gateway status (M-Pesa only). Pending rows stay
+	// in the queue for visibility but cannot be reconciled until a result
+	// arrives, so the UI hides the action for them.
+	TransactionStatus string `json:"transaction_status"`
 }
 
 // Input DTOs

@@ -118,7 +118,10 @@ func (f *fakePaymentRepository) GetMpesaTransactionByIdempotency(businessID uuid
 func (f *fakePaymentRepository) GetMpesaTransactionByCheckoutRequestID(checkoutReqID string) (*MpesaTransaction, error) {
 	for _, tx := range f.mpesaTxs {
 		if tx.CheckoutRequestID == checkoutReqID {
-			return tx, nil
+			// Return a detached copy so callback mutations only reach the stored
+			// row through an explicit repository write.
+			detached := *tx
+			return &detached, nil
 		}
 	}
 	return nil, gorm.ErrRecordNotFound
@@ -299,6 +302,20 @@ func (f *fakePaymentRepository) UpdateMpesaReconciliation(tx *MpesaTransaction) 
 	return nil
 }
 
+func (f *fakePaymentRepository) AdoptMpesaReconciliation(tx *MpesaTransaction) error {
+	stored, ok := f.mpesaTxs[tx.ID.String()]
+	if !ok {
+		return gorm.ErrRecordNotFound
+	}
+	if stored.ReconciliationStatus != Manual {
+		return nil
+	}
+	stored.ReconciliationStatus = tx.ReconciliationStatus
+	stored.ReconciledEntityType = tx.ReconciledEntityType
+	stored.ReconciledEntityID = tx.ReconciledEntityID
+	return nil
+}
+
 func (f *fakePaymentRepository) ListMpesaTransactions(businessID uuid.UUID, limit, offset int) ([]MpesaTransaction, int64, error) {
 	list := make([]MpesaTransaction, 0)
 	for _, tx := range f.mpesaTxs {
@@ -355,11 +372,12 @@ func (f *fakePaymentRepository) ListReviewQueue(businessID uuid.UUID, source str
 		for _, m := range f.mpesaTxs {
 			if m.BusinessID == businessID && m.ReconciliationStatus == Unmatched && (m.Status == StatusCompleted || m.Status == StatusPending || m.Status == StatusTimedOut) {
 				items = append(items, ReviewQueueItem{
-					ID:        m.ID,
-					Source:    sourceMpesaTestConst,
-					Reference: m.MpesaReceiptNumber,
-					Amount:    m.Amount,
-					Type:      "inflow",
+					ID:                m.ID,
+					Source:            sourceMpesaTestConst,
+					Reference:         m.MpesaReceiptNumber,
+					Amount:            m.Amount,
+					Type:              "inflow",
+					TransactionStatus: string(m.Status),
 				})
 			}
 		}
@@ -381,12 +399,17 @@ func (f *fakePaymentRepository) ListReviewQueue(businessID uuid.UUID, source str
 }
 
 func (f *fakePaymentRepository) FindInvoiceByNumber(businessID uuid.UUID, invoiceNumber string) (*invoices.Invoice, error) {
+	var matches []*invoices.Invoice
 	for _, inv := range f.invoices {
 		if (businessID == uuid.Nil || inv.BusinessID == businessID) && strings.EqualFold(inv.InvoiceNumber, invoiceNumber) {
-			return inv, nil
+			matches = append(matches, inv)
 		}
 	}
-	return nil, gorm.ErrRecordNotFound
+	// Mirror production: attribution requires a single unambiguous match.
+	if len(matches) != 1 {
+		return nil, gorm.ErrRecordNotFound
+	}
+	return matches[0], nil
 }
 
 func (f *fakePaymentRepository) FindCustomerByPhone(businessID uuid.UUID, phone string) (*customers.Customer, error) {
@@ -428,14 +451,18 @@ type mockMpesaClient struct {
 	b2cErr     error
 	lastReq    DarajaSTKPushRequest
 	lastB2CReq DarajaB2CRequest
+	stkCalls   int
+	b2cCalls   int
 }
 
 func (m *mockMpesaClient) InitiateSTKPush(ctx context.Context, req DarajaSTKPushRequest) (*DarajaSTKPushResponse, error) {
+	m.stkCalls++
 	m.lastReq = req
 	return m.stkResp, m.stkErr
 }
 
 func (m *mockMpesaClient) InitiateB2CPayout(ctx context.Context, req DarajaB2CRequest) (*DarajaB2CResponse, error) {
+	m.b2cCalls++
 	m.lastB2CReq = req
 	return m.b2cResp, m.b2cErr
 }
@@ -787,7 +814,7 @@ func TestC2BValidationAndConfirmation(t *testing.T) {
 		TransAmount: "250.00",
 		MSISDN:      "254700112233",
 	}
-	vRes, err := svc.HandleC2BValidation(DeriveCallbackToken("c2b-secret"), vReq)
+	vRes, err := svc.HandleC2BValidation(DeriveCallbackToken("c2b-secret"), nil, vReq)
 	if err != nil || vRes.ResultCode != 0 {
 		t.Fatalf("validation failed: res=%+v err=%v", vRes, err)
 	}
@@ -799,7 +826,7 @@ func TestC2BValidationAndConfirmation(t *testing.T) {
 		MSISDN:        "254700112233",
 		BillRefNumber: "ACC-CUST",
 	}
-	cRes, err := svc.HandleC2BConfirmation(DeriveCallbackToken("c2b-secret"), cReq, uuid.Nil)
+	cRes, err := svc.HandleC2BConfirmation(DeriveCallbackToken("c2b-secret"), nil, cReq, uuid.Nil)
 	if err != nil || cRes.ResultCode != 0 {
 		t.Fatalf("confirmation failed: res=%+v err=%v", cRes, err)
 	}
@@ -824,7 +851,7 @@ func TestC2BValidationAndConfirmation(t *testing.T) {
 	}
 
 	// Duplicate TransID handling: idempotent
-	cResDup, err := svc.HandleC2BConfirmation(DeriveCallbackToken("c2b-secret"), cReq, uuid.Nil)
+	cResDup, err := svc.HandleC2BConfirmation(DeriveCallbackToken("c2b-secret"), nil, cReq, uuid.Nil)
 	if err != nil || cResDup.ResultCode != 0 {
 		t.Fatalf("duplicate confirmation failed: %v", err)
 	}
@@ -846,7 +873,7 @@ func TestBankTransferManualEntry(t *testing.T) {
 		TransactedAt: time.Now(),
 	}
 
-	tx, err := svc.RecordManualBankTransfer(businessID, input)
+	tx, err := svc.RecordManualBankTransfer(businessID, input, true)
 	if err != nil {
 		t.Fatalf("manual entry failed: %v", err)
 	}
@@ -861,7 +888,7 @@ func TestBankTransferManualEntry(t *testing.T) {
 	}
 
 	// Duplicate reference error
-	_, err = svc.RecordManualBankTransfer(businessID, input)
+	_, err = svc.RecordManualBankTransfer(businessID, input, true)
 	if !errors.Is(err, ErrDuplicateReference) {
 		t.Fatalf("expected ErrDuplicateReference, got %v", err)
 	}
@@ -895,7 +922,7 @@ func TestBankStatementCSVImport(t *testing.T) {
 2026-11-16,REF-INVOICE,INV-2026-999 payment,750.00,0
 2026-11-17,REF-UNMATCHED,Walk in deposit,300.00,0
 `
-	result, err := svc.ImportBankStatement(businessID, "KCB Bank", strings.NewReader(csvData))
+	result, err := svc.ImportBankStatement(businessID, "KCB Bank", strings.NewReader(csvData), true)
 	if err != nil {
 		t.Fatalf("statement import failed: %v", err)
 	}
@@ -1204,6 +1231,7 @@ func TestB2CTimeoutDoesNotOverwriteCompleted(t *testing.T) {
 	svc := NewService(repo, nil, cfg, nil, nil, &mockFinanceService{}, nil)
 
 	businessID := uuid.New()
+	resultCode := 0
 	tx := &MpesaTransaction{
 		ID:                   uuid.New(),
 		BusinessID:           businessID,
@@ -1211,6 +1239,9 @@ func TestB2CTimeoutDoesNotOverwriteCompleted(t *testing.T) {
 		CheckoutRequestID:    "CONV-DONE-1",
 		Amount:               5000,
 		Status:               StatusCompleted,
+		ResultCode:           &resultCode,
+		ResultDesc:           "original result",
+		RawPayload:           `{"Result":{"ResultCode":0}}`,
 		ReconciliationStatus: Reconciled,
 	}
 	_ = repo.CreateMpesaTransaction(tx)
@@ -1222,6 +1253,141 @@ func TestB2CTimeoutDoesNotOverwriteCompleted(t *testing.T) {
 	stored, _ := repo.GetMpesaTransactionByID(tx.ID, businessID)
 	if stored.Status != StatusCompleted {
 		t.Fatalf("status = %s, want completed", stored.Status)
+	}
+	// A rejected timeout must not mutate the stored result metadata.
+	if stored.ResultCode == nil || *stored.ResultCode != 0 {
+		t.Fatalf("result code = %v, want 0", stored.ResultCode)
+	}
+	if stored.ResultDesc != "original result" {
+		t.Fatalf("result desc = %q, want the original result", stored.ResultDesc)
+	}
+	if stored.RawPayload != `{"Result":{"ResultCode":0}}` {
+		t.Fatalf("raw payload was overwritten: %q", stored.RawPayload)
+	}
+}
+
+// Daraja can only send whole shillings, so a sub-shilling amount must be
+// rejected before a reservation is created or the provider is called.
+func TestInitiateRejectsSubShillingAmounts(t *testing.T) {
+	repo := newFakePaymentRepository()
+	client := &mockMpesaClient{
+		stkResp: &DarajaSTKPushResponse{CheckoutRequestID: "ws_CO_WHOLE", ResponseCode: "0"},
+		b2cResp: &DarajaB2CResponse{ConversationID: "CONV-WHOLE", ResponseCode: "0"},
+	}
+	svc := NewService(repo, client, &config.Config{MpesaShortCode: "174379", MpesaPasskey: passkeyTestConst}, nil, nil, nil, nil)
+	businessID := uuid.New()
+
+	if _, err := svc.InitiateSTKPush(context.Background(), businessID, STKPushInput{
+		PhoneNumber: PhoneNumberTestConst, Amount: 1050,
+	}); !errors.Is(err, ErrAmountNotWholeKSh) {
+		t.Fatalf("stk error = %v, want ErrAmountNotWholeKSh", err)
+	}
+	if _, err := svc.InitiateB2C(context.Background(), businessID, B2CPayoutInput{
+		PhoneNumber: PhoneNumberTestConst, Amount: 50,
+	}); !errors.Is(err, ErrAmountNotWholeKSh) {
+		t.Fatalf("b2c error = %v, want ErrAmountNotWholeKSh", err)
+	}
+	if client.stkCalls != 0 || client.b2cCalls != 0 {
+		t.Fatal("invalid amounts must not reach the gateway")
+	}
+	if len(repo.mpesaTxs) != 0 {
+		t.Fatalf("invalid amounts must not reserve a transaction, got %d", len(repo.mpesaTxs))
+	}
+
+	// A whole-shilling amount still sends the expected KSh value.
+	if _, err := svc.InitiateSTKPush(context.Background(), businessID, STKPushInput{
+		PhoneNumber: PhoneNumberTestConst, Amount: 1000,
+	}); err != nil {
+		t.Fatalf("whole-shilling stk failed: %v", err)
+	}
+	if client.lastReq.Amount != 10 {
+		t.Fatalf("daraja amount = %d, want 10", client.lastReq.Amount)
+	}
+}
+
+// A late result for a payout the operator dismissed must adopt the settlement
+// instead of leaving a Manual row with an unlinked posting.
+func TestB2CLateResultAdoptsDismissedPayout(t *testing.T) {
+	repo := newFakePaymentRepository()
+	cfg := &config.Config{MpesaCallbackSecret: "sec"}
+	finSvc := &mockFinanceService{}
+	svc := NewService(repo, nil, cfg, nil, nil, finSvc, nil)
+	businessID := uuid.New()
+
+	tx := &MpesaTransaction{
+		ID:                   uuid.New(),
+		BusinessID:           businessID,
+		TransactionType:      TypeB2C,
+		CheckoutRequestID:    "CONV-DISMISS-1",
+		Amount:               30000,
+		Status:               StatusTimedOut,
+		ReconciliationStatus: Manual,
+		ExpenseCategory:      "Utilities",
+	}
+	_ = repo.CreateMpesaTransaction(tx)
+
+	body := []byte(`{"Result":{"ResultCode":0,"ResultDesc":"ok","ConversationID":"CONV-DISMISS-1","TransactionID":"B2C-DISMISS-1"}}`)
+	if err := svc.HandleB2CResult(computeHMAC(cfg.MpesaCallbackSecret, body), body); err != nil {
+		t.Fatalf("late result failed: %v", err)
+	}
+	stored, _ := repo.GetMpesaTransactionByID(tx.ID, businessID)
+	if stored.Status != StatusCompleted {
+		t.Fatalf("status = %s, want completed", stored.Status)
+	}
+	if stored.ReconciliationStatus != Reconciled || stored.ReconciledEntityType != EntityExpense {
+		t.Fatalf("dismissed payout was not adopted: %s / %s", stored.ReconciliationStatus, stored.ReconciledEntityType)
+	}
+	if len(finSvc.expenses) != 1 {
+		t.Fatalf("expenses = %d, want 1", len(finSvc.expenses))
+	}
+
+	// A duplicate result must not post again or change the adopted link.
+	if err := svc.HandleB2CResult(computeHMAC(cfg.MpesaCallbackSecret, body), body); err != nil {
+		t.Fatalf("duplicate result failed: %v", err)
+	}
+	if len(finSvc.expenses) != 1 {
+		t.Fatalf("expenses after duplicate = %d, want 1", len(finSvc.expenses))
+	}
+}
+
+// Automatic bank outflow matching may only post an expense for callers with
+// the finance capability; other callers still record the row for review.
+func TestBankOutflowExpenseRequiresFinancePermission(t *testing.T) {
+	repo := newFakePaymentRepository()
+	finSvc := &mockFinanceService{}
+	svc := NewService(repo, nil, &config.Config{}, nil, nil, finSvc, nil)
+	businessID := uuid.New()
+
+	tx, err := svc.RecordManualBankTransfer(businessID, BankManualInput{
+		Reference:   "OUT-NO-PERM",
+		Type:        "withdrawal",
+		Amount:      2500,
+		Description: "Supplier payment",
+	}, false)
+	if err != nil {
+		t.Fatalf("recording an outflow without finance permission failed: %v", err)
+	}
+	if tx.ReconciliationStatus != Unmatched {
+		t.Fatalf("status = %s, want unmatched", tx.ReconciliationStatus)
+	}
+	if len(finSvc.expenses) != 0 {
+		t.Fatal("an outflow without finance permission must not post an expense")
+	}
+
+	tx, err = svc.RecordManualBankTransfer(businessID, BankManualInput{
+		Reference:   "OUT-PERM",
+		Type:        "withdrawal",
+		Amount:      2500,
+		Description: "Supplier payment",
+	}, true)
+	if err != nil {
+		t.Fatalf("recording an outflow with finance permission failed: %v", err)
+	}
+	if tx.ReconciliationStatus != Reconciled || tx.ReconciledEntityType != EntityExpense {
+		t.Fatalf("status = %s / %s, want reconciled expense", tx.ReconciliationStatus, tx.ReconciledEntityType)
+	}
+	if len(finSvc.expenses) != 1 {
+		t.Fatalf("expenses = %d, want 1", len(finSvc.expenses))
 	}
 }
 
@@ -1658,7 +1824,7 @@ func TestC2BConfirmationRequiresTransID(t *testing.T) {
 	svc := NewService(repo, nil, cfg, nil, nil, nil, nil)
 
 	sig := computeHMAC(cfg.MpesaCallbackSecret, nil)
-	resp, err := svc.HandleC2BConfirmation(sig, C2BConfirmationRequest{
+	resp, err := svc.HandleC2BConfirmation(sig, nil, C2BConfirmationRequest{
 		TransID:     "   ",
 		TransAmount: "100.00",
 		MSISDN:      "254712345678",
@@ -1674,7 +1840,7 @@ func TestC2BConfirmationRequiresTransID(t *testing.T) {
 	}
 
 	// Successful control: the same fixture with a nonblank ID is persisted.
-	resp, err = svc.HandleC2BConfirmation(sig, C2BConfirmationRequest{
+	resp, err = svc.HandleC2BConfirmation(sig, nil, C2BConfirmationRequest{
 		TransID:     "QK-MISSING-ID-CONTROL",
 		TransAmount: "100.00",
 		MSISDN:      "254712345678",
@@ -1696,7 +1862,7 @@ func TestManualBankDirectionValidation(t *testing.T) {
 		Reference: "REF-UNKNOWN",
 		Amount:    1000,
 		Type:      "invalid-direction",
-	})
+	}, true)
 	if err == nil {
 		t.Fatal("expected error for invalid bank direction")
 	}
@@ -1706,7 +1872,7 @@ func TestManualBankDirectionValidation(t *testing.T) {
 		Reference: "REF-INFLOW",
 		Amount:    1000,
 		Type:      "deposit",
-	})
+	}, true)
 	if err != nil || inflowTx.Type != BankInflow {
 		t.Fatalf("expected deposit to normalize to BankInflow: %v", err)
 	}
@@ -1715,7 +1881,7 @@ func TestManualBankDirectionValidation(t *testing.T) {
 		Reference: "REF-OUTFLOW",
 		Amount:    1000,
 		Type:      "withdrawal",
-	})
+	}, true)
 	if err != nil || outflowTx.Type != BankOutflow {
 		t.Fatalf("expected withdrawal to normalize to BankOutflow: %v", err)
 	}
@@ -1728,7 +1894,7 @@ func TestStatementImportValidationAndInvalidRows(t *testing.T) {
 
 	// Missing amount column
 	noAmountCSV := strings.NewReader("date,reference,description\n2026-11-01,REF1,desc\n")
-	_, err := svc.ImportBankStatement(businessID, "TestBank", noAmountCSV)
+	_, err := svc.ImportBankStatement(businessID, "TestBank", noAmountCSV, true)
 	if err == nil {
 		t.Fatal("expected error when amount column is missing")
 	}
@@ -1740,7 +1906,7 @@ func TestStatementImportValidationAndInvalidRows(t *testing.T) {
 2026-11-01,,50.00,missing ref
 2026-11-01,REF-OK,100.00,duplicate
 `
-	result, err := svc.ImportBankStatement(businessID, "TestBank", strings.NewReader(csvData))
+	result, err := svc.ImportBankStatement(businessID, "TestBank", strings.NewReader(csvData), true)
 	if err != nil {
 		t.Fatalf("import failed: %v", err)
 	}
@@ -1752,6 +1918,22 @@ func TestStatementImportValidationAndInvalidRows(t *testing.T) {
 	}
 	if result.InvalidRows != 2 {
 		t.Errorf("invalid_rows = %d, want 2", result.InvalidRows)
+	}
+
+	// A nonblank but unparseable credit must invalidate the row instead of
+	// letting the debit side import it as a different movement.
+	invalidCreditCSV := `date,reference,credit,debit
+2026-11-02,REF-BAD-CREDIT,broken,25.00
+`
+	result, err = svc.ImportBankStatement(businessID, "TestBank", strings.NewReader(invalidCreditCSV), true)
+	if err != nil {
+		t.Fatalf("import failed: %v", err)
+	}
+	if result.Imported != 0 || result.InvalidRows != 1 {
+		t.Errorf("imported = %d, invalid_rows = %d; want 0 and 1", result.Imported, result.InvalidRows)
+	}
+	if _, err := repo.GetBankTransactionByReference(businessID, "REF-BAD-CREDIT"); err == nil {
+		t.Fatal("a row with a broken credit must not be imported")
 	}
 }
 
@@ -1779,7 +1961,7 @@ func TestStatementImportRejectsCreditAndDebit(t *testing.T) {
 2026-11-01,REF-BOTH,100.00,25.00
 2026-11-02,REF-OK,100.00,
 `
-	result, err := svc.ImportBankStatement(businessID, "TestBank", strings.NewReader(csv))
+	result, err := svc.ImportBankStatement(businessID, "TestBank", strings.NewReader(csv), true)
 	if err != nil {
 		t.Fatalf("import failed: %v", err)
 	}
@@ -1834,16 +2016,30 @@ func TestInitiateSTKAmbiguousKeepsPending(t *testing.T) {
 	}
 	svc := NewService(repo, client, cfg, nil, nil, nil, nil)
 
-	if _, err := svc.InitiateSTKPush(context.Background(), uuid.New(), STKPushInput{
-		PhoneNumber: PhoneNumberTestConst,
-		Amount:      1000,
-	}); err == nil {
+	businessID := uuid.New()
+	input := STKPushInput{
+		PhoneNumber:    PhoneNumberTestConst,
+		Amount:         1000,
+		IdempotencyKey: "stk-amb-pending-1",
+	}
+	if _, err := svc.InitiateSTKPush(context.Background(), businessID, input); err == nil {
 		t.Fatal("expected ambiguous error to surface")
+	}
+	if len(repo.mpesaTxs) != 1 {
+		t.Fatalf("expected exactly one stored reservation, got %d", len(repo.mpesaTxs))
 	}
 	for _, m := range repo.mpesaTxs {
 		if m.Status != StatusPending {
 			t.Fatalf("status = %s, want pending", m.Status)
 		}
+	}
+
+	// A retry with the same key must replay the stored prompt, not send again.
+	if _, err := svc.InitiateSTKPush(context.Background(), businessID, input); err != nil {
+		t.Fatalf("retry should replay the stored prompt: %v", err)
+	}
+	if client.stkCalls != 1 {
+		t.Fatalf("gateway calls = %d, want 1", client.stkCalls)
 	}
 }
 
@@ -1857,16 +2053,30 @@ func TestInitiateB2CAmbiguousUsesTimedOut(t *testing.T) {
 	cfg := &config.Config{MpesaShortCode: "174379", MpesaPasskey: passkeyTestConst}
 	svc := NewService(repo, client, cfg, nil, nil, nil, nil)
 
-	if _, err := svc.InitiateB2C(context.Background(), uuid.New(), B2CPayoutInput{
-		PhoneNumber: PhoneNumberTestConst,
-		Amount:      1000,
-	}); err == nil {
+	businessID := uuid.New()
+	input := B2CPayoutInput{
+		PhoneNumber:    PhoneNumberTestConst,
+		Amount:         1000,
+		IdempotencyKey: "b2c-amb-1",
+	}
+	if _, err := svc.InitiateB2C(context.Background(), businessID, input); err == nil {
 		t.Fatal("expected ambiguous error to surface")
+	}
+	if len(repo.mpesaTxs) != 1 {
+		t.Fatalf("expected exactly one stored reservation, got %d", len(repo.mpesaTxs))
 	}
 	for _, m := range repo.mpesaTxs {
 		if m.Status != StatusTimedOut {
 			t.Fatalf("status = %s, want timed_out", m.Status)
 		}
+	}
+
+	// A retry with the same key must replay the stored payout, not send again.
+	if _, err := svc.InitiateB2C(context.Background(), businessID, input); err != nil {
+		t.Fatalf("retry should replay the stored payout: %v", err)
+	}
+	if client.b2cCalls != 1 {
+		t.Fatalf("gateway calls = %d, want 1", client.b2cCalls)
 	}
 }
 
@@ -1996,7 +2206,7 @@ func TestC2BValidationRejectsUnknownAccount(t *testing.T) {
 		MSISDN:        "254799999999",
 		BillRefNumber: "NO-SUCH-INVOICE",
 	}
-	res, err := svc.HandleC2BValidation(DeriveCallbackToken("c2b-secret"), req)
+	res, err := svc.HandleC2BValidation(DeriveCallbackToken("c2b-secret"), nil, req)
 	if err != nil {
 		t.Fatalf("validation returned error: %v", err)
 	}
@@ -2027,7 +2237,7 @@ func TestAutoReconcileBankTagsInvoiceNoteWithMarker(t *testing.T) {
 		Reference: "INV-BANK-1",
 		Type:      "deposit",
 		Amount:    5000,
-	})
+	}, true)
 	if err != nil {
 		t.Fatalf("manual transfer failed: %v", err)
 	}
@@ -2064,6 +2274,9 @@ func TestInitiateSTKAmbiguousNetworkUsesTimedOut(t *testing.T) {
 	if _, err := svc.InitiateSTKPush(context.Background(), businessID, input); err == nil {
 		t.Fatal("expected ambiguous dispatch error")
 	}
+	if len(repo.mpesaTxs) != 1 {
+		t.Fatalf("expected exactly one stored reservation, got %d", len(repo.mpesaTxs))
+	}
 	for _, m := range repo.mpesaTxs {
 		if m.Status != StatusTimedOut {
 			t.Fatalf("status = %s, want timed_out", m.Status)
@@ -2073,6 +2286,9 @@ func TestInitiateSTKAmbiguousNetworkUsesTimedOut(t *testing.T) {
 	// A replay with the same key must not look like a sent prompt.
 	if _, err := svc.InitiateSTKPush(context.Background(), businessID, input); err == nil {
 		t.Fatal("expected unresolved replay to report an error")
+	}
+	if client.stkCalls != 1 {
+		t.Fatalf("gateway calls = %d, want 1", client.stkCalls)
 	}
 
 	items, total, err := svc.ListReviewQueue(businessID, sourceMpesaTestConst, 1, 10)

@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -18,6 +19,7 @@ import (
 	"github.com/businessos/backend/internal/modules/invoices"
 	"github.com/businessos/backend/internal/modules/suppliers"
 	"github.com/google/uuid"
+	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 )
 
@@ -51,6 +53,8 @@ type fakePaymentRepository struct {
 	paymentNotes      []string
 	application       *fakeApplication
 	claimErr          error
+	deleteErr         error
+	releaseErr        error
 	reconciliationErr error
 }
 
@@ -78,11 +82,17 @@ func (f *fakePaymentRepository) UpdateMpesaTransaction(tx *MpesaTransaction) err
 }
 
 func (f *fakePaymentRepository) DeleteMpesaTransaction(id uuid.UUID) error {
+	if f.deleteErr != nil {
+		return f.deleteErr
+	}
 	delete(f.mpesaTxs, id.String())
 	return nil
 }
 
 func (f *fakePaymentRepository) ReleaseStaleReconciliationClaims(before time.Time) error {
+	if f.releaseErr != nil {
+		return f.releaseErr
+	}
 	for _, tx := range f.mpesaTxs {
 		if tx.ReconciliationStatus == Claiming && tx.UpdatedAt.Before(before) {
 			tx.ReconciliationStatus = Unmatched
@@ -314,6 +324,56 @@ func (f *fakePaymentRepository) AdoptMpesaReconciliation(tx *MpesaTransaction) e
 	stored.ReconciledEntityType = tx.ReconciledEntityType
 	stored.ReconciledEntityID = tx.ReconciledEntityID
 	return nil
+}
+
+func (f *fakePaymentRepository) ReopenMpesaReconciliation(tx *MpesaTransaction) error {
+	stored, ok := f.mpesaTxs[tx.ID.String()]
+	if !ok {
+		return gorm.ErrRecordNotFound
+	}
+	if stored.ReconciliationStatus != Manual {
+		return nil
+	}
+	stored.ReconciliationStatus = Unmatched
+	stored.ReconciledEntityType = ""
+	stored.ReconciledEntityID = nil
+	stored.ReconciliationClaimID = nil
+	return nil
+}
+
+func (f *fakePaymentRepository) FinalizeMpesaDismissal(tx *MpesaTransaction, claimID uuid.UUID, expectedStatus TransactionStatus) (bool, error) {
+	stored, ok := f.mpesaTxs[tx.ID.String()]
+	if !ok {
+		return false, gorm.ErrRecordNotFound
+	}
+	if stored.ReconciliationStatus != Claiming ||
+		stored.ReconciliationClaimID == nil ||
+		*stored.ReconciliationClaimID != claimID ||
+		stored.Status != expectedStatus {
+		return false, nil
+	}
+	stored.ReconciliationStatus = Manual
+	stored.ReconciledEntityType = ""
+	stored.ReconciledEntityID = nil
+	stored.ReconciliationClaimID = nil
+	stored.UpdatedAt = time.Now()
+	return true, nil
+}
+
+func (f *fakePaymentRepository) PendingSupplierPayoutTotal(businessID, supplierID uuid.UUID) (int64, error) {
+	var total int64
+	for _, tx := range f.mpesaTxs {
+		if tx.BusinessID == businessID && tx.SupplierID != nil && *tx.SupplierID == supplierID &&
+			tx.TransactionType == TypeB2C &&
+			(tx.Status == StatusPending || tx.Status == StatusTimedOut) {
+			total += tx.Amount
+		}
+	}
+	return total, nil
+}
+
+func (f *fakePaymentRepository) CreateSupplierPayout(tx *MpesaTransaction) error {
+	return f.CreateMpesaTransaction(tx)
 }
 
 func (f *fakePaymentRepository) ListMpesaTransactions(businessID uuid.UUID, limit, offset int) ([]MpesaTransaction, int64, error) {
@@ -559,6 +619,7 @@ func (m *mockCustomersService) ChargeCreditTx(*gorm.DB, uuid.UUID, uuid.UUID, in
 type mockSuppliersService struct {
 	paidSupplierID uuid.UUID
 	paidAmount     int64
+	outstanding    int64
 	recordErr      error
 	payments       []suppliers.Payment
 }
@@ -568,7 +629,7 @@ func (m *mockSuppliersService) Create(suppliers.CreateInput) (*suppliers.Supplie
 }
 func (m *mockSuppliersService) Get(id, businessID uuid.UUID) (*suppliers.Supplier, error) {
 	if m.paidSupplierID == id {
-		return &suppliers.Supplier{ID: id, BusinessID: businessID}, nil
+		return &suppliers.Supplier{ID: id, BusinessID: businessID, OutstandingBalance: m.outstanding}, nil
 	}
 	return nil, suppliers.ErrSupplierNotFound
 }
@@ -1142,6 +1203,7 @@ func TestB2CSupplierPayoutSettlesSupplier(t *testing.T) {
 	businessID := uuid.New()
 	supplierID := uuid.New()
 	supSvc.paidSupplierID = supplierID
+	supSvc.outstanding = 25000
 
 	tx, err := svc.InitiateB2C(context.Background(), businessID, B2CPayoutInput{
 		PhoneNumber: PhoneNumberTestConst,
@@ -1513,15 +1575,16 @@ func TestIdempotencyKeyConflictDetection(t *testing.T) {
 
 	// Initial STK push
 	stkTx := &MpesaTransaction{
-		ID:                uuid.New(),
-		BusinessID:        businessID,
-		TransactionType:   TypeSTKPush,
-		PhoneNumber:       "254712345678",
-		Amount:            5000,
-		IdempotencyKey:    "shared-key-1",
-		AccountReference:  "BusinessOS",
-		Status:            StatusPending,
-		CheckoutRequestID: "ws_CO_EXISTING",
+		ID:                   uuid.New(),
+		BusinessID:           businessID,
+		TransactionType:      TypeSTKPush,
+		PhoneNumber:          "254712345678",
+		Amount:               5000,
+		IdempotencyKey:       "shared-key-1",
+		AccountReference:     "BusinessOS",
+		Status:               StatusPending,
+		DispatchAcknowledged: true,
+		CheckoutRequestID:    "ws_CO_EXISTING",
 	}
 	_ = repo.CreateMpesaTransaction(stkTx)
 
@@ -1563,15 +1626,16 @@ func TestSTKIdempotencyIncludesSettlementTarget(t *testing.T) {
 	businessID := uuid.New()
 
 	seed := &MpesaTransaction{
-		ID:                uuid.New(),
-		BusinessID:        businessID,
-		TransactionType:   TypeSTKPush,
-		PhoneNumber:       "254712345678",
-		Amount:            5000,
-		IdempotencyKey:    "target-key-1",
-		AccountReference:  "INV-A",
-		Status:            StatusPending,
-		CheckoutRequestID: "ws_CO_TARGET",
+		ID:                   uuid.New(),
+		BusinessID:           businessID,
+		TransactionType:      TypeSTKPush,
+		PhoneNumber:          "254712345678",
+		Amount:               5000,
+		IdempotencyKey:       "target-key-1",
+		AccountReference:     "INV-A",
+		Status:               StatusPending,
+		DispatchAcknowledged: true,
+		CheckoutRequestID:    "ws_CO_TARGET",
 	}
 	_ = repo.CreateMpesaTransaction(seed)
 
@@ -2034,12 +2098,30 @@ func TestInitiateSTKAmbiguousKeepsPending(t *testing.T) {
 		}
 	}
 
-	// A retry with the same key must replay the stored prompt, not send again.
-	if _, err := svc.InitiateSTKPush(context.Background(), businessID, input); err != nil {
-		t.Fatalf("retry should replay the stored prompt: %v", err)
+	// A retry with the same key must not resend, and must keep reporting the
+	// dispatch as unresolved until the provider acknowledges or a result lands.
+	if _, err := svc.InitiateSTKPush(context.Background(), businessID, input); !errors.Is(err, ErrTransactionAmbiguous) {
+		t.Fatalf("retry error = %v, want ErrTransactionAmbiguous", err)
 	}
 	if client.stkCalls != 1 {
 		t.Fatalf("gateway calls = %d, want 1", client.stkCalls)
+	}
+
+	// Control: an acknowledged dispatch still replays without another call.
+	client.stkErr = nil
+	client.stkResp = &DarajaSTKPushResponse{CheckoutRequestID: "ws_CO_ACK", ResponseCode: "0"}
+	okInput := input
+	okInput.IdempotencyKey = "stk-amb-ack"
+	first, err := svc.InitiateSTKPush(context.Background(), businessID, okInput)
+	if err != nil {
+		t.Fatalf("acknowledged dispatch failed: %v", err)
+	}
+	replay, err := svc.InitiateSTKPush(context.Background(), businessID, okInput)
+	if err != nil || replay == nil || replay.ID != first.ID {
+		t.Fatalf("acknowledged replay failed: %v", err)
+	}
+	if client.stkCalls != 2 {
+		t.Fatalf("gateway calls = %d, want 2 (the replay must not call)", client.stkCalls)
 	}
 }
 
@@ -2071,12 +2153,30 @@ func TestInitiateB2CAmbiguousUsesTimedOut(t *testing.T) {
 		}
 	}
 
-	// A retry with the same key must replay the stored payout, not send again.
-	if _, err := svc.InitiateB2C(context.Background(), businessID, input); err != nil {
-		t.Fatalf("retry should replay the stored payout: %v", err)
+	// A retry with the same key must not resend, and must keep reporting the
+	// dispatch as unresolved until the provider acknowledges or a result lands.
+	if _, err := svc.InitiateB2C(context.Background(), businessID, input); !errors.Is(err, ErrTransactionAmbiguous) {
+		t.Fatalf("retry error = %v, want ErrTransactionAmbiguous", err)
 	}
 	if client.b2cCalls != 1 {
 		t.Fatalf("gateway calls = %d, want 1", client.b2cCalls)
+	}
+
+	// Control: an acknowledged dispatch still replays without another call.
+	client.b2cErr = nil
+	client.b2cResp = &DarajaB2CResponse{ConversationID: "CONV-ACK", ResponseCode: "0"}
+	okInput := input
+	okInput.IdempotencyKey = "b2c-amb-ack"
+	first, err := svc.InitiateB2C(context.Background(), businessID, okInput)
+	if err != nil {
+		t.Fatalf("acknowledged dispatch failed: %v", err)
+	}
+	replay, err := svc.InitiateB2C(context.Background(), businessID, okInput)
+	if err != nil || replay == nil || replay.ID != first.ID {
+		t.Fatalf("acknowledged replay failed: %v", err)
+	}
+	if client.b2cCalls != 2 {
+		t.Fatalf("gateway calls = %d, want 2 (the replay must not call)", client.b2cCalls)
 	}
 }
 
@@ -2327,5 +2427,344 @@ func TestLateSTKCallbackResolvesTimedOut(t *testing.T) {
 	}
 	if stored.MpesaReceiptNumber != "QK-LATE-1" {
 		t.Fatalf("receipt = %q, want QK-LATE-1", stored.MpesaReceiptNumber)
+	}
+}
+
+// A proven pre-dispatch failure whose reservation cleanup also fails must stay
+// retryable: one replay clears the marker and dispatches exactly once.
+func TestInitiateSTKPreDispatchCleanupFailureRemainsRetryable(t *testing.T) {
+	repo := newFakePaymentRepository()
+	repo.deleteErr = errors.New("database unavailable")
+	client := &mockMpesaClient{stkErr: fmt.Errorf("%w: oauth unavailable", ErrMpesaPreDispatch)}
+	cfg := &config.Config{
+		MpesaShortCode:      "174379",
+		MpesaPasskey:        passkeyTestConst,
+		MpesaStkCallbackURL: "https://example.com/callback",
+	}
+	svc := NewService(repo, client, cfg, nil, nil, nil, nil)
+	businessID := uuid.New()
+	input := STKPushInput{
+		PhoneNumber:    PhoneNumberTestConst,
+		Amount:         1000,
+		IdempotencyKey: "predispatch-cleanup-1",
+	}
+
+	if _, err := svc.InitiateSTKPush(context.Background(), businessID, input); err == nil {
+		t.Fatal("expected the pre-dispatch error to surface")
+	}
+	if len(repo.mpesaTxs) != 1 {
+		t.Fatalf("expected the reservation to remain retryable, got %d rows", len(repo.mpesaTxs))
+	}
+	for _, m := range repo.mpesaTxs {
+		if !retryablePreDispatch(m) {
+			t.Fatalf("row = %s / %q, want a retryable pre-dispatch marker", m.Status, m.ResultDesc)
+		}
+	}
+
+	// Once cleanup works, the same key dispatches instead of blocking forever.
+	repo.deleteErr = nil
+	client.stkErr = nil
+	client.stkResp = &DarajaSTKPushResponse{CheckoutRequestID: "ws_CO_RETRY", ResponseCode: "0"}
+	tx, err := svc.InitiateSTKPush(context.Background(), businessID, input)
+	if err != nil {
+		t.Fatalf("retry failed: %v", err)
+	}
+	if !tx.DispatchAcknowledged {
+		t.Fatal("retry should record the acknowledged dispatch")
+	}
+	if client.stkCalls != 2 {
+		t.Fatalf("gateway calls = %d, want 2 (one failed attempt, one retry)", client.stkCalls)
+	}
+	if len(repo.mpesaTxs) != 1 {
+		t.Fatalf("reservations = %d, want exactly one after the retry", len(repo.mpesaTxs))
+	}
+}
+
+// A supplier payout may not exceed the payable after in-flight payouts.
+func TestB2CSupplierPayoutRejectsOverpayment(t *testing.T) {
+	repo := newFakePaymentRepository()
+	supSvc := &mockSuppliersService{outstanding: 10000}
+	client := &mockMpesaClient{
+		b2cResp: &DarajaB2CResponse{ConversationID: "CONV-OVER", ResponseCode: "0"},
+	}
+	svc := NewService(repo, client, &config.Config{MpesaShortCode: "174379", MpesaPasskey: passkeyTestConst}, nil, nil, nil, supSvc)
+	businessID := uuid.New()
+	supplierID := uuid.New()
+	supSvc.paidSupplierID = supplierID
+
+	if _, err := svc.InitiateB2C(context.Background(), businessID, B2CPayoutInput{
+		PhoneNumber: PhoneNumberTestConst,
+		Amount:      15000,
+		SupplierID:  supplierID.String(),
+	}); !errors.Is(err, ErrPayoutExceedsPayable) {
+		t.Fatalf("error = %v, want ErrPayoutExceedsPayable", err)
+	}
+	if client.b2cCalls != 0 || len(repo.mpesaTxs) != 0 {
+		t.Fatal("an overpayment must not reserve or dispatch")
+	}
+
+	// An in-flight payout reserves part of the balance.
+	_ = repo.CreateMpesaTransaction(&MpesaTransaction{
+		ID:              uuid.New(),
+		BusinessID:      businessID,
+		TransactionType: TypeB2C,
+		Amount:          6000,
+		Status:          StatusPending,
+		SupplierID:      &supplierID,
+	})
+	if _, err := svc.InitiateB2C(context.Background(), businessID, B2CPayoutInput{
+		PhoneNumber: PhoneNumberTestConst,
+		Amount:      5000,
+		SupplierID:  supplierID.String(),
+	}); !errors.Is(err, ErrPayoutExceedsPayable) {
+		t.Fatalf("pending reservation error = %v, want ErrPayoutExceedsPayable", err)
+	}
+	if client.b2cCalls != 0 {
+		t.Fatal("the pending reservation must be counted before dispatch")
+	}
+}
+
+// Dismissal must not hide a payout that completed while the reviewer held the
+// claim; the mismatched status rejects Manual and the claim is released.
+func TestDismissalCannotHideConcurrentCompletion(t *testing.T) {
+	repo := newFakePaymentRepository()
+	businessID := uuid.New()
+	claimID := uuid.New()
+	tx := &MpesaTransaction{
+		ID:                    uuid.New(),
+		BusinessID:            businessID,
+		TransactionType:       TypeB2C,
+		Amount:                5000,
+		Status:                StatusCompleted,
+		ReconciliationStatus:  Claiming,
+		ReconciliationClaimID: &claimID,
+	}
+	_ = repo.CreateMpesaTransaction(tx)
+
+	ok, err := repo.FinalizeMpesaDismissal(tx, claimID, StatusTimedOut)
+	if err != nil || ok {
+		t.Fatalf("dismissal = %v, %v; want a rejected write", ok, err)
+	}
+	stored, _ := repo.GetMpesaTransactionByID(tx.ID, businessID)
+	if stored.ReconciliationStatus != Claiming {
+		t.Fatalf("status = %s, want claiming (released for review)", stored.ReconciliationStatus)
+	}
+
+	// Control: the status observed at claim time still commits Manual.
+	ok, err = repo.FinalizeMpesaDismissal(tx, claimID, StatusCompleted)
+	if err != nil || !ok {
+		t.Fatalf("control dismissal = %v, %v; want committed", ok, err)
+	}
+	if stored.ReconciliationStatus != Manual {
+		t.Fatalf("status = %s, want manual", stored.ReconciliationStatus)
+	}
+}
+
+// A cleanup failure must be surfaced from the queue and the review path rather
+// than being mistaken for an already-reconciled item.
+func TestStaleClaimCleanupFailureIsSurfaced(t *testing.T) {
+	repo := newFakePaymentRepository()
+	repo.releaseErr = errors.New("database unavailable")
+	svc := NewService(repo, nil, &config.Config{}, nil, nil, nil, nil)
+	businessID := uuid.New()
+
+	if _, _, err := svc.ListReviewQueue(businessID, "", 1, 20); err == nil {
+		t.Fatal("expected ListReviewQueue to surface the cleanup failure")
+	}
+
+	tx := &MpesaTransaction{
+		ID:                   uuid.New(),
+		BusinessID:           businessID,
+		TransactionType:      TypeSTKPush,
+		Amount:               5000,
+		Status:               StatusCompleted,
+		ReconciliationStatus: Unmatched,
+	}
+	_ = repo.CreateMpesaTransaction(tx)
+	if err := svc.ReconcileReviewItem(businessID, tx.ID, ReconcileInput{
+		Source: sourceMpesaTestConst, TargetType: targetDismissTestConst,
+	}); err == nil {
+		t.Fatal("expected ReconcileReviewItem to surface the cleanup failure")
+	}
+}
+
+// The status predicate on the guarded reconciliation writes must live in SQL,
+// not only in the in-memory fake.
+func TestReconciliationGuardsAgainstDatabase(t *testing.T) {
+	dsn := os.Getenv("TEST_DATABASE_URL")
+	if dsn == "" {
+		t.Skip("TEST_DATABASE_URL is not set")
+	}
+	schema := fmt.Sprintf("payments_guard_%d", time.Now().UnixNano())
+	admin, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})
+	if err != nil {
+		t.Skipf("test database unavailable: %v", err)
+	}
+	if err := admin.Exec("CREATE SCHEMA " + schema).Error; err != nil {
+		t.Fatalf("create schema: %v", err)
+	}
+	t.Cleanup(func() { _ = admin.Exec("DROP SCHEMA " + schema + " CASCADE").Error })
+
+	sep := "?"
+	if strings.Contains(dsn, "?") {
+		sep = "&"
+	}
+	scoped, err := gorm.Open(postgres.Open(dsn+sep+"search_path="+schema), &gorm.Config{TranslateError: true})
+	if err != nil {
+		t.Fatalf("open scoped database: %v", err)
+	}
+	if err := scoped.AutoMigrate(&MpesaTransaction{}, &suppliers.Supplier{}); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	repo := &repository{db: scoped}
+
+	businessID := uuid.New()
+	entityID := uuid.New()
+	finalized := &MpesaTransaction{
+		ID:                   uuid.New(),
+		BusinessID:           businessID,
+		TransactionType:      TypeSTKPush,
+		Status:               StatusCompleted,
+		ReconciliationStatus: Reconciled,
+		ReconciledEntityType: EntityInvoice,
+		ReconciledEntityID:   &entityID,
+	}
+	if err := repo.CreateMpesaTransaction(finalized); err != nil {
+		t.Fatalf("seed finalized row: %v", err)
+	}
+	stale := *finalized
+	stale.ReconciliationStatus = Unmatched
+	stale.ReconciledEntityType = ""
+	stale.ReconciledEntityID = nil
+	if err := repo.UpdateMpesaReconciliation(&stale); err != nil {
+		t.Fatalf("guarded update: %v", err)
+	}
+	var got MpesaTransaction
+	if err := scoped.First(&got, "id = ?", finalized.ID).Error; err != nil {
+		t.Fatalf("read finalized row: %v", err)
+	}
+	if got.ReconciliationStatus != Reconciled || got.ReconciledEntityType != EntityInvoice ||
+		got.ReconciledEntityID == nil || *got.ReconciledEntityID != entityID {
+		t.Fatalf("finalized link was clobbered: %+v", got)
+	}
+
+	// Control: an open row must still accept a normal settlement update.
+	open := &MpesaTransaction{
+		ID:                   uuid.New(),
+		BusinessID:           businessID,
+		TransactionType:      TypeSTKPush,
+		Status:               StatusCompleted,
+		ReconciliationStatus: Unmatched,
+	}
+	if err := repo.CreateMpesaTransaction(open); err != nil {
+		t.Fatalf("seed open row: %v", err)
+	}
+	open.ReconciliationStatus = Reconciled
+	open.ReconciledEntityType = EntityInvoice
+	open.ReconciledEntityID = &entityID
+	if err := repo.UpdateMpesaReconciliation(open); err != nil {
+		t.Fatalf("open update: %v", err)
+	}
+	got = MpesaTransaction{}
+	if err := scoped.First(&got, "id = ?", open.ID).Error; err != nil {
+		t.Fatalf("read open row: %v", err)
+	}
+	if got.ReconciliationStatus != Reconciled {
+		t.Fatalf("open row status = %s, want reconciled", got.ReconciliationStatus)
+	}
+
+	// The dismissal status predicate must also be enforced in SQL.
+	claimID := uuid.New()
+	claimed := &MpesaTransaction{
+		ID:                    uuid.New(),
+		BusinessID:            businessID,
+		TransactionType:       TypeB2C,
+		Status:                StatusCompleted,
+		ReconciliationStatus:  Claiming,
+		ReconciliationClaimID: &claimID,
+	}
+	if err := repo.CreateMpesaTransaction(claimed); err != nil {
+		t.Fatalf("seed claimed row: %v", err)
+	}
+	ok, err := repo.FinalizeMpesaDismissal(claimed, claimID, StatusTimedOut)
+	if err != nil || ok {
+		t.Fatalf("mismatched dismissal = %v, %v; want rejected", ok, err)
+	}
+	got = MpesaTransaction{}
+	if err := scoped.First(&got, "id = ?", claimed.ID).Error; err != nil {
+		t.Fatalf("read claimed row: %v", err)
+	}
+	if got.ReconciliationStatus != Claiming {
+		t.Fatalf("claimed row status = %s, want claiming", got.ReconciliationStatus)
+	}
+	ok, err = repo.FinalizeMpesaDismissal(claimed, claimID, StatusCompleted)
+	if err != nil || !ok {
+		t.Fatalf("matching dismissal = %v, %v; want committed", ok, err)
+	}
+
+	// The supplier payable check and the in-flight sum must also hold in SQL.
+	supplier := suppliers.Supplier{ID: uuid.New(), BusinessID: businessID, Name: "Supplier", OutstandingBalance: 10000}
+	if err := scoped.Create(&supplier).Error; err != nil {
+		t.Fatalf("seed supplier: %v", err)
+	}
+	supplierID := supplier.ID
+	over := &MpesaTransaction{
+		ID: uuid.New(), BusinessID: businessID, TransactionType: TypeB2C,
+		Amount: 15000, Status: StatusPending, SupplierID: &supplierID,
+	}
+	if err := repo.CreateSupplierPayout(over); !errors.Is(err, ErrPayoutExceedsPayable) {
+		t.Fatalf("overpayment error = %v, want ErrPayoutExceedsPayable", err)
+	}
+	payout := &MpesaTransaction{
+		ID: uuid.New(), BusinessID: businessID, TransactionType: TypeB2C,
+		Amount: 5000, Status: StatusPending, SupplierID: &supplierID,
+	}
+	if err := repo.CreateSupplierPayout(payout); err != nil {
+		t.Fatalf("valid payout: %v", err)
+	}
+	if total, err := repo.PendingSupplierPayoutTotal(businessID, supplierID); err != nil || total != 5000 {
+		t.Fatalf("pending total = %d, %v; want 5000", total, err)
+	}
+	second := &MpesaTransaction{
+		ID: uuid.New(), BusinessID: businessID, TransactionType: TypeB2C,
+		Amount: 6000, Status: StatusPending, SupplierID: &supplierID,
+	}
+	if err := repo.CreateSupplierPayout(second); !errors.Is(err, ErrPayoutExceedsPayable) {
+		t.Fatalf("reserved overpayment error = %v, want ErrPayoutExceedsPayable", err)
+	}
+}
+
+// Replaying a supplier payout must not count its own pending reservation as a
+// competing payout and reject the retry as an overpayment.
+func TestB2CSupplierPayoutReplayDoesNotCountItsOwnReservation(t *testing.T) {
+	repo := newFakePaymentRepository()
+	supSvc := &mockSuppliersService{outstanding: 10000}
+	client := &mockMpesaClient{
+		b2cResp: &DarajaB2CResponse{ConversationID: "CONV-SUP-FULL", ResponseCode: "0"},
+	}
+	svc := NewService(repo, client, &config.Config{MpesaShortCode: "174379", MpesaPasskey: passkeyTestConst}, nil, nil, nil, supSvc)
+	businessID := uuid.New()
+	supplierID := uuid.New()
+	supSvc.paidSupplierID = supplierID
+	input := B2CPayoutInput{
+		PhoneNumber:    PhoneNumberTestConst,
+		Amount:         10000,
+		SupplierID:     supplierID.String(),
+		IdempotencyKey: "supplier-full-1",
+	}
+
+	first, err := svc.InitiateB2C(context.Background(), businessID, input)
+	if err != nil {
+		t.Fatalf("first payout failed: %v", err)
+	}
+	replay, err := svc.InitiateB2C(context.Background(), businessID, input)
+	if err != nil {
+		t.Fatalf("replay failed: %v", err)
+	}
+	if replay.ID != first.ID {
+		t.Fatalf("replay ID = %s, want %s", replay.ID, first.ID)
+	}
+	if client.b2cCalls != 1 {
+		t.Fatalf("gateway calls = %d, want 1", client.b2cCalls)
 	}
 }

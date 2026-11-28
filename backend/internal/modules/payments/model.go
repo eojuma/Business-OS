@@ -68,15 +68,19 @@ const (
 
 // MpesaTransaction represents a record of Lipa Na M-Pesa STK, C2B, or B2C payout.
 type MpesaTransaction struct {
-	ID                   uuid.UUID            `gorm:"type:uuid;primaryKey;default:gen_random_uuid()" json:"id"`
-	BusinessID           uuid.UUID            `gorm:"type:uuid;index;not null" json:"business_id"`
-	TransactionType      TransactionType      `gorm:"not null" json:"transaction_type"`
-	MerchantRequestID    string               `gorm:"not null;default:''" json:"merchant_request_id"`
-	CheckoutRequestID    string               `gorm:"index;not null;default:''" json:"checkout_request_id"`
-	MpesaReceiptNumber   string               `gorm:"index;not null;default:''" json:"mpesa_receipt_number"`
-	PhoneNumber          string               `gorm:"not null;default:''" json:"phone_number"`
-	Amount               int64                `gorm:"not null" json:"amount"` // in cents
-	Status               TransactionStatus    `gorm:"not null;default:'pending'" json:"status"`
+	ID                 uuid.UUID         `gorm:"type:uuid;primaryKey;default:gen_random_uuid()" json:"id"`
+	BusinessID         uuid.UUID         `gorm:"type:uuid;index;not null" json:"business_id"`
+	TransactionType    TransactionType   `gorm:"not null" json:"transaction_type"`
+	MerchantRequestID  string            `gorm:"not null;default:''" json:"merchant_request_id"`
+	CheckoutRequestID  string            `gorm:"index;not null;default:''" json:"checkout_request_id"`
+	MpesaReceiptNumber string            `gorm:"index;not null;default:''" json:"mpesa_receipt_number"`
+	PhoneNumber        string            `gorm:"not null;default:''" json:"phone_number"`
+	Amount             int64             `gorm:"not null" json:"amount"` // in cents
+	Status             TransactionStatus `gorm:"not null;default:'pending'" json:"status"`
+	// DispatchAcknowledged records that the provider returned a clean success
+	// for the initiation request. A stored checkout id alone is not proof: a
+	// 5xx can include an id after the request may have been accepted.
+	DispatchAcknowledged bool                 `gorm:"not null;default:false" json:"-"`
 	ResultCode           *int                 `json:"result_code,omitempty"`
 	ResultDesc           string               `gorm:"not null;default:''" json:"result_desc"`
 	IdempotencyKey       string               `gorm:"index" json:"idempotency_key,omitempty"`

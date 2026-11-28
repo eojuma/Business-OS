@@ -41,6 +41,9 @@ var (
 	// takes whole shillings, so a sub-shilling remainder would be silently
 	// rounded while the stored amount stayed in cents.
 	ErrAmountNotWholeKSh = errors.New("amount must be a whole number of shillings")
+	// ErrPayoutExceedsPayable rejects a supplier payout larger than the amount
+	// still owed after in-flight payouts, which the payable cannot settle.
+	ErrPayoutExceedsPayable = errors.New("payout exceeds the supplier's outstanding balance")
 )
 
 const (
@@ -201,16 +204,29 @@ func sameUUIDPtr(a, b *uuid.UUID) bool {
 	return *a == *b
 }
 
-// replayResolvedMpesa applies one replay policy: failed rows conflict, and an
-// unresolved dispatch is reported as uncertain instead of as a successful replay.
+// replayResolvedMpesa applies one replay policy: a failed row conflicts, an
+// acknowledged dispatch replays without another provider call, and an
+// unacknowledged dispatch stays ambiguous even if it carries an id.
 func replayResolvedMpesa(existing *MpesaTransaction) (*MpesaTransaction, error) {
 	if existing.Status == StatusFailed {
 		return nil, ErrIdempotencyKeyConflict
 	}
-	if existing.Status != StatusCompleted && existing.CheckoutRequestID == "" {
+	if existing.Status != StatusCompleted && !existing.DispatchAcknowledged {
 		return nil, fmt.Errorf("%w: previous attempt is unresolved", ErrTransactionAmbiguous)
 	}
 	return existing, nil
+}
+
+// preDispatchRetryDesc marks a reservation whose provider call never left the
+// building and whose cleanup also failed. A later replay may clear it and
+// dispatch once more.
+const preDispatchRetryDesc = "pre-dispatch failure - safe to retry"
+
+func retryablePreDispatch(tx *MpesaTransaction) bool {
+	return tx.Status == StatusFailed &&
+		!tx.DispatchAcknowledged &&
+		tx.CheckoutRequestID == "" &&
+		tx.ResultDesc == preDispatchRetryDesc
 }
 
 // InitiateSTKPush starts an M-Pesa STK push prompt with idempotency protection.
@@ -239,7 +255,15 @@ func (s *service) InitiateSTKPush(ctx context.Context, businessID uuid.UUID, inp
 			if !stkReplayMatches(existing, input, phone, accountRef) {
 				return nil, ErrIdempotencyKeyConflict
 			}
-			return replayResolvedMpesa(existing)
+			if retryablePreDispatch(existing) {
+				// The provider call never left the building and the original
+				// cleanup also failed. Clear it so this retry can dispatch.
+				if delErr := s.repo.DeleteMpesaTransaction(existing.ID); delErr != nil {
+					return nil, fmt.Errorf("%w: could not clear the previous pre-dispatch reservation", ErrTransactionAmbiguous)
+				}
+			} else {
+				return replayResolvedMpesa(existing)
+			}
 		}
 	}
 
@@ -314,9 +338,16 @@ func (s *service) InitiateSTKPush(ctx context.Context, businessID uuid.UUID, inp
 	if err != nil {
 		if errors.Is(err, ErrMpesaPreDispatch) {
 			// Proven pre-dispatch failure: release the reservation so a retry can
-			// dispatch instead of replaying a stuck pending row.
+			// dispatch instead of replaying a stuck pending row. If cleanup also
+			// fails, persist a terminal retry marker so one replay can still
+			// dispatch instead of blocking forever on an unacknowledged row.
 			if delErr := s.repo.DeleteMpesaTransaction(tx.ID); delErr != nil {
 				log.Printf("payments: release stk reservation %s failed: %v", tx.ID, delErr)
+				tx.Status = StatusFailed
+				tx.ResultDesc = preDispatchRetryDesc
+				if saveErr := s.repo.UpdateMpesaTransaction(tx); saveErr != nil {
+					log.Printf("payments: mark stk reservation %s retryable failed: %v", tx.ID, saveErr)
+				}
 			}
 			return nil, fmt.Errorf("initiate stk push: %w", err)
 		}
@@ -345,6 +376,8 @@ func (s *service) InitiateSTKPush(ctx context.Context, businessID uuid.UUID, inp
 	tx.MerchantRequestID = resp.MerchantRequestID
 	tx.CheckoutRequestID = resp.CheckoutRequestID
 	tx.ResultDesc = resp.ResponseDescription
+	// Only a clean provider success proves the dispatch was acknowledged.
+	tx.DispatchAcknowledged = true
 
 	if err := s.repo.UpdateMpesaTransaction(tx); err != nil {
 		return nil, fmt.Errorf("save transaction: %w", err)
@@ -448,11 +481,24 @@ func (s *service) HandleSTKCallback(signatureHeader string, body []byte) error {
 	// Automatic reconciliation: match to invoice or customer credit. A failure
 	// here leaves the transaction completed and unmatched, so it surfaces in the
 	// review queue without ever replaying the payment.
+	wasDismissed := tx.ReconciliationStatus == Manual
 	if err := s.autoReconcileMpesa(tx); err != nil {
 		log.Printf("payments: stk reconciliation for transaction %s failed: %v", tx.ID, err)
+		if wasDismissed {
+			// The receipt confirmed but could not be posted; reopen the dismissed
+			// row so an operator can recover it instead of losing the link.
+			if reopenErr := s.repo.ReopenMpesaReconciliation(tx); reopenErr != nil {
+				log.Printf("payments: reopen dismissed stk %s failed: %v", tx.ID, reopenErr)
+			}
+		}
 		return err
 	}
 
+	// Adopt a Manual row dismissed before this late success, then persist an
+	// open row through the guarded update.
+	if err := s.repo.AdoptMpesaReconciliation(tx); err != nil {
+		return err
+	}
 	return s.repo.UpdateMpesaReconciliation(tx)
 }
 
@@ -571,6 +617,7 @@ func (s *service) InitiateB2C(ctx context.Context, businessID uuid.UUID, input B
 	// A payout to a supplier must remember its target so the result callback
 	// settles the payable instead of recording a generic expense.
 	var supplierID *uuid.UUID
+	var supplier *suppliers.Supplier
 	if raw := strings.TrimSpace(input.SupplierID); raw != "" {
 		parsed, err := uuid.Parse(raw)
 		if err != nil {
@@ -579,12 +626,14 @@ func (s *service) InitiateB2C(ctx context.Context, businessID uuid.UUID, input B
 		if s.suppliersSvc == nil {
 			return nil, errors.New("supplier service not configured")
 		}
-		if _, err := s.suppliersSvc.Get(parsed, businessID); err != nil {
+		found, err := s.suppliersSvc.Get(parsed, businessID)
+		if err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) || errors.Is(err, suppliers.ErrSupplierNotFound) {
 				return nil, ErrSupplierNotFound
 			}
 			return nil, err
 		}
+		supplier = found
 		supplierID = &parsed
 	}
 
@@ -606,7 +655,28 @@ func (s *service) InitiateB2C(ctx context.Context, businessID uuid.UUID, input B
 			if !b2cReplayMatches(existing, input, phone, supplierID, expenseCategory) {
 				return nil, ErrIdempotencyKeyConflict
 			}
-			return replayResolvedMpesa(existing)
+			if retryablePreDispatch(existing) {
+				if delErr := s.repo.DeleteMpesaTransaction(existing.ID); delErr != nil {
+					return nil, fmt.Errorf("%w: could not clear the previous pre-dispatch reservation", ErrTransactionAmbiguous)
+				}
+			} else {
+				return replayResolvedMpesa(existing)
+			}
+		}
+	}
+
+	// A supplier payout must not exceed what is still payable after the payouts
+	// already in flight. This check runs only when a new reservation is created:
+	// an idempotent replay must not count its own pending row against the
+	// balance. The repository repeats the check under a supplier row lock so
+	// concurrent requests cannot both spend the same balance.
+	if supplierID != nil {
+		pending, err := s.repo.PendingSupplierPayoutTotal(businessID, *supplierID)
+		if err != nil {
+			return nil, fmt.Errorf("read pending supplier payouts: %w", err)
+		}
+		if input.Amount > supplier.OutstandingBalance-pending {
+			return nil, ErrPayoutExceedsPayable
 		}
 	}
 
@@ -642,8 +712,18 @@ func (s *service) InitiateB2C(ctx context.Context, businessID uuid.UUID, input B
 		ExpenseCategory:      expenseCategory,
 	}
 
-	// Persist pending transaction before provider request to reserve idempotency key
-	if err := s.repo.CreateMpesaTransaction(tx); err != nil {
+	// Persist pending transaction before provider request to reserve idempotency
+	// key. A supplier payout is inserted through the atomic payable check.
+	var createErr error
+	if supplierID != nil {
+		createErr = s.repo.CreateSupplierPayout(tx)
+	} else {
+		createErr = s.repo.CreateMpesaTransaction(tx)
+	}
+	if createErr != nil {
+		if errors.Is(createErr, ErrPayoutExceedsPayable) {
+			return nil, ErrPayoutExceedsPayable
+		}
 		if input.IdempotencyKey != "" {
 			if existing, lookupErr := s.repo.GetMpesaTransactionByIdempotency(businessID, input.IdempotencyKey); lookupErr == nil && existing != nil {
 				// The concurrent winner must describe the same request, otherwise
@@ -654,16 +734,22 @@ func (s *service) InitiateB2C(ctx context.Context, businessID uuid.UUID, input B
 				return replayResolvedMpesa(existing)
 			}
 		}
-		return nil, fmt.Errorf("create pending transaction: %w", err)
+		return nil, fmt.Errorf("create pending transaction: %w", createErr)
 	}
 
 	resp, err := s.mpesaClient.InitiateB2CPayout(ctx, darajaReq)
 	if err != nil {
 		if errors.Is(err, ErrMpesaPreDispatch) {
 			// Proven pre-dispatch failure: release the reservation so a retry can
-			// dispatch instead of replaying a stuck pending row.
+			// dispatch instead of replaying a stuck pending row. If cleanup also
+			// fails, persist a terminal retry marker so one replay can dispatch.
 			if delErr := s.repo.DeleteMpesaTransaction(tx.ID); delErr != nil {
 				log.Printf("payments: release b2c reservation %s failed: %v", tx.ID, delErr)
+				tx.Status = StatusFailed
+				tx.ResultDesc = preDispatchRetryDesc
+				if saveErr := s.repo.UpdateMpesaTransaction(tx); saveErr != nil {
+					log.Printf("payments: mark b2c reservation %s retryable failed: %v", tx.ID, saveErr)
+				}
 			}
 			return nil, fmt.Errorf("initiate b2c: %w", err)
 		}
@@ -686,6 +772,8 @@ func (s *service) InitiateB2C(ctx context.Context, businessID uuid.UUID, input B
 
 	tx.CheckoutRequestID = resp.ConversationID
 	tx.ResultDesc = resp.ResponseDescription
+	// Only a clean provider success proves the dispatch was acknowledged.
+	tx.DispatchAcknowledged = true
 
 	if err := s.repo.UpdateMpesaTransaction(tx); err != nil {
 		return nil, fmt.Errorf("save transaction: %w", err)
@@ -755,8 +843,16 @@ func (s *service) HandleB2CResult(signatureHeader string, body []byte) error {
 
 	// Claiming completion before creating the expense or supplier payment means
 	// a redelivered callback cannot pay the same supplier twice.
+	wasDismissed := tx.ReconciliationStatus == Manual
 	if err := s.applyB2CPayout(tx); err != nil {
 		log.Printf("payments: b2c reconciliation for transaction %s failed: %v", tx.ID, err)
+		if wasDismissed {
+			// The payout confirmed but could not be posted; reopen the dismissed
+			// row so an operator can recover the settlement instead of losing it.
+			if reopenErr := s.repo.ReopenMpesaReconciliation(tx); reopenErr != nil {
+				log.Printf("payments: reopen dismissed b2c %s failed: %v", tx.ID, reopenErr)
+			}
+		}
 		return nil
 	}
 
@@ -1688,8 +1784,11 @@ func (s *service) ReconcileReviewItem(businessID uuid.UUID, itemID uuid.UUID, in
 	}
 
 	// Release any claim abandoned by an interrupted prior attempt so it becomes
-	// reviewable again before we try to take a new claim.
-	_ = s.repo.ReleaseStaleReconciliationClaims(time.Now().Add(-reconciliationClaimTTL))
+	// reviewable again before we try to take a new claim. A cleanup failure must
+	// not be mistaken for ErrAlreadyReconciled below.
+	if err := s.repo.ReleaseStaleReconciliationClaims(time.Now().Add(-reconciliationClaimTTL)); err != nil {
+		return fmt.Errorf("release stale reconciliation claims: %w", err)
+	}
 
 	// Claim the reconciliation slot before applying any financial effect. The
 	// claim is a compare-and-set on reconciliation_status (Unmatched -> Claiming)
@@ -2123,16 +2222,20 @@ func (s *service) reconcileReviewSupplierPayment(businessID uuid.UUID, ctx *revi
 
 func (s *service) reconcileReviewDismiss(ctx *reviewReconcileContext) error {
 	if ctx.mpesaTx != nil {
-		ctx.mpesaTx.ReconciliationStatus = Manual
-		ctx.mpesaTx.ReconciledEntityType = ""
-		ctx.mpesaTx.ReconciledEntityID = nil
-		ok, err := s.repo.FinalizeMpesaReconciliation(ctx.mpesaTx, ctx.claimID)
+		// Only commit Manual when the transaction status still matches the one
+		// observed at load time. A payout that completed while this dismissal was
+		// in flight changes the status, so this fails and the deferred release
+		// returns the row to the queue for recovery instead of hiding it.
+		ok, err := s.repo.FinalizeMpesaDismissal(ctx.mpesaTx, ctx.claimID, ctx.mpesaTx.Status)
 		if err != nil {
 			return err
 		}
 		if !ok {
 			return ErrAlreadyReconciled
 		}
+		ctx.mpesaTx.ReconciliationStatus = Manual
+		ctx.mpesaTx.ReconciledEntityType = ""
+		ctx.mpesaTx.ReconciledEntityID = nil
 		return nil
 	}
 	if ctx.bankTx != nil {

@@ -11,6 +11,7 @@ import (
 	"github.com/businessos/backend/internal/modules/suppliers"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 var (
@@ -71,6 +72,19 @@ type Repository interface {
 	// completed after an operator dismissed it, reopening the terminal Manual
 	// state so the link is not silently lost.
 	AdoptMpesaReconciliation(tx *MpesaTransaction) error
+	// ReopenMpesaReconciliation returns a dismissed Manual row to the review
+	// queue when a late confirmation could not be posted and needs recovery.
+	ReopenMpesaReconciliation(tx *MpesaTransaction) error
+	// FinalizeMpesaDismissal only commits Manual when the transaction status is
+	// still the one observed when the dismissal was claimed, so a payout that
+	// completed concurrently cannot be hidden from review.
+	FinalizeMpesaDismissal(tx *MpesaTransaction, claimID uuid.UUID, expectedStatus TransactionStatus) (bool, error)
+	// PendingSupplierPayoutTotal sums in-flight B2C payouts reserved against a
+	// supplier so a new payout cannot oversubscribe the payable.
+	PendingSupplierPayoutTotal(businessID, supplierID uuid.UUID) (int64, error)
+	// CreateSupplierPayout inserts a supplier payout only when the payable still
+	// covers it, serializing concurrent payouts on the supplier row.
+	CreateSupplierPayout(tx *MpesaTransaction) error
 	UpdateMpesaTransaction(tx *MpesaTransaction) error
 	ListMpesaTransactions(businessID uuid.UUID, limit, offset int) ([]MpesaTransaction, int64, error)
 
@@ -148,6 +162,7 @@ func (r *repository) UpdateMpesaTransaction(tx *MpesaTransaction) error {
 	// CHECK constraint (it allows NULL or the four enum values).
 	return r.db.Model(&MpesaTransaction{}).Where("id = ?", tx.ID).Updates(map[string]any{
 		"status":                tx.Status,
+		"dispatch_acknowledged": tx.DispatchAcknowledged,
 		"result_code":           tx.ResultCode,
 		"result_desc":           tx.ResultDesc,
 		"merchant_request_id":   tx.MerchantRequestID,
@@ -415,6 +430,82 @@ func (r *repository) AdoptMpesaReconciliation(tx *MpesaTransaction) error {
 			colReconciledEntityID:   tx.ReconciledEntityID,
 			colUpdatedAt:            time.Now(),
 		}).Error
+}
+
+// ReopenMpesaReconciliation returns a dismissed row to the review queue. It is
+// scoped to Manual so it cannot disturb a settled or in-flight reconciliation.
+func (r *repository) ReopenMpesaReconciliation(tx *MpesaTransaction) error {
+	return r.db.Model(&MpesaTransaction{}).
+		Where("id = ? AND reconciliation_status = ?", tx.ID, Manual).
+		Updates(map[string]any{
+			colReconciliationStatus:  Unmatched,
+			colReconciledEntityType:  nil,
+			colReconciledEntityID:    nil,
+			colReconciliationClaimID: nil,
+			colUpdatedAt:             time.Now(),
+		}).Error
+}
+
+// FinalizeMpesaDismissal commits Manual only when the transaction status still
+// matches the value observed when the dismissal was claimed. A success result
+// that lands in between changes the status, so this write fails and the
+// deferred claim release returns the row to the review queue instead of hiding
+// a real settlement.
+func (r *repository) FinalizeMpesaDismissal(tx *MpesaTransaction, claimID uuid.UUID, expectedStatus TransactionStatus) (bool, error) {
+	result := r.db.Model(&MpesaTransaction{}).
+		Where("id = ? AND reconciliation_status = ? AND reconciliation_claim_id = ? AND status = ?", tx.ID, Claiming, claimID, expectedStatus).
+		Updates(map[string]any{
+			colReconciliationStatus:  Manual,
+			colReconciledEntityType:  nil,
+			colReconciledEntityID:    nil,
+			colReconciliationClaimID: nil,
+			colUpdatedAt:             time.Now(),
+		})
+	if result.Error != nil {
+		return false, result.Error
+	}
+	return result.RowsAffected == 1, nil
+}
+
+// PendingSupplierPayoutTotal returns the amount already reserved for a supplier
+// by payouts that have not reached a final state.
+func (r *repository) PendingSupplierPayoutTotal(businessID, supplierID uuid.UUID) (int64, error) {
+	var total int64
+	err := r.db.Model(&MpesaTransaction{}).
+		Where("business_id = ? AND supplier_id = ? AND transaction_type = ? AND status IN ?",
+			businessID, supplierID, TypeB2C, []TransactionStatus{StatusPending, StatusTimedOut}).
+		Select("COALESCE(SUM(amount), 0)").
+		Scan(&total).Error
+	return total, err
+}
+
+// CreateSupplierPayout inserts a supplier payout only when the payable still
+// covers it. Locking the supplier row serializes concurrent payouts so two
+// requests cannot both spend the same outstanding balance.
+func (r *repository) CreateSupplierPayout(tx *MpesaTransaction) error {
+	if tx.SupplierID == nil {
+		return errors.New("supplier payout is missing its target")
+	}
+	return r.db.Transaction(func(db *gorm.DB) error {
+		var supplier suppliers.Supplier
+		if err := db.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("id = ? AND business_id = ?", *tx.SupplierID, tx.BusinessID).
+			First(&supplier).Error; err != nil {
+			return err
+		}
+		var pending int64
+		if err := db.Model(&MpesaTransaction{}).
+			Where("business_id = ? AND supplier_id = ? AND transaction_type = ? AND status IN ?",
+				tx.BusinessID, *tx.SupplierID, TypeB2C, []TransactionStatus{StatusPending, StatusTimedOut}).
+			Select("COALESCE(SUM(amount), 0)").
+			Scan(&pending).Error; err != nil {
+			return err
+		}
+		if tx.Amount > supplier.OutstandingBalance-pending {
+			return ErrPayoutExceedsPayable
+		}
+		return db.Create(tx).Error
+	})
 }
 
 // nullableEntityType stores an unset entity type as NULL so it satisfies the

@@ -102,6 +102,8 @@ export default function FinancePage() {
   const [reviewItems, setReviewItems] = useState<ReviewItem[]>([]);
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
+  // Non-fatal results, such as a statement import that rejected some rows.
+  const [warning, setWarning] = useState("");
   // Submission failures are rendered inside the open modal so they are not
   // hidden behind the backdrop.
   const [modalError, setModalError] = useState("");
@@ -121,6 +123,21 @@ export default function FinancePage() {
   function selectTab(tab: TabType) {
     activeTabRef.current = tab;
     setActiveTab(tab);
+  }
+
+  /** Move between same-route tabs with the keyboard. */
+  function onTabKeyDown(e: React.KeyboardEvent<HTMLDivElement>) {
+    const order: TabType[] = ["overview", "mpesa", "bank", "review"];
+    const idx = order.indexOf(activeTab);
+    let next = -1;
+    if (e.key === "ArrowRight") next = (idx + 1) % order.length;
+    else if (e.key === "ArrowLeft") next = (idx - 1 + order.length) % order.length;
+    else if (e.key === "Home") next = 0;
+    else if (e.key === "End") next = order.length - 1;
+    if (next < 0) return;
+    e.preventDefault();
+    selectTab(order[next]);
+    document.getElementById(`tab-${order[next]}`)?.focus();
   }
   // Reuse one STK idempotency key across retries of the same attempt (same
   // phone and amount) so a retried submit cannot prompt the customer twice.
@@ -145,6 +162,9 @@ export default function FinancePage() {
   const [bankType, setBankType] = useState<"inflow" | "outflow">("inflow");
   const [bankAmount, setBankAmount] = useState("");
   const [bankDesc, setBankDesc] = useState("");
+  // Empty means "leave it unmatched"; only an explicit expense intent lets the
+  // backend auto-book an outflow as an operating expense.
+  const [bankIntent, setBankIntent] = useState<"unassigned" | "expense">("unassigned");
 
   // Bank statement upload modal
   const [showStatementModal, setShowStatementModal] = useState(false);
@@ -194,6 +214,7 @@ export default function FinancePage() {
     activeTabRef.current = activeTab;
     requestVersion.current += 1;
     setMessage("");
+    setWarning("");
     setError("");
     setModalError("");
     if (canView) void loadData();
@@ -286,12 +307,14 @@ export default function FinancePage() {
         type: bankType,
         amount: cents,
         description: bankDesc,
+        settlement_intent: bankType === "outflow" ? bankIntent : "",
       });
       if (token !== submissionToken.current) return;
       setShowBankManualModal(false);
       setBankRef("");
       setBankAmount("");
       setBankDesc("");
+      setBankIntent("unassigned");
       const tx = res.data.data as BankTx;
       setMessage(bankTransferMessage(tx.amount, tx.reconciliation_status));
       await loadData();
@@ -306,6 +329,7 @@ export default function FinancePage() {
     e.preventDefault();
     const token = ++submissionToken.current;
     setModalError("");
+    setWarning("");
     if (!statementFile) return;
     const formData = new FormData();
     formData.append("statement", statementFile);
@@ -319,8 +343,15 @@ export default function FinancePage() {
       setShowStatementModal(false);
       setStatementFile(null);
       const r = res.data.data;
+      const rejected = Number(r.invalid_rows) || 0;
+      const total = Number(r.total_rows) || 0;
       setMessage(
-        `Statement imported: ${r.imported} added (${r.reconciled} auto-reconciled, ${r.unmatched} unmatched), ${r.skipped_duplicates} duplicate(s) skipped.`,
+        `Statement imported: ${r.imported} of ${total} row(s) added (${r.reconciled} auto-reconciled, ${r.unmatched} unmatched), ${r.skipped_duplicates} duplicate(s) skipped, ${rejected} rejected.`,
+      );
+      setWarning(
+        rejected > 0
+          ? `${rejected} row(s) were rejected. Correct them and upload the statement again.`
+          : "",
       );
       await loadData();
     } catch (e: any) {
@@ -424,12 +455,25 @@ export default function FinancePage() {
       />
 
       {error && <p className="mb-4 rounded-lg bg-danger-soft p-3 text-sm text-danger">{error}</p>}
+      {warning && (
+        <p className="mb-4 rounded-lg bg-warning-soft p-3 text-sm text-warning-strong">{warning}</p>
+      )}
       {message && <p className="mb-4 rounded-lg bg-primary-soft p-3 text-sm text-primary">{message}</p>}
 
       {/* Tabs */}
-      <div className="mb-6 flex border-b border-border-subtle">
+      <div
+        role="tablist"
+        aria-label="Finance sections"
+        onKeyDown={onTabKeyDown}
+        className="mb-6 flex border-b border-border-subtle"
+      >
         <button
           onClick={() => selectTab("overview")}
+          role="tab"
+          id="tab-overview"
+          aria-selected={activeTab === "overview"}
+          aria-controls="panel-overview"
+          tabIndex={activeTab === "overview" ? 0 : -1}
           className={`border-b-2 px-4 py-2.5 text-sm font-semibold transition-colors ${
             activeTab === "overview"
               ? "border-primary text-foreground"
@@ -440,6 +484,11 @@ export default function FinancePage() {
         </button>
         <button
           onClick={() => selectTab("mpesa")}
+          role="tab"
+          id="tab-mpesa"
+          aria-selected={activeTab === "mpesa"}
+          aria-controls="panel-mpesa"
+          tabIndex={activeTab === "mpesa" ? 0 : -1}
           className={`border-b-2 px-4 py-2.5 text-sm font-semibold transition-colors ${
             activeTab === "mpesa"
               ? "border-primary text-foreground"
@@ -450,6 +499,11 @@ export default function FinancePage() {
         </button>
         <button
           onClick={() => selectTab("bank")}
+          role="tab"
+          id="tab-bank"
+          aria-selected={activeTab === "bank"}
+          aria-controls="panel-bank"
+          tabIndex={activeTab === "bank" ? 0 : -1}
           className={`border-b-2 px-4 py-2.5 text-sm font-semibold transition-colors ${
             activeTab === "bank"
               ? "border-primary text-foreground"
@@ -460,6 +514,11 @@ export default function FinancePage() {
         </button>
         <button
           onClick={() => selectTab("review")}
+          role="tab"
+          id="tab-review"
+          aria-selected={activeTab === "review"}
+          aria-controls="panel-review"
+          tabIndex={activeTab === "review" ? 0 : -1}
           className={`border-b-2 px-4 py-2.5 text-sm font-semibold transition-colors ${
             activeTab === "review"
               ? "border-primary text-foreground"
@@ -472,7 +531,7 @@ export default function FinancePage() {
 
       {/* OVERVIEW & EXPENSES TAB */}
       {activeTab === "overview" && (
-        <>
+        <div role="tabpanel" id="panel-overview" aria-labelledby="tab-overview">
           <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
             <StatCard label="Revenue" value={formatMoney(x.revenue)} icon={ArrowUpRight} />
             <StatCard
@@ -579,12 +638,17 @@ export default function FinancePage() {
               </div>
             )}
           </section>
-        </>
+        </div>
       )}
 
       {/* M-PESA PAYMENTS TAB */}
       {activeTab === "mpesa" && (
-        <section className="panel overflow-hidden">
+        <section
+          role="tabpanel"
+          id="panel-mpesa"
+          aria-labelledby="tab-mpesa"
+          className="panel overflow-hidden"
+        >
           <div className="border-b border-border-subtle p-5">
             <p className="eyebrow">Mobile Money</p>
             <h2 className="mt-1 text-lg font-bold">M-Pesa Transactions</h2>
@@ -656,7 +720,12 @@ export default function FinancePage() {
 
       {/* BANK TRANSFERS TAB */}
       {activeTab === "bank" && (
-        <section className="panel overflow-hidden">
+        <section
+          role="tabpanel"
+          id="panel-bank"
+          aria-labelledby="tab-bank"
+          className="panel overflow-hidden"
+        >
           <div className="border-b border-border-subtle p-5">
             <p className="eyebrow">Bank Accounts</p>
             <h2 className="mt-1 text-lg font-bold">Bank Statement & Transfers</h2>
@@ -723,7 +792,12 @@ export default function FinancePage() {
 
       {/* REVIEW QUEUE TAB */}
       {activeTab === "review" && (
-        <section className="panel overflow-hidden">
+        <section
+          role="tabpanel"
+          id="panel-review"
+          aria-labelledby="tab-review"
+          className="panel overflow-hidden"
+        >
           <div className="border-b border-border-subtle p-5">
             <p className="eyebrow">Matching Queue</p>
             <h2 className="mt-1 text-lg font-bold">Unmatched Transactions</h2>
@@ -890,6 +964,23 @@ export default function FinancePage() {
                   <option value="outflow">Outflow (Expense / Supplier Payment)</option>
                 </select>
               </div>
+              {bankType === "outflow" && (
+                <div>
+                  <label className="block text-xs font-semibold text-muted">Settlement</label>
+                  <select
+                    className="field mt-1"
+                    value={bankIntent}
+                    onChange={(e) => setBankIntent(e.target.value as "unassigned" | "expense")}
+                  >
+                    <option value="unassigned">Leave unmatched for review</option>
+                    <option value="expense">Operating expense</option>
+                  </select>
+                  <p className="mt-1 text-xs text-subtle">
+                    Only an explicit expense is booked automatically; otherwise the transfer waits in
+                    the review queue for supplier or expense allocation.
+                  </p>
+                </div>
+              )}
               <div>
                 <label className="block text-xs font-semibold text-muted">Amount (KSh)</label>
                 <input

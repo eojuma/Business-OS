@@ -3,13 +3,14 @@ package config
 
 import (
 	"fmt"
+	"net"
 	"net/url"
 	"os"
 	"strconv"
 	"strings"
 
+	"github.com/google/uuid"
 	"github.com/joho/godotenv"
-	"net"
 )
 
 // Config holds all application configuration.
@@ -17,6 +18,9 @@ type Config struct {
 	AppEnv      string
 	AppPort     string
 	FrontendURL string
+	// BackendURL is the public origin of the API. M-Pesa callback URLs are built
+	// from it when a provider-specific override is not configured.
+	BackendURL string
 	// FrontendURLSet reports whether FRONTEND_URL was provided explicitly (as
 	// opposed to the development default).
 	FrontendURLSet bool
@@ -63,6 +67,30 @@ type Config struct {
 	// AIOCRModel is the vision-capable model used for receipt OCR. It falls
 	// back to AIModel when unset.
 	AIOCRModel string
+
+	// M-Pesa configuration
+	MpesaEnv            string
+	MpesaConsumerKey    string
+	MpesaConsumerSecret string
+	MpesaPasskey        string
+	MpesaShortCode      string
+	MpesaStkCallbackURL string
+	MpesaCallbackSecret string
+	// MpesaCallbackToken is the value embedded in provider callback URLs. Keep it
+	// separate from MpesaCallbackSecret so the HMAC signing secret is not exposed
+	// in URLs (which end up in logs and provider dashboards).
+	MpesaCallbackToken string
+	// MpesaCallbackIPAllowlist restricts public callback endpoints to these
+	// CIDRs/IPs. When empty, callbacks are accepted from any source (the token
+	// and HMAC still apply).
+	MpesaCallbackIPAllowlist   []string
+	MpesaB2CInitiatorName      string
+	MpesaB2CSecurityCredential string
+	MpesaB2CShortCode          string
+	MpesaB2CResultURL          string
+	MpesaB2CTimeoutURL         string
+	// MpesaBusinessID is the optional business UUID authorized to use deployment-wide Daraja credentials.
+	MpesaBusinessID string
 }
 
 // Load loads configuration from environment variables.
@@ -82,6 +110,7 @@ func Load() *Config {
 		AppEnv:         appEnv,
 		AppPort:        getEnv("APP_PORT", "8080"),
 		FrontendURL:    frontendURL,
+		BackendURL:     strings.TrimSpace(getEnv("BACKEND_URL", "")),
 		FrontendURLSet: frontendSet,
 		AllowedOrigins: parseOrigins(frontendURL, appEnv == productionEnv),
 		TrustedProxies: func() []string {
@@ -119,6 +148,22 @@ func Load() *Config {
 		AIModel:    getEnv("AI_MODEL", "gemini-3.6-flash"),
 		AIBaseURL:  getEnv("AI_BASE_URL", "https://generativelanguage.googleapis.com/v1beta/openai"),
 		AIOCRModel: getEnv("AI_OCR_MODEL", ""),
+
+		MpesaEnv:                   getEnv("MPESA_ENV", "sandbox"),
+		MpesaConsumerKey:           getEnv("MPESA_CONSUMER_KEY", ""),
+		MpesaConsumerSecret:        getEnv("MPESA_CONSUMER_SECRET", ""),
+		MpesaPasskey:               getEnv("MPESA_PASSKEY", ""),
+		MpesaShortCode:             getEnv("MPESA_SHORTCODE", ""),
+		MpesaStkCallbackURL:        getEnv("MPESA_STK_CALLBACK_URL", ""),
+		MpesaCallbackSecret:        getEnv("MPESA_CALLBACK_SECRET", ""),
+		MpesaCallbackToken:         getEnv("MPESA_CALLBACK_TOKEN", ""),
+		MpesaCallbackIPAllowlist:   splitList(getEnv("MPESA_CALLBACK_IP_ALLOWLIST", "")),
+		MpesaB2CInitiatorName:      getEnv("MPESA_B2C_INITIATOR_NAME", ""),
+		MpesaB2CSecurityCredential: getEnv("MPESA_B2C_SECURITY_CREDENTIAL", ""),
+		MpesaB2CShortCode:          getEnv("MPESA_B2C_SHORTCODE", ""),
+		MpesaB2CResultURL:          getEnv("MPESA_B2C_RESULT_URL", ""),
+		MpesaB2CTimeoutURL:         getEnv("MPESA_B2C_TIMEOUT_URL", ""),
+		MpesaBusinessID:            getEnv("MPESA_BUSINESS_ID", ""),
 	}
 }
 
@@ -185,6 +230,16 @@ func (c *Config) Validate() error {
 	}
 	if c.DBSSLMode == "disable" {
 		return fmt.Errorf("DB_SSLMODE must enable TLS in production")
+	}
+	// Only require the callback secret when M-Pesa is actually configured;
+	// deployments that never enable M-Pesa should not fail startup for it.
+	if c.MpesaConsumerKey != "" && c.MpesaCallbackSecret == "" {
+		return fmt.Errorf("MPESA_CALLBACK_SECRET must be set in production so M-Pesa callbacks are signed")
+	}
+	if c.MpesaBusinessID != "" {
+		if _, err := uuid.Parse(c.MpesaBusinessID); err != nil {
+			return fmt.Errorf("MPESA_BUSINESS_ID must be a valid UUID: %w", err)
+		}
 	}
 	// Email/password sign-ups verify their address; without SMTP the message
 	// cannot be delivered, so fail fast instead of silently breaking sign-up.
@@ -323,4 +378,16 @@ func parseRedisURL(raw string) (host, port, password string) {
 		password, _ = u.User.Password()
 	}
 	return
+}
+
+// splitList splits a comma-separated env value into trimmed, non-empty items.
+func splitList(value string) []string {
+	parts := strings.Split(value, ",")
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if trimmed := strings.TrimSpace(part); trimmed != "" {
+			out = append(out, trimmed)
+		}
+	}
+	return out
 }

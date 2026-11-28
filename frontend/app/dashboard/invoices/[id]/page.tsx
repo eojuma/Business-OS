@@ -1,9 +1,9 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { ArrowLeft, CheckCircle2, Clock } from "lucide-react";
+import { ArrowLeft, CheckCircle2, Clock, Smartphone } from "lucide-react";
 import { api } from "@/lib/api";
 import { PageHeader, formatMoney } from "@/components/app-shell";
 import { usePermissions } from "@/hooks/usePermissions";
@@ -13,6 +13,7 @@ import {
   invoiceDate,
   invoiceStatusClass,
   invoiceStatusLabel,
+  shouldKeepPollingInvoicePayment,
   type Invoice,
 } from "@/lib/invoices";
 
@@ -35,32 +36,79 @@ export default function InvoiceDetailPage() {
   const [note, setNote] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [paymentError, setPaymentError] = useState("");
+  const [payMode, setPayMode] = useState<"manual" | "mpesa">("manual");
+  const [stkPhone, setStkPhone] = useState("");
+  const [stkSuccess, setStkSuccess] = useState("");
+  const [pollTimer, setPollTimer] = useState<NodeJS.Timeout | null>(null);
+  // Bumped on each successful payment so a slow background read that started
+  // before the payment cannot overwrite the paid snapshot with stale data.
+  const invoiceGeneration = useRef(0);
+  // Tracks mount state so a poll GET that resolves after unmount does not
+  // schedule another timeout.
+  const mountedRef = useRef(true);
+  // Identifies the current polling window so a callback from a superseded
+  // window cannot schedule timers into the new one.
+  const pollTokenRef = useRef(0);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
 
   /** Loads the invoice and resets the payment amount to the remainder. */
-  const loadInvoice = useCallback(async () => {
-    if (!id) return;
-    setLoading(true);
-    setError("");
+  const loadInvoice = useCallback(async (background = false) => {
+    if (!id) return null;
+    const generation = invoiceGeneration.current;
+    if (!background) {
+      setLoading(true);
+      setError("");
+    }
     try {
       const res = await api.get(`/invoices/${id}`);
       const next = res.data.data as Invoice;
-      setInvoice(next);
-      if (next.remaining_balance > 0) {
-        setAmount((next.remaining_balance / 100).toFixed(2));
-      } else {
-        setAmount("");
+      // Discard a background read that began before a successful payment.
+      if (background && generation !== invoiceGeneration.current) {
+        return null;
       }
+      setInvoice(next);
+      if (!background) {
+        // Reset the STK phone to the customer's current phone. If the customer
+        // has no phone, clear the field so a stale value from a previous
+        // invoice cannot be reused.
+        setStkPhone(next.customer?.phone || "");
+        if (next.remaining_balance > 0) {
+          setAmount((next.remaining_balance / 100).toFixed(2));
+        } else {
+          setAmount("");
+        }
+      }
+      return next;
     } catch (e) {
-      setInvoice(null);
-      setError(errorMessage(e, "Failed to load invoice"));
+      if (!background) {
+        setInvoice(null);
+        setError(errorMessage(e, "Failed to load invoice"));
+      }
+      return null;
     } finally {
-      setLoading(false);
+      if (!background) {
+        setLoading(false);
+      }
     }
   }, [id]);
 
   useEffect(() => {
     void loadInvoice();
   }, [loadInvoice]);
+
+  // Clear any pending STK reload timer on unmount so stale timers do not
+  // trigger setState after the component has left.
+  useEffect(() => {
+    return () => {
+      if (pollTimer) clearTimeout(pollTimer);
+    };
+  }, [pollTimer]);
 
   /** Applies a payment and refreshes the invoice from the response. */
   async function recordPayment(event: React.FormEvent) {
@@ -79,11 +127,81 @@ export default function InvoiceDetailPage() {
         note,
       });
       const next = res.data.data as Invoice;
+      invoiceGeneration.current += 1;
       setInvoice(next);
       setNote("");
       setAmount(next.remaining_balance > 0 ? (next.remaining_balance / 100).toFixed(2) : "");
     } catch (e) {
       setPaymentError(errorMessage(e, "Failed to record payment"));
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  /** Triggers M-Pesa STK push prompt directly to the customer's phone. */
+  async function triggerSTKPush(event: React.FormEvent) {
+    event.preventDefault();
+    if (!invoice) return;
+    const cents = Math.round(Number(amount) * 100);
+    if (!Number.isFinite(cents) || cents <= 0) {
+      setPaymentError("Enter a valid payment amount");
+      return;
+    }
+    if (!stkPhone.trim()) {
+      setPaymentError("Enter customer phone number");
+      return;
+    }
+    if (cents % 100 !== 0) {
+      setPaymentError("M-Pesa accepts whole shillings only");
+      return;
+    }
+    setSubmitting(true);
+    setPaymentError("");
+    setStkSuccess("");
+    try {
+      await api.post("/payments/mpesa/stk-push", {
+        phone_number: stkPhone,
+        amount: cents,
+        account_reference: invoice.invoice_number,
+        transaction_desc: `Payment for ${invoice.invoice_number}`,
+        // Stable key so retries of this submit do not create duplicate
+        // requests. The server accepts them as one idempotent operation.
+        idempotency_key: `stk-${invoice.id}`,
+      });
+      // The page may have unmounted while the prompt was being sent; do not
+      // create a polling timer that cleanup can no longer clear.
+      if (!mountedRef.current) return;
+      // Discard background reads that started before this submission so a
+      // stale unpaid snapshot cannot overwrite a newer paid invoice.
+      invoiceGeneration.current += 1;
+      setStkSuccess("M-Pesa STK push prompt sent! Payment will automatically reconcile upon confirmation.");
+      // Refresh after the callback window and keep polling within a bounded
+      // window until the payment settles. That avoids leaving the page with stale
+      // status while preventing infinite polling or resetting form state.
+      if (pollTimer) clearTimeout(pollTimer);
+      pollTokenRef.current += 1;
+      const token = pollTokenRef.current;
+      const initialBalance = invoice.remaining_balance;
+      let attempts = 0;
+      const maxAttempts = 15; // 30 seconds max polling window (15 * 2s)
+      const poll = () => {
+        const timer = setTimeout(async () => {
+          if (token !== pollTokenRef.current) return;
+          attempts++;
+          const next = await loadInvoice(true);
+          if (!mountedRef.current) return;
+          if (token !== pollTokenRef.current) return;
+          const keepPolling = next ? shouldKeepPollingInvoicePayment(next, initialBalance) : true;
+          if (keepPolling && attempts < maxAttempts) {
+            poll();
+          }
+        }, 2000);
+        // Only the active window may own the timer.
+        if (token === pollTokenRef.current) setPollTimer(timer);
+      };
+      poll();
+    } catch (e) {
+      setPaymentError(errorMessage(e, "Failed to send STK push"));
     } finally {
       setSubmitting(false);
     }
@@ -170,34 +288,93 @@ export default function InvoiceDetailPage() {
               Your role cannot record invoice payments.
             </p>
           ) : invoice.remaining_balance > 0 ? (
-            <form onSubmit={recordPayment} className="mt-4 space-y-3">
-              <label className="block text-sm font-semibold">
-                Amount (KSh)
-                <input
-                  className="field mt-1.5"
-                  type="number"
-                  min="0.01"
-                  step="0.01"
-                  max={(invoice.remaining_balance / 100).toFixed(2)}
-                  value={amount}
-                  onChange={(e) => setAmount(e.target.value)}
-                  required
-                />
-              </label>
-              <label className="block text-sm font-semibold">
-                Note <span className="font-normal text-subtle">(optional)</span>
-                <input
-                  className="field mt-1.5"
-                  value={note}
-                  onChange={(e) => setNote(e.target.value)}
-                  placeholder="e.g. M-Pesa reference"
-                />
-              </label>
-              {paymentError && <p className="rounded-lg bg-danger-soft p-3 text-sm text-danger">{paymentError}</p>}
-              <button className="btn-primary w-full" disabled={submitting}>
-                {submitting ? "Recording…" : "Record payment"}
-              </button>
-            </form>
+            <div className="mt-4">
+              <div className="mb-4 flex rounded-lg bg-surface-muted p-1 text-xs font-semibold">
+                <button
+                  type="button"
+                  onClick={() => setPayMode("manual")}
+                  className={`flex-1 rounded-md py-1.5 transition-colors ${
+                    payMode === "manual" ? "bg-surface shadow text-foreground" : "text-muted hover:text-foreground"
+                  }`}
+                >
+                  Manual Entry
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setPayMode("mpesa")}
+                  className={`flex-1 rounded-md py-1.5 transition-colors ${
+                    payMode === "mpesa" ? "bg-surface shadow text-foreground" : "text-muted hover:text-foreground"
+                  }`}
+                >
+                  M-Pesa STK Push
+                </button>
+              </div>
+
+              {payMode === "manual" ? (
+                <form onSubmit={recordPayment} className="space-y-3">
+                  <label className="block text-sm font-semibold">
+                    Amount (KSh)
+                    <input
+                      className="field mt-1.5"
+                      type="number"
+                      min="0.01"
+                      step="0.01"
+                      max={(invoice.remaining_balance / 100).toFixed(2)}
+                      value={amount}
+                      onChange={(e) => setAmount(e.target.value)}
+                      required
+                    />
+                  </label>
+                  <label className="block text-sm font-semibold">
+                    Note <span className="font-normal text-subtle">(optional)</span>
+                    <input
+                      className="field mt-1.5"
+                      value={note}
+                      onChange={(e) => setNote(e.target.value)}
+                      placeholder="e.g. M-Pesa reference"
+                    />
+                  </label>
+                  {paymentError && <p className="rounded-lg bg-danger-soft p-3 text-sm text-danger">{paymentError}</p>}
+                  <button className="btn-primary w-full" disabled={submitting}>
+                    {submitting ? "Recording…" : "Record payment"}
+                  </button>
+                </form>
+              ) : (
+                <form onSubmit={triggerSTKPush} className="space-y-3">
+                  <label className="block text-sm font-semibold">
+                    Customer Phone Number
+                    <input
+                      className="field mt-1.5"
+                      placeholder="07XXXXXXXX or 2547XXXXXXXX"
+                      value={stkPhone}
+                      onChange={(e) => setStkPhone(e.target.value)}
+                      required
+                    />
+                  </label>
+                  <label className="block text-sm font-semibold">
+                    Amount (KSh)
+                    <input
+                      className="field mt-1.5"
+                      type="number"
+                      min="1"
+                      step="0.01"
+                      max={(invoice.remaining_balance / 100).toFixed(2)}
+                      value={amount}
+                      onChange={(e) => setAmount(e.target.value)}
+                      required
+                    />
+                  </label>
+                  {paymentError && <p className="rounded-lg bg-danger-soft p-3 text-sm text-danger">{paymentError}</p>}
+                  {stkSuccess && (
+                    <p className="rounded-lg bg-primary-soft p-3 text-sm text-primary">{stkSuccess}</p>
+                  )}
+                  <button className="btn-primary w-full flex items-center justify-center gap-2" disabled={submitting}>
+                    <Smartphone size={16} />
+                    {submitting ? "Sending prompt…" : "Send M-Pesa STK Prompt"}
+                  </button>
+                </form>
+              )}
+            </div>
           ) : (
             <p className="mt-4 flex items-center gap-2 rounded-lg bg-primary-soft p-3 text-sm text-primary">
               <CheckCircle2 size={16} /> This invoice has been fully paid.

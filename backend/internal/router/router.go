@@ -15,6 +15,7 @@ import (
 	"github.com/businessos/backend/internal/modules/inventory"
 	"github.com/businessos/backend/internal/modules/invoices"
 	"github.com/businessos/backend/internal/modules/notifications"
+	"github.com/businessos/backend/internal/modules/payments"
 	"github.com/businessos/backend/internal/modules/products"
 	"github.com/businessos/backend/internal/modules/purchases"
 	"github.com/businessos/backend/internal/modules/receipts"
@@ -68,6 +69,7 @@ func New(db *gorm.DB, cfg *config.Config) (*gin.Engine, func(context.Context)) {
 		receipts.RegisterRoutes(protected, db, cfg)
 		invoices.RegisterRoutes(protected, db, cfg)
 		audit.RegisterRoutes(protected, db, cfg)
+		payments.RegisterRoutes(v1, protected, db, cfg)
 	}
 
 	return r, waitAuthBackground

@@ -1,0 +1,794 @@
+package payments
+
+import (
+	"errors"
+	"strings"
+	"time"
+
+	"github.com/businessos/backend/internal/modules/customers"
+	"github.com/businessos/backend/internal/modules/finance"
+	"github.com/businessos/backend/internal/modules/invoices"
+	"github.com/businessos/backend/internal/modules/suppliers"
+	"github.com/google/uuid"
+	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
+)
+
+var (
+	ErrDuplicateReference  = errors.New("bank transaction with this reference already exists")
+	ErrTransactionNotFound = errors.New("payment transaction not found")
+	// ErrMpesaReceiptExists is returned when a C2B confirmation inserts a row
+	// whose mpesa_receipt_number violates the partial unique index. It is a
+	// duplicate, not a persistence failure.
+	ErrMpesaReceiptExists = errors.New("mpesa receipt number already exists")
+)
+
+// colUpdatedAt is the shared updated_at column name used by the repository's
+// compare-and-set and reconciliation updates.
+const (
+	colUpdatedAt             = "updated_at"
+	colReconciliationStatus  = "reconciliation_status"
+	colReconciliationClaimID = "reconciliation_claim_id"
+	colReconciledEntityType  = "reconciled_entity_type"
+	colReconciledEntityID    = "reconciled_entity_id"
+)
+
+type Repository interface {
+	CreateMpesaTransaction(tx *MpesaTransaction) error
+	GetMpesaTransactionByID(id, businessID uuid.UUID) (*MpesaTransaction, error)
+	GetMpesaTransactionByIdempotency(businessID uuid.UUID, key string) (*MpesaTransaction, error)
+	GetMpesaTransactionByCheckoutRequestID(checkoutReqID string) (*MpesaTransaction, error)
+	GetMpesaTransactionByReceipt(receipt string) (*MpesaTransaction, error)
+	// ClaimMpesaTransactionStatus atomically moves a transaction from one of the
+	// allowed statuses to terminal and persists the callback metadata. It returns
+	// false when another delivery already settled the transaction, which is what
+	// makes callback processing safe to replay.
+	ClaimMpesaTransactionStatus(tx *MpesaTransaction, terminal TransactionStatus, allowedFrom ...TransactionStatus) (bool, error)
+	// ClaimMpesaReconciliation atomically moves the reconciliation status from
+	// one value to another and records the owning attempt. It returns false when
+	// another request already claimed the row, which serializes the settle path
+	// so one receipt can never be applied twice by concurrent requests.
+	ClaimMpesaReconciliation(tx *MpesaTransaction, from, to ReconciliationStatus, claimID uuid.UUID) (bool, error)
+	// ReleaseMpesaReconciliationClaim clears a claim only when claimID still
+	// owns it, so a stale attempt cannot release a replacement's claim.
+	ReleaseMpesaReconciliationClaim(tx *MpesaTransaction, claimID uuid.UUID) (bool, error)
+	// FinalizeMpesaReconciliation commits the reconciliation outcome only when
+	// claimID still owns the row.
+	FinalizeMpesaReconciliation(tx *MpesaTransaction, claimID uuid.UUID) (bool, error)
+	// OwnsMpesaReconciliationClaim revalidates ownership immediately before a
+	// ledger write so an attempt whose claim expired cannot post.
+	OwnsMpesaReconciliationClaim(tx *MpesaTransaction, claimID uuid.UUID) (bool, error)
+	// ReleaseStaleReconciliationClaims returns in-progress claims older than the
+	// cutoff to Unmatched so an interrupted process cannot strand an item.
+	ReleaseStaleReconciliationClaims(before time.Time) error
+	// DeleteMpesaTransaction removes a reservation that never reached the
+	// provider (pre-dispatch failure), freeing its idempotency key for a retry.
+	DeleteMpesaTransaction(id uuid.UUID) error
+	// UpdateMpesaReconciliation persists reconciliation fields without touching
+	// the transaction status. It never overwrites a reconciliation that another
+	// writer has already finalized.
+	UpdateMpesaReconciliation(tx *MpesaTransaction) error
+	// AdoptMpesaReconciliation records the settlement for a payout that
+	// completed after an operator dismissed it, reopening the terminal Manual
+	// state so the link is not silently lost.
+	AdoptMpesaReconciliation(tx *MpesaTransaction) error
+	// ReopenMpesaReconciliation returns a dismissed Manual row to the review
+	// queue when a late confirmation could not be posted and needs recovery.
+	ReopenMpesaReconciliation(tx *MpesaTransaction) error
+	// FinalizeMpesaDismissal only commits Manual when the transaction status is
+	// still the one observed when the dismissal was claimed, so a payout that
+	// completed concurrently cannot be hidden from review.
+	FinalizeMpesaDismissal(tx *MpesaTransaction, claimID uuid.UUID, expectedStatus TransactionStatus) (bool, error)
+	// PendingSupplierPayoutTotal sums in-flight B2C payouts reserved against a
+	// supplier so a new payout cannot oversubscribe the payable.
+	PendingSupplierPayoutTotal(businessID, supplierID uuid.UUID) (int64, error)
+	// CreateSupplierPayout inserts a supplier payout only when the payable still
+	// covers it, serializing concurrent payouts on the supplier row.
+	CreateSupplierPayout(tx *MpesaTransaction) error
+	UpdateMpesaTransaction(tx *MpesaTransaction) error
+	ListMpesaTransactions(businessID uuid.UUID, limit, offset int) ([]MpesaTransaction, int64, error)
+
+	CreateBankTransaction(tx *BankTransaction) error
+	GetBankTransactionByID(id, businessID uuid.UUID) (*BankTransaction, error)
+	GetBankTransactionByReference(businessID uuid.UUID, ref string) (*BankTransaction, error)
+	ListBankTransactions(businessID uuid.UUID, txType string, status string, limit, offset int) ([]BankTransaction, int64, error)
+	// ClaimBankReconciliation mirrors ClaimMpesaReconciliation for bank
+	// transactions so the manual-review and automatic settle paths are
+	// serialized there too.
+	ClaimBankReconciliation(tx *BankTransaction, from, to ReconciliationStatus, claimID uuid.UUID) (bool, error)
+	ReleaseBankReconciliationClaim(tx *BankTransaction, claimID uuid.UUID) (bool, error)
+	FinalizeBankReconciliation(tx *BankTransaction, claimID uuid.UUID) (bool, error)
+	OwnsBankReconciliationClaim(tx *BankTransaction, claimID uuid.UUID) (bool, error)
+
+	ListReviewQueue(businessID uuid.UUID, source string, limit, offset int) ([]ReviewQueueItem, int64, error)
+	// ListMpesaPaymentNotesByPrefix returns payment notes that start with prefix
+	// across invoices, customer credit, and supplier payments for one business.
+	// It is filtered in SQL so a callback or reconciliation does not load the
+	// whole payment history just to check one receipt.
+	ListMpesaPaymentNotesByPrefix(businessID uuid.UUID, prefix string) ([]string, error)
+	// FindReconciliationApplication recovers a posting that already committed for
+	// a source transaction (M-Pesa or bank) even if the reconciliation link
+	// update failed. It checks every ledger table by the stable source marker so
+	// a retry that selects a different target cannot settle the source twice.
+	FindReconciliationApplication(businessID uuid.UUID, marker string) (ReconciledEntityType, uuid.UUID, bool, error)
+	FindInvoiceByNumber(businessID uuid.UUID, invoiceNumber string) (*invoices.Invoice, error)
+	FindCustomerByPhone(businessID uuid.UUID, phone string) (*customers.Customer, error)
+}
+
+type repository struct {
+	db *gorm.DB
+}
+
+func NewRepository(db *gorm.DB) Repository {
+	return &repository{db: db}
+}
+
+func (r *repository) CreateMpesaTransaction(tx *MpesaTransaction) error {
+	err := r.db.Create(tx).Error
+	if err == nil {
+		return nil
+	}
+	if isMpesaReceiptConflict(err) {
+		return ErrMpesaReceiptExists
+	}
+	// With TranslateError enabled the driver replaces the Postgres error with
+	// the gorm.ErrDuplicatedKey sentinel, which no longer names the index. Only
+	// map it when the row really is a receipt duplicate, not an idempotency-key
+	// collision.
+	if errors.Is(err, gorm.ErrDuplicatedKey) && r.mpesaReceiptExists(tx) {
+		return ErrMpesaReceiptExists
+	}
+	return err
+}
+
+// mpesaReceiptExists reports whether another row already stores this receipt.
+func (r *repository) mpesaReceiptExists(tx *MpesaTransaction) bool {
+	receipt := strings.TrimSpace(tx.MpesaReceiptNumber)
+	if receipt == "" {
+		return false
+	}
+	var count int64
+	if err := r.db.Model(&MpesaTransaction{}).
+		Where("business_id = ? AND mpesa_receipt_number = ?", tx.BusinessID, receipt).
+		Count(&count).Error; err != nil {
+		return false
+	}
+	return count > 0
+}
+
+func (r *repository) UpdateMpesaTransaction(tx *MpesaTransaction) error {
+	// Use a targeted update instead of Save: Save writes every column, and for a
+	// new row ReconciledEntityType is "" which violates the reconciled_entity_type
+	// CHECK constraint (it allows NULL or the four enum values).
+	return r.db.Model(&MpesaTransaction{}).Where("id = ?", tx.ID).Updates(map[string]any{
+		"status":                tx.Status,
+		"dispatch_acknowledged": tx.DispatchAcknowledged,
+		"result_code":           tx.ResultCode,
+		"result_desc":           tx.ResultDesc,
+		"merchant_request_id":   tx.MerchantRequestID,
+		"checkout_request_id":   tx.CheckoutRequestID,
+		"mpesa_receipt_number":  tx.MpesaReceiptNumber,
+		"phone_number":          tx.PhoneNumber,
+		"amount":                tx.Amount,
+		"raw_payload":           tx.RawPayload,
+		"supplier_id":           tx.SupplierID,
+		"expense_category":      tx.ExpenseCategory,
+		colReconciliationStatus: tx.ReconciliationStatus,
+		colReconciledEntityType: nullableEntityType(tx.ReconciledEntityType),
+		colReconciledEntityID:   tx.ReconciledEntityID,
+		colUpdatedAt:            time.Now(),
+	}).Error
+}
+
+// DeleteMpesaTransaction removes a reservation that never reached the provider.
+func (r *repository) DeleteMpesaTransaction(id uuid.UUID) error {
+	return r.db.Where("id = ?", id).Delete(&MpesaTransaction{}).Error
+}
+
+// ReleaseStaleReconciliationClaims releases interrupted in-progress claims.
+func (r *repository) ReleaseStaleReconciliationClaims(before time.Time) error {
+	if err := r.db.Model(&MpesaTransaction{}).
+		Where("reconciliation_status = ? AND updated_at < ?", Claiming, before).
+		Updates(map[string]any{
+			colReconciliationStatus:  Unmatched,
+			colReconciliationClaimID: nil,
+		}).Error; err != nil {
+		return err
+	}
+	return r.db.Model(&BankTransaction{}).
+		Where("reconciliation_status = ? AND updated_at < ?", Claiming, before).
+		Updates(map[string]any{
+			colReconciliationStatus:  Unmatched,
+			colReconciliationClaimID: nil,
+		}).Error
+}
+
+// isMpesaReceiptConflict reports whether a create error is a violation of the
+// partial unique index on mpesa_receipt_number. Gorm surfaces it as a
+// gorm.ErrDuplicatedKey with the index name in the message.
+func isMpesaReceiptConflict(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "mpesa_receipt_number") ||
+		strings.Contains(msg, "idx_mpesa_transactions_receipt_unique")
+}
+
+func (r *repository) GetMpesaTransactionByID(id, businessID uuid.UUID) (*MpesaTransaction, error) {
+	var tx MpesaTransaction
+	if err := r.db.Where("id = ? AND business_id = ?", id, businessID).First(&tx).Error; err != nil {
+		return nil, err
+	}
+	return &tx, nil
+}
+
+func (r *repository) GetMpesaTransactionByIdempotency(businessID uuid.UUID, key string) (*MpesaTransaction, error) {
+	if key == "" {
+		return nil, gorm.ErrRecordNotFound
+	}
+	var tx MpesaTransaction
+	if err := r.db.Where("business_id = ? AND idempotency_key = ?", businessID, key).First(&tx).Error; err != nil {
+		return nil, err
+	}
+	return &tx, nil
+}
+
+func (r *repository) GetMpesaTransactionByCheckoutRequestID(checkoutReqID string) (*MpesaTransaction, error) {
+	if checkoutReqID == "" {
+		return nil, gorm.ErrRecordNotFound
+	}
+	var tx MpesaTransaction
+	if err := r.db.Where("checkout_request_id = ?", checkoutReqID).First(&tx).Error; err != nil {
+		return nil, err
+	}
+	return &tx, nil
+}
+
+func (r *repository) GetMpesaTransactionByReceipt(receipt string) (*MpesaTransaction, error) {
+	if receipt == "" {
+		return nil, gorm.ErrRecordNotFound
+	}
+	var tx MpesaTransaction
+	if err := r.db.Where("mpesa_receipt_number = ?", receipt).First(&tx).Error; err != nil {
+		return nil, err
+	}
+	return &tx, nil
+}
+
+// ClaimMpesaTransactionStatus performs a compare-and-set on the transaction
+// status. Only the request that wins the transition may apply the financial
+// side effect, so a redelivered or concurrent callback cannot apply it twice.
+func (r *repository) ClaimMpesaTransactionStatus(tx *MpesaTransaction, terminal TransactionStatus, allowedFrom ...TransactionStatus) (bool, error) {
+	if len(allowedFrom) == 0 {
+		allowedFrom = []TransactionStatus{StatusPending}
+	}
+	updates := map[string]any{
+		"status":               terminal,
+		"result_code":          tx.ResultCode,
+		"result_desc":          tx.ResultDesc,
+		"raw_payload":          tx.RawPayload,
+		"mpesa_receipt_number": tx.MpesaReceiptNumber,
+		"phone_number":         tx.PhoneNumber,
+		"amount":               tx.Amount,
+		colUpdatedAt:           time.Now(),
+	}
+	result := r.db.Model(&MpesaTransaction{}).
+		Where("id = ? AND status IN ?", tx.ID, allowedFrom).
+		Updates(updates)
+	if result.Error != nil {
+		return false, result.Error
+	}
+	return result.RowsAffected == 1, nil
+}
+
+// ClaimMpesaReconciliation performs a compare-and-set on the reconciliation
+// status and records the owning attempt. Only one concurrent caller can move
+// the row out of the expected status, which serializes reconciliation and
+// prevents a double settle.
+func (r *repository) ClaimMpesaReconciliation(tx *MpesaTransaction, from, to ReconciliationStatus, claimID uuid.UUID) (bool, error) {
+	result := r.db.Model(&MpesaTransaction{}).
+		Where("id = ? AND reconciliation_status = ?", tx.ID, from).
+		Updates(map[string]any{
+			colReconciliationStatus:  to,
+			colReconciliationClaimID: claimID,
+			colUpdatedAt:             time.Now(),
+		})
+	if result.Error != nil {
+		return false, result.Error
+	}
+	return result.RowsAffected == 1, nil
+}
+
+// ReleaseMpesaReconciliationClaim returns a Claiming row to Unmatched only if
+// the supplied attempt still owns the claim.
+func (r *repository) ReleaseMpesaReconciliationClaim(tx *MpesaTransaction, claimID uuid.UUID) (bool, error) {
+	result := r.db.Model(&MpesaTransaction{}).
+		Where("id = ? AND reconciliation_status = ? AND reconciliation_claim_id = ?", tx.ID, Claiming, claimID).
+		Updates(map[string]any{
+			colReconciliationStatus:  Unmatched,
+			colReconciliationClaimID: nil,
+			colUpdatedAt:             time.Now(),
+		})
+	if result.Error != nil {
+		return false, result.Error
+	}
+	return result.RowsAffected == 1, nil
+}
+
+// FinalizeMpesaReconciliation commits the outcome only if the supplied attempt
+// still owns the claim, so a stale attempt cannot overwrite a replacement.
+func (r *repository) FinalizeMpesaReconciliation(tx *MpesaTransaction, claimID uuid.UUID) (bool, error) {
+	result := r.db.Model(&MpesaTransaction{}).
+		Where("id = ? AND reconciliation_status = ? AND reconciliation_claim_id = ?", tx.ID, Claiming, claimID).
+		Updates(map[string]any{
+			colReconciliationStatus:  tx.ReconciliationStatus,
+			colReconciledEntityType:  nullableEntityType(tx.ReconciledEntityType),
+			colReconciledEntityID:    tx.ReconciledEntityID,
+			colReconciliationClaimID: nil,
+			colUpdatedAt:             time.Now(),
+		})
+	if result.Error != nil {
+		return false, result.Error
+	}
+	return result.RowsAffected == 1, nil
+}
+
+func (r *repository) OwnsMpesaReconciliationClaim(tx *MpesaTransaction, claimID uuid.UUID) (bool, error) {
+	var count int64
+	err := r.db.Model(&MpesaTransaction{}).
+		Where("id = ? AND reconciliation_status = ? AND reconciliation_claim_id = ?", tx.ID, Claiming, claimID).
+		Count(&count).Error
+	if err != nil {
+		return false, err
+	}
+	return count > 0, nil
+}
+
+// ClaimBankReconciliation is the bank-transaction counterpart of
+// ClaimMpesaReconciliation.
+func (r *repository) ClaimBankReconciliation(tx *BankTransaction, from, to ReconciliationStatus, claimID uuid.UUID) (bool, error) {
+	result := r.db.Model(&BankTransaction{}).
+		Where("id = ? AND reconciliation_status = ?", tx.ID, from).
+		Updates(map[string]any{
+			colReconciliationStatus:  to,
+			colReconciliationClaimID: claimID,
+			colUpdatedAt:             time.Now(),
+		})
+	if result.Error != nil {
+		return false, result.Error
+	}
+	return result.RowsAffected == 1, nil
+}
+
+func (r *repository) ReleaseBankReconciliationClaim(tx *BankTransaction, claimID uuid.UUID) (bool, error) {
+	result := r.db.Model(&BankTransaction{}).
+		Where("id = ? AND reconciliation_status = ? AND reconciliation_claim_id = ?", tx.ID, Claiming, claimID).
+		Updates(map[string]any{
+			colReconciliationStatus:  Unmatched,
+			colReconciliationClaimID: nil,
+			colUpdatedAt:             time.Now(),
+		})
+	if result.Error != nil {
+		return false, result.Error
+	}
+	return result.RowsAffected == 1, nil
+}
+
+func (r *repository) FinalizeBankReconciliation(tx *BankTransaction, claimID uuid.UUID) (bool, error) {
+	result := r.db.Model(&BankTransaction{}).
+		Where("id = ? AND reconciliation_status = ? AND reconciliation_claim_id = ?", tx.ID, Claiming, claimID).
+		Updates(map[string]any{
+			colReconciliationStatus:  tx.ReconciliationStatus,
+			colReconciledEntityType:  nullableEntityType(tx.ReconciledEntityType),
+			colReconciledEntityID:    tx.ReconciledEntityID,
+			colReconciliationClaimID: nil,
+			colUpdatedAt:             time.Now(),
+		})
+	if result.Error != nil {
+		return false, result.Error
+	}
+	return result.RowsAffected == 1, nil
+}
+
+func (r *repository) OwnsBankReconciliationClaim(tx *BankTransaction, claimID uuid.UUID) (bool, error) {
+	var count int64
+	err := r.db.Model(&BankTransaction{}).
+		Where("id = ? AND reconciliation_status = ? AND reconciliation_claim_id = ?", tx.ID, Claiming, claimID).
+		Count(&count).Error
+	if err != nil {
+		return false, err
+	}
+	return count > 0, nil
+}
+
+func (r *repository) UpdateMpesaReconciliation(tx *MpesaTransaction) error {
+	updates := map[string]any{
+		colReconciliationStatus: tx.ReconciliationStatus,
+		colReconciledEntityType: nullableEntityType(tx.ReconciledEntityType),
+		colReconciledEntityID:   tx.ReconciledEntityID,
+		colUpdatedAt:            time.Now(),
+	}
+	// A callback may load a row before a reviewer finalizes it. Only write when
+	// the row is still open so a late callback cannot clear or replace a
+	// finalized link; a blocked write is a no-op because the callback's
+	// financial effect is already deduped by the receipt marker.
+	return r.db.Model(&MpesaTransaction{}).
+		Where("id = ? AND reconciliation_status NOT IN ?", tx.ID, []ReconciliationStatus{Reconciled, Manual, Claiming}).
+		Updates(updates).Error
+}
+
+// AdoptMpesaReconciliation writes the settlement for a late-completed payout
+// that was dismissed or is being dismissed by a reviewer. It is scoped to
+// Manual and Claiming: a callback that has already posted money must not leave
+// the row hidden, and taking over a claim here makes the reviewer's finalize
+// fail safely instead of overwriting a committed settlement.
+func (r *repository) AdoptMpesaReconciliation(tx *MpesaTransaction) error {
+	return r.db.Model(&MpesaTransaction{}).
+		Where("id = ? AND reconciliation_status IN ?", tx.ID, []ReconciliationStatus{Manual, Claiming}).
+		Updates(map[string]any{
+			colReconciliationStatus:  tx.ReconciliationStatus,
+			colReconciledEntityType:  nullableEntityType(tx.ReconciledEntityType),
+			colReconciledEntityID:    tx.ReconciledEntityID,
+			colReconciliationClaimID: nil,
+			colUpdatedAt:             time.Now(),
+		}).Error
+}
+
+// ReopenMpesaReconciliation returns a dismissed row to the review queue. It is
+// scoped to Manual so it cannot disturb a settled or in-flight reconciliation.
+func (r *repository) ReopenMpesaReconciliation(tx *MpesaTransaction) error {
+	return r.db.Model(&MpesaTransaction{}).
+		Where("id = ? AND reconciliation_status = ?", tx.ID, Manual).
+		Updates(map[string]any{
+			colReconciliationStatus:  Unmatched,
+			colReconciledEntityType:  nil,
+			colReconciledEntityID:    nil,
+			colReconciliationClaimID: nil,
+			colUpdatedAt:             time.Now(),
+		}).Error
+}
+
+// FinalizeMpesaDismissal commits Manual only when the transaction status still
+// matches the value observed when the dismissal was claimed. A success result
+// that lands in between changes the status, so this write fails and the
+// deferred claim release returns the row to the review queue instead of hiding
+// a real settlement.
+func (r *repository) FinalizeMpesaDismissal(tx *MpesaTransaction, claimID uuid.UUID, expectedStatus TransactionStatus) (bool, error) {
+	result := r.db.Model(&MpesaTransaction{}).
+		Where("id = ? AND reconciliation_status = ? AND reconciliation_claim_id = ? AND status = ?", tx.ID, Claiming, claimID, expectedStatus).
+		Updates(map[string]any{
+			colReconciliationStatus:  Manual,
+			colReconciledEntityType:  nil,
+			colReconciledEntityID:    nil,
+			colReconciliationClaimID: nil,
+			colUpdatedAt:             time.Now(),
+		})
+	if result.Error != nil {
+		return false, result.Error
+	}
+	return result.RowsAffected == 1, nil
+}
+
+// PendingSupplierPayoutTotal returns the amount already reserved for a supplier.
+// A payout stays reserved while it is pending or timed out, and also while it is
+// completed but not yet linked to the supplier payment it debits. Without the
+// latter, a second payout could pass the check in the window between the result
+// callback committing Completed and the payable debit.
+func (r *repository) PendingSupplierPayoutTotal(businessID, supplierID uuid.UUID) (int64, error) {
+	var total int64
+	err := r.db.Model(&MpesaTransaction{}).
+		Where("business_id = ? AND supplier_id = ? AND transaction_type = ? AND (status IN ? OR (status = ? AND reconciled_entity_id IS NULL))",
+			businessID, supplierID, TypeB2C, []TransactionStatus{StatusPending, StatusTimedOut}, StatusCompleted).
+		Select("COALESCE(SUM(amount), 0)").
+		Scan(&total).Error
+	return total, err
+}
+
+// CreateSupplierPayout inserts a supplier payout only when the payable still
+// covers it. Locking the supplier row serializes concurrent payouts so two
+// requests cannot both spend the same outstanding balance.
+func (r *repository) CreateSupplierPayout(tx *MpesaTransaction) error {
+	if tx.SupplierID == nil {
+		return errors.New("supplier payout is missing its target")
+	}
+	return r.db.Transaction(func(db *gorm.DB) error {
+		var supplier suppliers.Supplier
+		if err := db.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("id = ? AND business_id = ?", *tx.SupplierID, tx.BusinessID).
+			First(&supplier).Error; err != nil {
+			return err
+		}
+		var pending int64
+		if err := db.Model(&MpesaTransaction{}).
+			Where("business_id = ? AND supplier_id = ? AND transaction_type = ? AND (status IN ? OR (status = ? AND reconciled_entity_id IS NULL))",
+				tx.BusinessID, *tx.SupplierID, TypeB2C, []TransactionStatus{StatusPending, StatusTimedOut}, StatusCompleted).
+			Select("COALESCE(SUM(amount), 0)").
+			Scan(&pending).Error; err != nil {
+			return err
+		}
+		if tx.Amount > supplier.OutstandingBalance-pending {
+			return ErrPayoutExceedsPayable
+		}
+		return db.Create(tx).Error
+	})
+}
+
+// nullableEntityType stores an unset entity type as NULL so it satisfies the
+// column check constraint.
+func nullableEntityType(entity ReconciledEntityType) any {
+	if entity == "" {
+		return nil
+	}
+	return entity
+}
+
+func (r *repository) ListMpesaTransactions(businessID uuid.UUID, limit, offset int) ([]MpesaTransaction, int64, error) {
+	var list []MpesaTransaction
+	var total int64
+	q := r.db.Model(&MpesaTransaction{}).Where("business_id = ?", businessID)
+	if err := q.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+	if err := q.Order("created_at DESC").Limit(limit).Offset(offset).Find(&list).Error; err != nil {
+		return nil, 0, err
+	}
+	return list, total, nil
+}
+
+func (r *repository) CreateBankTransaction(tx *BankTransaction) error {
+	return r.db.Create(tx).Error
+}
+
+func (r *repository) GetBankTransactionByID(id, businessID uuid.UUID) (*BankTransaction, error) {
+	var tx BankTransaction
+	if err := r.db.Where("id = ? AND business_id = ?", id, businessID).First(&tx).Error; err != nil {
+		return nil, err
+	}
+	return &tx, nil
+}
+
+func (r *repository) GetBankTransactionByReference(businessID uuid.UUID, ref string) (*BankTransaction, error) {
+	var tx BankTransaction
+	if err := r.db.Where("business_id = ? AND reference = ?", businessID, ref).First(&tx).Error; err != nil {
+		return nil, err
+	}
+	return &tx, nil
+}
+
+func (r *repository) ListBankTransactions(businessID uuid.UUID, txType string, status string, limit, offset int) ([]BankTransaction, int64, error) {
+	var list []BankTransaction
+	var total int64
+	q := r.db.Model(&BankTransaction{}).Where("business_id = ?", businessID)
+	if txType != "" {
+		q = q.Where("type = ?", txType)
+	}
+	if status != "" {
+		q = q.Where("reconciliation_status = ?", status)
+	}
+	if err := q.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+	if err := q.Order("transacted_at DESC").Limit(limit).Offset(offset).Find(&list).Error; err != nil {
+		return nil, 0, err
+	}
+	return list, total, nil
+}
+
+func (r *repository) ListMpesaPaymentNotesByPrefix(businessID uuid.UUID, prefix string) ([]string, error) {
+	notes := make([]string, 0)
+	like := prefix + "%"
+
+	var invoiceNotes []string
+	if err := r.db.Model(&invoices.InvoicePayment{}).
+		Where("business_id = ? AND note LIKE ?", businessID, like).
+		Pluck("note", &invoiceNotes).Error; err != nil {
+		return nil, err
+	}
+	notes = append(notes, invoiceNotes...)
+
+	var customerNotes []string
+	if err := r.db.Model(&customers.Payment{}).
+		Where("business_id = ? AND note LIKE ?", businessID, like).
+		Pluck("note", &customerNotes).Error; err != nil {
+		return nil, err
+	}
+	notes = append(notes, customerNotes...)
+
+	var supplierNotes []string
+	if err := r.db.Model(&suppliers.Payment{}).
+		Where("business_id = ? AND note LIKE ?", businessID, like).
+		Pluck("note", &supplierNotes).Error; err != nil {
+		return nil, err
+	}
+	notes = append(notes, supplierNotes...)
+
+	return notes, nil
+}
+
+// FindReconciliationApplication looks for an already-committed ledger entry
+// tagged with a source transaction's stable marker (M-Pesa receipt or bank
+// transaction id). Recovering by source transaction prevents a retry that picks
+// a different target from paying the same money twice.
+func (r *repository) FindReconciliationApplication(businessID uuid.UUID, marker string) (ReconciledEntityType, uuid.UUID, bool, error) {
+	like := marker + "%"
+
+	var invoicePayment invoices.InvoicePayment
+	err := r.db.Where("business_id = ? AND note LIKE ?", businessID, like).Order("created_at ASC").First(&invoicePayment).Error
+	if err == nil {
+		return EntityInvoice, invoicePayment.InvoiceID, true, nil
+	}
+	if !errors.Is(err, gorm.ErrRecordNotFound) {
+		return "", uuid.Nil, false, err
+	}
+
+	var customerPayment customers.Payment
+	err = r.db.Where("business_id = ? AND note LIKE ?", businessID, like).Order("created_at ASC").First(&customerPayment).Error
+	if err == nil {
+		return EntityCustomerCredit, customerPayment.CustomerID, true, nil
+	}
+	if !errors.Is(err, gorm.ErrRecordNotFound) {
+		return "", uuid.Nil, false, err
+	}
+
+	var supplierPayment suppliers.Payment
+	err = r.db.Where("business_id = ? AND note LIKE ?", businessID, like).Order("created_at ASC").First(&supplierPayment).Error
+	if err == nil {
+		return EntitySupplierPayment, supplierPayment.SupplierID, true, nil
+	}
+	if !errors.Is(err, gorm.ErrRecordNotFound) {
+		return "", uuid.Nil, false, err
+	}
+
+	var expense finance.Expense
+	err = r.db.Where("business_id = ? AND description LIKE ?", businessID, like).Order("created_at ASC").First(&expense).Error
+	if err == nil {
+		return EntityExpense, expense.ID, true, nil
+	}
+	if !errors.Is(err, gorm.ErrRecordNotFound) {
+		return "", uuid.Nil, false, err
+	}
+
+	return "", uuid.Nil, false, nil
+}
+
+func (r *repository) ListReviewQueue(businessID uuid.UUID, source string, limit, offset int) ([]ReviewQueueItem, int64, error) {
+	items := make([]ReviewQueueItem, 0)
+	var total int64
+
+	// Fetch unmatched M-Pesa transactions
+	if source == "" || source == "all" || source == "mpesa" {
+		var mpesaList []MpesaTransaction
+		var mpesaCount int64
+		mq := r.db.Model(&MpesaTransaction{}).Where("business_id = ? AND status IN ? AND reconciliation_status = ?", businessID, []TransactionStatus{StatusCompleted, StatusPending, StatusTimedOut}, Unmatched)
+		if err := mq.Count(&mpesaCount).Error; err != nil {
+			return nil, 0, err
+		}
+		total += mpesaCount
+		if err := mq.Order("created_at DESC").Find(&mpesaList).Error; err != nil {
+			return nil, 0, err
+		}
+		for _, m := range mpesaList {
+			ref := m.MpesaReceiptNumber
+			if ref == "" {
+				ref = m.CheckoutRequestID
+			}
+			itemType := "inflow"
+			if m.TransactionType == TypeB2C {
+				itemType = "outflow"
+			}
+			items = append(items, ReviewQueueItem{
+				ID:           m.ID,
+				Source:       "mpesa",
+				Reference:    ref,
+				Counterparty: m.PhoneNumber,
+				Amount:       m.Amount,
+				Type:         itemType,
+				Description:  m.AccountReference + " " + m.BillRefNumber,
+				TransactedAt: m.CreatedAt,
+				Status:       string(m.ReconciliationStatus),
+				// The gateway status decides whether the row can be acted on.
+				TransactionStatus: string(m.Status),
+			})
+		}
+	}
+
+	// Fetch unmatched Bank transactions
+	if source == "" || source == "all" || source == "bank" {
+		var bankList []BankTransaction
+		var bankCount int64
+		bq := r.db.Model(&BankTransaction{}).Where("business_id = ? AND reconciliation_status = ?", businessID, Unmatched)
+		if err := bq.Count(&bankCount).Error; err != nil {
+			return nil, 0, err
+		}
+		total += bankCount
+		if err := bq.Order("transacted_at DESC").Find(&bankList).Error; err != nil {
+			return nil, 0, err
+		}
+		for _, b := range bankList {
+			items = append(items, ReviewQueueItem{
+				ID:           b.ID,
+				Source:       "bank",
+				Reference:    b.Reference,
+				Counterparty: b.BankName,
+				Amount:       b.Amount,
+				Type:         string(b.Type),
+				Description:  b.Description,
+				TransactedAt: b.TransactedAt,
+				Status:       string(b.ReconciliationStatus),
+			})
+		}
+	}
+
+	// Slice pagination in-memory for merged result
+	if offset >= len(items) {
+		return []ReviewQueueItem{}, total, nil
+	}
+	end := offset + limit
+	if end > len(items) {
+		end = len(items)
+	}
+	return items[offset:end], total, nil
+}
+
+func (r *repository) FindInvoiceByNumber(businessID uuid.UUID, invoiceNumber string) (*invoices.Invoice, error) {
+	invoiceNumber = strings.TrimSpace(invoiceNumber)
+	if invoiceNumber == "" {
+		return nil, gorm.ErrRecordNotFound
+	}
+	var inv invoices.Invoice
+	q := r.db.Where("LOWER(invoice_number) = LOWER(?)", invoiceNumber)
+	if businessID != uuid.Nil {
+		if err := q.Where("business_id = ?", businessID).First(&inv).Error; err != nil {
+			return nil, err
+		}
+		return &inv, nil
+	}
+	// An unscoped lookup is used only for public C2B attribution. Invoice
+	// numbers are unique per business, not globally, so a match is usable only
+	// when exactly one business has it; otherwise the payment is unattributable.
+	var matches []invoices.Invoice
+	if err := q.Limit(2).Find(&matches).Error; err != nil {
+		return nil, err
+	}
+	if len(matches) != 1 {
+		return nil, gorm.ErrRecordNotFound
+	}
+	return &matches[0], nil
+}
+
+func (r *repository) FindCustomerByPhone(businessID uuid.UUID, phone string) (*customers.Customer, error) {
+	normalized := NormalizePhone(strings.TrimSpace(phone))
+	digits := onlyDigits(normalized)
+	// Short suffixes match too many customers and are not safe to auto-credit.
+	if len(digits) < 9 {
+		return nil, gorm.ErrRecordNotFound
+	}
+	last9 := digits[len(digits)-9:]
+	var matches []customers.Customer
+	q := r.db.Where("(phone = ? OR phone LIKE ?)", normalized, "%"+last9)
+	if businessID != uuid.Nil {
+		q = q.Where("business_id = ?", businessID)
+	}
+	err := q.Limit(2).Find(&matches).Error
+	if err != nil {
+		return nil, err
+	}
+	// Only a single unambiguous match may be auto-reconciled; otherwise leave the
+	// receipt for manual review instead of guessing a customer.
+	if len(matches) != 1 {
+		return nil, gorm.ErrRecordNotFound
+	}
+	return &matches[0], nil
+}
+
+// onlyDigits keeps 0-9 so a phone suffix cannot act as a LIKE wildcard.
+func onlyDigits(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		if r >= '0' && r <= '9' {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}

@@ -29,6 +29,7 @@ type Service interface {
 	List(businessID uuid.UUID, filter ListFilter) ([]Invoice, int64, error)
 	Get(id, businessID uuid.UUID) (*Invoice, error)
 	RecordPayment(id, businessID uuid.UUID, input RecordPaymentInput) (*Invoice, error)
+	ListPayments(id, businessID uuid.UUID) ([]InvoicePayment, error)
 }
 
 type service struct {
@@ -83,4 +84,9 @@ func (s *service) RecordPayment(id, businessID uuid.UUID, input RecordPaymentInp
 	}
 	invoice.Compute(time.Now())
 	return invoice, nil
+}
+
+// ListPayments returns payments recorded against an invoice.
+func (s *service) ListPayments(id, businessID uuid.UUID) ([]InvoicePayment, error) {
+	return s.repo.ListPayments(id, businessID)
 }

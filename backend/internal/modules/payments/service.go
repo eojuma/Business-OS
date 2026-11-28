@@ -36,6 +36,7 @@ var (
 	ErrInvalidStatementFile    = errors.New("statement file could not be parsed")
 	ErrIdempotencyKeyConflict  = errors.New("idempotency key already used for different request")
 	ErrBusinessNotBound        = errors.New("business is not authorized to use deployment daraja account")
+	ErrPageOutOfBounds         = errors.New("page out of bounds")
 )
 
 const (
@@ -165,6 +166,49 @@ func (s *service) validCallback(body []byte, signatureHeader string) bool {
 	return false
 }
 
+// stkReplayMatches reports whether an existing idempotent STK row describes the
+// same request, including the account/invoice being settled.
+func stkReplayMatches(existing *MpesaTransaction, input STKPushInput, phone, accountRef string) bool {
+	existingRef := existing.AccountReference
+	if existingRef == "" {
+		existingRef = existing.BillRefNumber
+	}
+	return existing.TransactionType == TypeSTKPush &&
+		existing.Amount == input.Amount &&
+		existing.PhoneNumber == phone &&
+		existingRef == accountRef
+}
+
+// b2cReplayMatches includes the payout target (supplier or expense category).
+func b2cReplayMatches(existing *MpesaTransaction, input B2CPayoutInput, phone string, supplierID *uuid.UUID, expenseCategory string) bool {
+	if existing.TransactionType != TypeB2C ||
+		existing.Amount != input.Amount ||
+		existing.PhoneNumber != phone ||
+		existing.ExpenseCategory != expenseCategory {
+		return false
+	}
+	return sameUUIDPtr(existing.SupplierID, supplierID)
+}
+
+func sameUUIDPtr(a, b *uuid.UUID) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return *a == *b
+}
+
+// replayResolvedMpesa applies one replay policy: failed rows conflict, and an
+// unresolved dispatch is reported as uncertain instead of as a successful replay.
+func replayResolvedMpesa(existing *MpesaTransaction) (*MpesaTransaction, error) {
+	if existing.Status == StatusFailed {
+		return nil, ErrIdempotencyKeyConflict
+	}
+	if existing.Status != StatusCompleted && existing.CheckoutRequestID == "" {
+		return nil, fmt.Errorf("%w: previous attempt is unresolved", ErrTransactionAmbiguous)
+	}
+	return existing, nil
+}
+
 // InitiateSTKPush starts an M-Pesa STK push prompt with idempotency protection.
 func (s *service) InitiateSTKPush(ctx context.Context, businessID uuid.UUID, input STKPushInput) (*MpesaTransaction, error) {
 	if input.Amount <= 0 {
@@ -175,22 +219,20 @@ func (s *service) InitiateSTKPush(ctx context.Context, businessID uuid.UUID, inp
 		return nil, ErrMissingPhone
 	}
 
-	// Idempotency: return existing transaction if key was already used for the same request
+	accountRef := strings.TrimSpace(input.AccountReference)
+	if accountRef == "" {
+		accountRef = "BusinessOS"
+	}
+
+	// Idempotency: return an existing transaction only when the full request
+	// intent matches, including the invoice/account being settled. A reused key
+	// for a different invoice must not silently return the first payment.
 	if input.IdempotencyKey != "" {
 		if existing, err := s.repo.GetMpesaTransactionByIdempotency(businessID, input.IdempotencyKey); err == nil && existing != nil {
-			if existing.TransactionType != TypeSTKPush || existing.Amount != input.Amount || existing.PhoneNumber != phone {
+			if !stkReplayMatches(existing, input, phone, accountRef) {
 				return nil, ErrIdempotencyKeyConflict
 			}
-			// Do not return a failed transaction as a successful replay.
-			if existing.Status == StatusFailed {
-				return nil, ErrIdempotencyKeyConflict
-			}
-			// An unresolved ambiguous dispatch has no checkout id and no prompt was
-			// confirmed; do not report it as a successful replay.
-			if existing.Status != StatusCompleted && existing.CheckoutRequestID == "" {
-				return nil, fmt.Errorf("%w: previous attempt is unresolved", ErrTransactionAmbiguous)
-			}
-			return existing, nil
+			return replayResolvedMpesa(existing)
 		}
 	}
 
@@ -214,10 +256,6 @@ func (s *service) InitiateSTKPush(ctx context.Context, businessID uuid.UUID, inp
 		kshAmount = 1
 	}
 
-	accountRef := strings.TrimSpace(input.AccountReference)
-	if accountRef == "" {
-		accountRef = "BusinessOS"
-	}
 	desc := strings.TrimSpace(input.TransactionDesc)
 	if desc == "" {
 		desc = "Invoice Payment"
@@ -257,10 +295,10 @@ func (s *service) InitiateSTKPush(ctx context.Context, businessID uuid.UUID, inp
 			if existing, lookupErr := s.repo.GetMpesaTransactionByIdempotency(businessID, input.IdempotencyKey); lookupErr == nil && existing != nil {
 				// The concurrent winner must describe the same request, otherwise
 				// a different payment could be silently returned.
-				if existing.TransactionType != TypeSTKPush || existing.Amount != input.Amount || existing.PhoneNumber != phone {
+				if !stkReplayMatches(existing, input, phone, accountRef) {
 					return nil, ErrIdempotencyKeyConflict
 				}
-				return existing, nil
+				return replayResolvedMpesa(existing)
 			}
 		}
 		return nil, fmt.Errorf("create pending transaction: %w", err)
@@ -520,25 +558,6 @@ func (s *service) InitiateB2C(ctx context.Context, businessID uuid.UUID, input B
 		return nil, ErrMissingPhone
 	}
 
-	if input.IdempotencyKey != "" {
-		if existing, err := s.repo.GetMpesaTransactionByIdempotency(businessID, input.IdempotencyKey); err == nil && existing != nil {
-			if existing.TransactionType != TypeB2C || existing.Amount != input.Amount || existing.PhoneNumber != phone {
-				return nil, ErrIdempotencyKeyConflict
-			}
-			// Do not return a failed transaction as a successful replay.
-			if existing.Status == StatusFailed {
-				return nil, ErrIdempotencyKeyConflict
-			}
-			return existing, nil
-		}
-	}
-
-	if s.cfg != nil && s.cfg.MpesaBusinessID != "" {
-		if boundID, err := uuid.Parse(s.cfg.MpesaBusinessID); err == nil && boundID != businessID {
-			return nil, ErrBusinessNotBound
-		}
-	}
-
 	// A payout to a supplier must remember its target so the result callback
 	// settles the payable instead of recording a generic expense.
 	var supplierID *uuid.UUID
@@ -562,6 +581,23 @@ func (s *service) InitiateB2C(ctx context.Context, businessID uuid.UUID, input B
 	expenseCategory := strings.TrimSpace(input.ExpenseCat)
 	if expenseCategory == "" {
 		expenseCategory = defaultExpenseCategory
+	}
+
+	if s.cfg != nil && s.cfg.MpesaBusinessID != "" {
+		if boundID, err := uuid.Parse(s.cfg.MpesaBusinessID); err == nil && boundID != businessID {
+			return nil, ErrBusinessNotBound
+		}
+	}
+
+	// Idempotency: the settlement target (supplier or expense category) is part
+	// of the request intent, so a reused key cannot replay a different payout.
+	if input.IdempotencyKey != "" {
+		if existing, err := s.repo.GetMpesaTransactionByIdempotency(businessID, input.IdempotencyKey); err == nil && existing != nil {
+			if !b2cReplayMatches(existing, input, phone, supplierID, expenseCategory) {
+				return nil, ErrIdempotencyKeyConflict
+			}
+			return replayResolvedMpesa(existing)
+		}
 	}
 
 	shortCode := s.cfg.MpesaB2CShortCode
@@ -605,10 +641,10 @@ func (s *service) InitiateB2C(ctx context.Context, businessID uuid.UUID, input B
 			if existing, lookupErr := s.repo.GetMpesaTransactionByIdempotency(businessID, input.IdempotencyKey); lookupErr == nil && existing != nil {
 				// The concurrent winner must describe the same request, otherwise
 				// a different payment could be silently returned.
-				if existing.TransactionType != TypeB2C || existing.Amount != input.Amount || existing.PhoneNumber != phone {
+				if !b2cReplayMatches(existing, input, phone, supplierID, expenseCategory) {
 					return nil, ErrIdempotencyKeyConflict
 				}
-				return existing, nil
+				return replayResolvedMpesa(existing)
 			}
 		}
 		return nil, fmt.Errorf("create pending transaction: %w", err)
@@ -949,11 +985,18 @@ func formatPhoneValue(v any) string {
 	}
 }
 
-// resolveC2BBusiness finds the tenant that owns a public C2B confirmation. It
-// prefers an invoice matched by BillRefNumber, then a customer matched by phone,
-// then the deployment-wide MPESA_BUSINESS_ID. A nil result means the payment
-// cannot be attributed and must be rejected.
+// resolveC2BBusiness finds the tenant that owns a public C2B confirmation. A
+// configured MPESA_BUSINESS_ID owns the deployment-wide Daraja account, so it
+// wins over any reference that happens to match another tenant's invoice.
+// Without a binding, fall back to an invoice matched by BillRefNumber and then
+// to a customer matched by phone. A nil result means the payment cannot be
+// attributed and must be rejected.
 func (s *service) resolveC2BBusiness(billRef, phone string) uuid.UUID {
+	if s.cfg != nil && s.cfg.MpesaBusinessID != "" {
+		if id, err := uuid.Parse(s.cfg.MpesaBusinessID); err == nil {
+			return id
+		}
+	}
 	if billRef != "" {
 		if inv, err := s.repo.FindInvoiceByNumber(uuid.Nil, billRef); err == nil && inv != nil {
 			return inv.BusinessID
@@ -962,11 +1005,6 @@ func (s *service) resolveC2BBusiness(billRef, phone string) uuid.UUID {
 	if phone != "" {
 		if cust, err := s.repo.FindCustomerByPhone(uuid.Nil, phone); err == nil && cust != nil {
 			return cust.BusinessID
-		}
-	}
-	if s.cfg != nil && s.cfg.MpesaBusinessID != "" {
-		if id, err := uuid.Parse(s.cfg.MpesaBusinessID); err == nil {
-			return id
 		}
 	}
 	return uuid.Nil
@@ -1145,19 +1183,62 @@ func (s *service) RecordManualBankTransfer(businessID uuid.UUID, input BankManua
 		return nil, err
 	}
 
-	// Automatic reconciliation matching on Reference and Description.
-	s.autoReconcileBank(tx)
-	if tx.ReconciliationStatus == Reconciled {
-		if err := s.repo.UpdateBankTransaction(tx); err != nil {
-			log.Printf("payments: save manual bank reconciliation for %s failed: %v", tx.ID, err)
-		}
+	// Automatic reconciliation matching on Reference and Description. The
+	// posting may have committed even if linking the reconciliation failed, so
+	// report the durable row as unmatched for the review queue rather than
+	// claiming a reconciliation that was not stored.
+	if err := s.autoReconcileBank(tx); err != nil {
+		log.Printf("payments: automatic bank reconciliation for %s failed: %v", tx.ID, err)
+		tx.ReconciliationStatus = Unmatched
+		tx.ReconciledEntityType = ""
+		tx.ReconciledEntityID = nil
 	}
 
 	return tx, nil
 }
 
-// autoReconcileBank matches bank inflows against Invoices and outflows against Expenses.
-func (s *service) autoReconcileBank(tx *BankTransaction) {
+// autoReconcileBank claims the bank row with the same exclusive claim used by
+// manual review, then attempts automatic matching. If review already owns the
+// claim, automatic posting is skipped; if automatic posting loses its claim
+// before finalizing, it cannot overwrite the replacement attempt.
+func (s *service) autoReconcileBank(tx *BankTransaction) error {
+	claimID := uuid.New()
+	claimed, err := s.repo.ClaimBankReconciliation(tx, Unmatched, Claiming, claimID)
+	if err != nil {
+		return err
+	}
+	if !claimed {
+		return nil
+	}
+	tx.ReconciliationClaimID = &claimID
+	committed := false
+	defer func() {
+		if !committed {
+			_, _ = s.repo.ReleaseBankReconciliationClaim(tx, claimID)
+		}
+	}()
+
+	s.matchBankTransaction(tx)
+	if tx.ReconciliationStatus != Reconciled {
+		return nil
+	}
+	ok, err := s.repo.FinalizeBankReconciliation(tx, claimID)
+	if err != nil {
+		tx.ReconciliationStatus = Unmatched
+		return err
+	}
+	if !ok {
+		tx.ReconciliationStatus = Unmatched
+		return ErrAlreadyReconciled
+	}
+	tx.ReconciliationClaimID = nil
+	committed = true
+	return nil
+}
+
+// matchBankTransaction matches bank inflows against invoices and outflows
+// against expenses. It only mutates the in-memory row; the caller commits it.
+func (s *service) matchBankTransaction(tx *BankTransaction) {
 	candidates := []string{strings.TrimSpace(tx.Reference), strings.TrimSpace(tx.Description)}
 	for _, word := range strings.Fields(tx.Description) {
 		clean := strings.Trim(word, ",.:;()")
@@ -1361,11 +1442,11 @@ func (s *service) ImportBankStatement(businessID uuid.UUID, bankName string, r i
 		if err := s.repo.CreateBankTransaction(tx); err != nil {
 			continue
 		}
-		s.autoReconcileBank(tx)
-		if tx.ReconciliationStatus == Reconciled {
-			if err := s.repo.UpdateBankTransaction(tx); err != nil {
-				log.Printf("payments: save statement reconciliation for %s failed: %v", tx.ID, err)
-			}
+		if err := s.autoReconcileBank(tx); err != nil {
+			log.Printf("payments: automatic statement reconciliation for %s failed: %v", tx.ID, err)
+			tx.ReconciliationStatus = Unmatched
+			tx.ReconciledEntityType = ""
+			tx.ReconciledEntityID = nil
 		}
 		res.Imported++
 		if tx.ReconciliationStatus == Reconciled {
@@ -1515,7 +1596,7 @@ func (s *service) ListBankTransactions(businessID uuid.UUID, txType string, stat
 		limit = 20
 	}
 	if (page - 1) > (math.MaxInt-1)/limit {
-		return nil, 0, errors.New("page out of bounds")
+		return nil, 0, ErrPageOutOfBounds
 	}
 	offset := (page - 1) * limit
 	return s.repo.ListBankTransactions(businessID, txType, status, limit, offset)
@@ -1530,7 +1611,7 @@ func (s *service) ListMpesaTransactions(businessID uuid.UUID, page, limit int) (
 		limit = 20
 	}
 	if (page - 1) > (math.MaxInt-1)/limit {
-		return nil, 0, errors.New("page out of bounds")
+		return nil, 0, ErrPageOutOfBounds
 	}
 	offset := (page - 1) * limit
 	return s.repo.ListMpesaTransactions(businessID, limit, offset)
@@ -1545,7 +1626,7 @@ func (s *service) ListReviewQueue(businessID uuid.UUID, source string, page, lim
 		limit = 20
 	}
 	if (page - 1) > (math.MaxInt-1)/limit {
-		return nil, 0, errors.New("page out of bounds")
+		return nil, 0, ErrPageOutOfBounds
 	}
 	offset := (page - 1) * limit
 	// Sweep interrupted reconciliation claims so stranded rows become reviewable.
@@ -1569,17 +1650,26 @@ func (s *service) ReconcileReviewItem(businessID uuid.UUID, itemID uuid.UUID, in
 		return err
 	}
 
+	// A timed-out payout is ambiguous: the money may still move. Keep it visible
+	// in the review queue, but never post it until an authoritative result marks
+	// it completed. Dismissal is still allowed.
+	if ctx.mpesaTx != nil && ctx.mpesaTx.Status == StatusTimedOut && input.TargetType != "dismiss" {
+		return ErrTransactionNotCompleted
+	}
+
 	// Release any claim abandoned by an interrupted prior attempt so it becomes
 	// reviewable again before we try to take a new claim.
 	_ = s.repo.ReleaseStaleReconciliationClaims(time.Now().Add(-reconciliationClaimTTL))
 
 	// Claim the reconciliation slot before applying any financial effect. The
-	// claim is a compare-and-set on reconciliation_status (Unmatched -> Claiming),
-	// so only one concurrent request can settle the row. The claim is keyed on
-	// the row id, not the receipt, so a blank-receipt payout is still serialized.
+	// claim is a compare-and-set on reconciliation_status (Unmatched -> Claiming)
+	// with a unique owner id, so only one concurrent attempt can settle the row
+	// and a stale attempt cannot release or finalize a replacement's claim.
+	claimID := uuid.New()
+	ctx.claimID = claimID
 	var release func()
 	if ctx.mpesaTx != nil {
-		claimed, claimErr := s.repo.ClaimMpesaReconciliation(ctx.mpesaTx, Unmatched, Claiming)
+		claimed, claimErr := s.repo.ClaimMpesaReconciliation(ctx.mpesaTx, Unmatched, Claiming, claimID)
 		if claimErr != nil {
 			return claimErr
 		}
@@ -1587,10 +1677,10 @@ func (s *service) ReconcileReviewItem(businessID uuid.UUID, itemID uuid.UUID, in
 			return ErrAlreadyReconciled
 		}
 		release = func() {
-			_, _ = s.repo.ClaimMpesaReconciliation(ctx.mpesaTx, Claiming, Unmatched)
+			_, _ = s.repo.ReleaseMpesaReconciliationClaim(ctx.mpesaTx, claimID)
 		}
 	} else if ctx.bankTx != nil {
-		claimed, claimErr := s.repo.ClaimBankReconciliation(ctx.bankTx, Unmatched, Claiming)
+		claimed, claimErr := s.repo.ClaimBankReconciliation(ctx.bankTx, Unmatched, Claiming, claimID)
 		if claimErr != nil {
 			return claimErr
 		}
@@ -1598,7 +1688,7 @@ func (s *service) ReconcileReviewItem(businessID uuid.UUID, itemID uuid.UUID, in
 			return ErrAlreadyReconciled
 		}
 		release = func() {
-			_, _ = s.repo.ClaimBankReconciliation(ctx.bankTx, Claiming, Unmatched)
+			_, _ = s.repo.ReleaseBankReconciliationClaim(ctx.bankTx, claimID)
 		}
 	}
 
@@ -1612,6 +1702,26 @@ func (s *service) ReconcileReviewItem(businessID uuid.UUID, itemID uuid.UUID, in
 				release()
 			}
 		}()
+	}
+
+	// A bank posting may have committed before its reconciliation link update
+	// failed. Recover it by the stable source marker before considering the newly
+	// selected target, otherwise the same transfer could pay two targets.
+	if ctx.bankTx != nil {
+		entityType, entityID, found, findErr := s.repo.FindBankReconciliationApplication(businessID, bankMarker(ctx.bankTx))
+		if findErr != nil {
+			return findErr
+		}
+		if found {
+			ctx.bankTx.ReconciliationStatus = Reconciled
+			ctx.bankTx.ReconciledEntityType = entityType
+			ctx.bankTx.ReconciledEntityID = &entityID
+			if finalizeErr := s.finalizeBankReconciliation(ctx.bankTx, entityType, entityID, ctx.claimID); finalizeErr != nil {
+				return finalizeErr
+			}
+			committed = true
+			return nil
+		}
 	}
 
 	// One M-Pesa receipt must settle exactly one target. Check the receipt against
@@ -1630,6 +1740,24 @@ func (s *service) ReconcileReviewItem(businessID uuid.UUID, itemID uuid.UUID, in
 	note := input.Note
 	if note == "" {
 		note = fmt.Sprintf("Reconciled from %s (%s)", input.Source, ctx.refString)
+	}
+
+	// Revalidate ownership immediately before the ledger write. If this attempt's
+	// claim expired and a replacement took over, it must not post.
+	if ctx.claimID != uuid.Nil {
+		var owns bool
+		var ownErr error
+		if ctx.mpesaTx != nil {
+			owns, ownErr = s.repo.OwnsMpesaReconciliationClaim(ctx.mpesaTx, ctx.claimID)
+		} else if ctx.bankTx != nil {
+			owns, ownErr = s.repo.OwnsBankReconciliationClaim(ctx.bankTx, ctx.claimID)
+		}
+		if ownErr != nil {
+			return ownErr
+		}
+		if !owns {
+			return ErrAlreadyReconciled
+		}
 	}
 
 	switch input.TargetType {
@@ -1656,6 +1784,7 @@ type reviewReconcileContext struct {
 	amount    int64
 	refString string
 	direction string
+	claimID   uuid.UUID
 	mpesaTx   *MpesaTransaction
 	bankTx    *BankTransaction
 }
@@ -1715,20 +1844,34 @@ func (s *service) ensureReviewDirectionAllowed(direction, targetType string) err
 	return nil
 }
 
-func (s *service) finalizeMpesaReconciliation(tx *MpesaTransaction, entityType ReconciledEntityType, entityID uuid.UUID) error {
+func (s *service) finalizeMpesaReconciliation(tx *MpesaTransaction, entityType ReconciledEntityType, entityID, claimID uuid.UUID) error {
 	entityIDCopy := entityID
 	tx.ReconciliationStatus = Reconciled
 	tx.ReconciledEntityType = entityType
 	tx.ReconciledEntityID = &entityIDCopy
-	return s.repo.UpdateMpesaReconciliation(tx)
+	ok, err := s.repo.FinalizeMpesaReconciliation(tx, claimID)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return ErrAlreadyReconciled
+	}
+	return nil
 }
 
-func (s *service) finalizeBankReconciliation(tx *BankTransaction, entityType ReconciledEntityType, entityID uuid.UUID) error {
+func (s *service) finalizeBankReconciliation(tx *BankTransaction, entityType ReconciledEntityType, entityID, claimID uuid.UUID) error {
 	entityIDCopy := entityID
 	tx.ReconciliationStatus = Reconciled
 	tx.ReconciledEntityType = entityType
 	tx.ReconciledEntityID = &entityIDCopy
-	return s.repo.UpdateBankTransaction(tx)
+	ok, err := s.repo.FinalizeBankReconciliation(tx, claimID)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return ErrAlreadyReconciled
+	}
+	return nil
 }
 
 func (s *service) reconcileReviewInvoice(businessID uuid.UUID, ctx *reviewReconcileContext, input ReconcileInput, note string) error {
@@ -1766,10 +1909,10 @@ func (s *service) reconcileReviewInvoice(businessID uuid.UUID, ctx *reviewReconc
 	}
 
 	if ctx.mpesaTx != nil {
-		return s.finalizeMpesaReconciliation(ctx.mpesaTx, EntityInvoice, targetUUID)
+		return s.finalizeMpesaReconciliation(ctx.mpesaTx, EntityInvoice, targetUUID, ctx.claimID)
 	}
 	if ctx.bankTx != nil {
-		return s.finalizeBankReconciliation(ctx.bankTx, EntityInvoice, targetUUID)
+		return s.finalizeBankReconciliation(ctx.bankTx, EntityInvoice, targetUUID, ctx.claimID)
 	}
 	return nil
 }
@@ -1806,10 +1949,10 @@ func (s *service) reconcileReviewCustomerCredit(businessID uuid.UUID, ctx *revie
 	}
 
 	if ctx.mpesaTx != nil {
-		return s.finalizeMpesaReconciliation(ctx.mpesaTx, EntityCustomerCredit, targetUUID)
+		return s.finalizeMpesaReconciliation(ctx.mpesaTx, EntityCustomerCredit, targetUUID, ctx.claimID)
 	}
 	if ctx.bankTx != nil {
-		return s.finalizeBankReconciliation(ctx.bankTx, EntityCustomerCredit, targetUUID)
+		return s.finalizeBankReconciliation(ctx.bankTx, EntityCustomerCredit, targetUUID, ctx.claimID)
 	}
 	return nil
 }
@@ -1874,10 +2017,10 @@ func (s *service) reconcileReviewExpense(businessID uuid.UUID, ctx *reviewReconc
 	}
 
 	if ctx.mpesaTx != nil {
-		return s.finalizeMpesaReconciliation(ctx.mpesaTx, EntityExpense, expenseID)
+		return s.finalizeMpesaReconciliation(ctx.mpesaTx, EntityExpense, expenseID, ctx.claimID)
 	}
 	if ctx.bankTx != nil {
-		return s.finalizeBankReconciliation(ctx.bankTx, EntityExpense, expenseID)
+		return s.finalizeBankReconciliation(ctx.bankTx, EntityExpense, expenseID, ctx.claimID)
 	}
 	return nil
 }
@@ -1914,10 +2057,10 @@ func (s *service) reconcileReviewSupplierPayment(businessID uuid.UUID, ctx *revi
 	}
 
 	if ctx.mpesaTx != nil {
-		return s.finalizeMpesaReconciliation(ctx.mpesaTx, EntitySupplierPayment, supplierUUID)
+		return s.finalizeMpesaReconciliation(ctx.mpesaTx, EntitySupplierPayment, supplierUUID, ctx.claimID)
 	}
 	if ctx.bankTx != nil {
-		return s.finalizeBankReconciliation(ctx.bankTx, EntitySupplierPayment, supplierUUID)
+		return s.finalizeBankReconciliation(ctx.bankTx, EntitySupplierPayment, supplierUUID, ctx.claimID)
 	}
 	return nil
 }
@@ -1925,11 +2068,29 @@ func (s *service) reconcileReviewSupplierPayment(businessID uuid.UUID, ctx *revi
 func (s *service) reconcileReviewDismiss(ctx *reviewReconcileContext) error {
 	if ctx.mpesaTx != nil {
 		ctx.mpesaTx.ReconciliationStatus = Manual
-		return s.repo.UpdateMpesaReconciliation(ctx.mpesaTx)
+		ctx.mpesaTx.ReconciledEntityType = ""
+		ctx.mpesaTx.ReconciledEntityID = nil
+		ok, err := s.repo.FinalizeMpesaReconciliation(ctx.mpesaTx, ctx.claimID)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return ErrAlreadyReconciled
+		}
+		return nil
 	}
 	if ctx.bankTx != nil {
 		ctx.bankTx.ReconciliationStatus = Manual
-		return s.repo.UpdateBankTransaction(ctx.bankTx)
+		ctx.bankTx.ReconciledEntityType = ""
+		ctx.bankTx.ReconciledEntityID = nil
+		ok, err := s.repo.FinalizeBankReconciliation(ctx.bankTx, ctx.claimID)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return ErrAlreadyReconciled
+		}
+		return nil
 	}
 	return nil
 }

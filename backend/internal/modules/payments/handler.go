@@ -224,6 +224,10 @@ func (h *Handler) ListMpesaTransactions(c *gin.Context) {
 
 	list, total, err := h.service.ListMpesaTransactions(businessID, page, limit)
 	if err != nil {
+		if errors.Is(err, ErrPageOutOfBounds) {
+			response.Error(c, http.StatusBadRequest, err.Error())
+			return
+		}
 		response.Error(c, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -304,6 +308,10 @@ func (h *Handler) ListBankTransactions(c *gin.Context) {
 
 	list, total, err := h.service.ListBankTransactions(businessID, txType, status, page, limit)
 	if err != nil {
+		if errors.Is(err, ErrPageOutOfBounds) {
+			response.Error(c, http.StatusBadRequest, err.Error())
+			return
+		}
 		response.Error(c, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -323,6 +331,10 @@ func (h *Handler) ListReviewQueue(c *gin.Context) {
 
 	items, total, err := h.service.ListReviewQueue(businessID, source, page, limit)
 	if err != nil {
+		if errors.Is(err, ErrPageOutOfBounds) {
+			response.Error(c, http.StatusBadRequest, err.Error())
+			return
+		}
 		response.Error(c, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -348,6 +360,25 @@ func (h *Handler) ReconcileReviewItem(c *gin.Context) {
 	if err := c.ShouldBindJSON(&input); err != nil {
 		response.Error(c, http.StatusBadRequest, err.Error())
 		return
+	}
+
+	// Some review targets create ledger entries that normally require a
+	// stronger permission than the route-level PaymentManage. Check the target
+	// before dispatching so a cashier cannot create expenses or supplier
+	// payments through the review queue.
+	role, _ := c.Get(middleware.ContextRoleKey)
+	roleStr, _ := role.(string)
+	switch input.TargetType {
+	case "expense":
+		if !permissions.Allows(roleStr, permissions.FinanceManage) {
+			response.Error(c, http.StatusForbidden, "insufficient permissions")
+			return
+		}
+	case "supplier_payment":
+		if !permissions.Allows(roleStr, permissions.SupplierPayment) {
+			response.Error(c, http.StatusForbidden, "insufficient permissions")
+			return
+		}
 	}
 
 	if err := h.service.ReconcileReviewItem(businessID, itemID, input); err != nil {

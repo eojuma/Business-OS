@@ -85,6 +85,10 @@ type MpesaTransaction struct {
 	ReconciliationStatus ReconciliationStatus `gorm:"not null;default:'unmatched'" json:"reconciliation_status"`
 	ReconciledEntityType ReconciledEntityType `gorm:"default:null" json:"reconciled_entity_type,omitempty"`
 	ReconciledEntityID   *uuid.UUID           `gorm:"type:uuid" json:"reconciled_entity_id,omitempty"`
+	// ReconciliationClaimID identifies the attempt that currently owns a
+	// transient Claiming reconciliation so a stale attempt cannot release or
+	// finalize a replacement's claim.
+	ReconciliationClaimID *uuid.UUID `gorm:"type:uuid" json:"-"`
 	// SupplierID records the intended B2C payout target so the result callback
 	// can settle a supplier payable instead of guessing at an expense.
 	SupplierID      *uuid.UUID `gorm:"type:uuid" json:"supplier_id,omitempty"`
@@ -116,8 +120,11 @@ type BankTransaction struct {
 	ReconciliationStatus ReconciliationStatus `gorm:"not null;default:'unmatched'" json:"reconciliation_status"`
 	ReconciledEntityType ReconciledEntityType `gorm:"default:null" json:"reconciled_entity_type,omitempty"`
 	ReconciledEntityID   *uuid.UUID           `gorm:"type:uuid" json:"reconciled_entity_id,omitempty"`
-	CreatedAt            time.Time            `json:"created_at"`
-	UpdatedAt            time.Time            `json:"updated_at"`
+	// ReconciliationClaimID identifies the attempt that currently owns a
+	// transient Claiming reconciliation, matching MpesaTransaction.
+	ReconciliationClaimID *uuid.UUID `gorm:"type:uuid" json:"-"`
+	CreatedAt             time.Time  `json:"created_at"`
+	UpdatedAt             time.Time  `json:"updated_at"`
 }
 
 func (BankTransaction) TableName() string { return "bank_transactions" }

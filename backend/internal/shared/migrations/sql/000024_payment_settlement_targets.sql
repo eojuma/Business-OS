@@ -21,8 +21,9 @@ DROP INDEX IF EXISTS idx_mpesa_transactions_supplier;
 ALTER TABLE mpesa_transactions DROP COLUMN IF EXISTS expense_category;
 ALTER TABLE mpesa_transactions DROP COLUMN IF EXISTS supplier_id;
 
--- Timed-out rows have no equivalent in the old schema; record them as failed.
-UPDATE mpesa_transactions SET status = 'failed' WHERE status = 'timed_out';
+-- Timed-out rows are ambiguous, not failures: they may still complete. The old
+-- schema has no timed_out value, so keep them unresolved as pending.
+UPDATE mpesa_transactions SET status = 'pending' WHERE status = 'timed_out';
 
 ALTER TABLE mpesa_transactions DROP CONSTRAINT IF EXISTS mpesa_transactions_status_check;
 

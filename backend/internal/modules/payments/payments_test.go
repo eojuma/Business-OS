@@ -24,8 +24,17 @@ import (
 // PhoneNumberTestConst is a test phone number used in test fixtures.
 const PhoneNumberTestConst = "0712345678"
 
+// sourceMpesaTestConst is the M-Pesa review-queue source used in fixtures.
+const sourceMpesaTestConst = "mpesa"
+
 // passkeyTestConst is a placeholder M-Pesa passkey used in test configurations.
 const passkeyTestConst = "passkey"
+
+type fakeBankApplication struct {
+	marker     string
+	entityType ReconciledEntityType
+	entityID   uuid.UUID
+}
 
 // In-memory fake repository for payments testing
 type fakePaymentRepository struct {
@@ -34,6 +43,7 @@ type fakePaymentRepository struct {
 	invoices          map[string]*invoices.Invoice
 	custs             map[string]*customers.Customer
 	paymentNotes      []string
+	bankApplication   *fakeBankApplication
 	claimErr          error
 	reconciliationErr error
 }
@@ -70,11 +80,13 @@ func (f *fakePaymentRepository) ReleaseStaleReconciliationClaims(before time.Tim
 	for _, tx := range f.mpesaTxs {
 		if tx.ReconciliationStatus == Claiming && tx.UpdatedAt.Before(before) {
 			tx.ReconciliationStatus = Unmatched
+			tx.ReconciliationClaimID = nil
 		}
 	}
 	for _, tx := range f.bankTxs {
 		if tx.ReconciliationStatus == Claiming && tx.UpdatedAt.Before(before) {
 			tx.ReconciliationStatus = Unmatched
+			tx.ReconciliationClaimID = nil
 		}
 	}
 	return nil
@@ -146,7 +158,7 @@ func (f *fakePaymentRepository) ClaimMpesaTransactionStatus(tx *MpesaTransaction
 	return true, nil
 }
 
-func (f *fakePaymentRepository) ClaimMpesaReconciliation(tx *MpesaTransaction, from, to ReconciliationStatus) (bool, error) {
+func (f *fakePaymentRepository) ClaimMpesaReconciliation(tx *MpesaTransaction, from, to ReconciliationStatus, claimID uuid.UUID) (bool, error) {
 	if f.claimErr != nil {
 		return false, f.claimErr
 	}
@@ -158,11 +170,54 @@ func (f *fakePaymentRepository) ClaimMpesaReconciliation(tx *MpesaTransaction, f
 		return false, nil
 	}
 	stored.ReconciliationStatus = to
+	if to == Claiming {
+		stored.ReconciliationClaimID = &claimID
+	} else {
+		stored.ReconciliationClaimID = nil
+	}
 	stored.UpdatedAt = time.Now()
 	return true, nil
 }
 
-func (f *fakePaymentRepository) ClaimBankReconciliation(tx *BankTransaction, from, to ReconciliationStatus) (bool, error) {
+func (f *fakePaymentRepository) ReleaseMpesaReconciliationClaim(tx *MpesaTransaction, claimID uuid.UUID) (bool, error) {
+	stored, ok := f.mpesaTxs[tx.ID.String()]
+	if !ok {
+		return false, gorm.ErrRecordNotFound
+	}
+	if stored.ReconciliationClaimID == nil || *stored.ReconciliationClaimID != claimID {
+		return false, nil
+	}
+	stored.ReconciliationStatus = Unmatched
+	stored.ReconciliationClaimID = nil
+	stored.UpdatedAt = time.Now()
+	return true, nil
+}
+
+func (f *fakePaymentRepository) FinalizeMpesaReconciliation(tx *MpesaTransaction, claimID uuid.UUID) (bool, error) {
+	stored, ok := f.mpesaTxs[tx.ID.String()]
+	if !ok {
+		return false, gorm.ErrRecordNotFound
+	}
+	if stored.ReconciliationClaimID == nil || *stored.ReconciliationClaimID != claimID {
+		return false, nil
+	}
+	stored.ReconciliationStatus = tx.ReconciliationStatus
+	stored.ReconciledEntityType = tx.ReconciledEntityType
+	stored.ReconciledEntityID = tx.ReconciledEntityID
+	stored.ReconciliationClaimID = nil
+	stored.UpdatedAt = time.Now()
+	return true, nil
+}
+
+func (f *fakePaymentRepository) OwnsMpesaReconciliationClaim(tx *MpesaTransaction, claimID uuid.UUID) (bool, error) {
+	stored, ok := f.mpesaTxs[tx.ID.String()]
+	if !ok {
+		return false, gorm.ErrRecordNotFound
+	}
+	return stored.ReconciliationClaimID != nil && *stored.ReconciliationClaimID == claimID, nil
+}
+
+func (f *fakePaymentRepository) ClaimBankReconciliation(tx *BankTransaction, from, to ReconciliationStatus, claimID uuid.UUID) (bool, error) {
 	stored, ok := f.bankTxs[tx.ID.String()]
 	if !ok {
 		return false, gorm.ErrRecordNotFound
@@ -171,6 +226,49 @@ func (f *fakePaymentRepository) ClaimBankReconciliation(tx *BankTransaction, fro
 		return false, nil
 	}
 	stored.ReconciliationStatus = to
+	if to == Claiming {
+		stored.ReconciliationClaimID = &claimID
+	} else {
+		stored.ReconciliationClaimID = nil
+	}
+	stored.UpdatedAt = time.Now()
+	return true, nil
+}
+
+func (f *fakePaymentRepository) ReleaseBankReconciliationClaim(tx *BankTransaction, claimID uuid.UUID) (bool, error) {
+	stored, ok := f.bankTxs[tx.ID.String()]
+	if !ok {
+		return false, gorm.ErrRecordNotFound
+	}
+	if stored.ReconciliationClaimID == nil || *stored.ReconciliationClaimID != claimID {
+		return false, nil
+	}
+	stored.ReconciliationStatus = Unmatched
+	stored.ReconciliationClaimID = nil
+	stored.UpdatedAt = time.Now()
+	return true, nil
+}
+
+func (f *fakePaymentRepository) OwnsBankReconciliationClaim(tx *BankTransaction, claimID uuid.UUID) (bool, error) {
+	stored, ok := f.bankTxs[tx.ID.String()]
+	if !ok {
+		return false, gorm.ErrRecordNotFound
+	}
+	return stored.ReconciliationClaimID != nil && *stored.ReconciliationClaimID == claimID, nil
+}
+
+func (f *fakePaymentRepository) FinalizeBankReconciliation(tx *BankTransaction, claimID uuid.UUID) (bool, error) {
+	stored, ok := f.bankTxs[tx.ID.String()]
+	if !ok {
+		return false, gorm.ErrRecordNotFound
+	}
+	if stored.ReconciliationClaimID == nil || *stored.ReconciliationClaimID != claimID {
+		return false, nil
+	}
+	stored.ReconciliationStatus = tx.ReconciliationStatus
+	stored.ReconciledEntityType = tx.ReconciledEntityType
+	stored.ReconciledEntityID = tx.ReconciledEntityID
+	stored.ReconciliationClaimID = nil
 	stored.UpdatedAt = time.Now()
 	return true, nil
 }
@@ -246,12 +344,12 @@ func (f *fakePaymentRepository) UpdateBankTransaction(tx *BankTransaction) error
 
 func (f *fakePaymentRepository) ListReviewQueue(businessID uuid.UUID, source string, limit, offset int) ([]ReviewQueueItem, int64, error) {
 	items := make([]ReviewQueueItem, 0)
-	if source == "" || source == "all" || source == "mpesa" {
+	if source == "" || source == "all" || source == sourceMpesaTestConst {
 		for _, m := range f.mpesaTxs {
 			if m.BusinessID == businessID && m.ReconciliationStatus == Unmatched && (m.Status == StatusCompleted || m.Status == StatusPending || m.Status == StatusTimedOut) {
 				items = append(items, ReviewQueueItem{
 					ID:        m.ID,
-					Source:    "mpesa",
+					Source:    sourceMpesaTestConst,
 					Reference: m.MpesaReceiptNumber,
 					Amount:    m.Amount,
 					Type:      "inflow",
@@ -292,6 +390,15 @@ func (f *fakePaymentRepository) FindCustomerByPhone(businessID uuid.UUID, phone 
 		}
 	}
 	return nil, gorm.ErrRecordNotFound
+}
+
+// FindBankReconciliationApplication returns a configured fake posting so a
+// retry can be shown to recover the original target.
+func (f *fakePaymentRepository) FindBankReconciliationApplication(businessID uuid.UUID, marker string) (ReconciledEntityType, uuid.UUID, bool, error) {
+	if f.bankApplication != nil && f.bankApplication.marker == marker {
+		return f.bankApplication.entityType, f.bankApplication.entityID, true, nil
+	}
+	return "", uuid.Nil, false, nil
 }
 
 // ListMpesaPaymentNotesByPrefix returns the fake's flat notes filtered to the
@@ -835,7 +942,7 @@ func TestReviewQueueAndManualReconcile(t *testing.T) {
 
 	// Manually reconcile to invoice
 	recInput := ReconcileInput{
-		Source:     "mpesa",
+		Source:     sourceMpesaTestConst,
 		TargetType: "invoice",
 		TargetID:   invID.String(),
 		Note:       "Manual reconciliation",
@@ -1180,7 +1287,7 @@ func TestReconcileRejectsB2CInvoice(t *testing.T) {
 	_ = repo.CreateMpesaTransaction(tx)
 
 	if err := svc.ReconcileReviewItem(businessID, tx.ID, ReconcileInput{
-		Source: "mpesa", TargetType: "invoice", TargetID: uuid.New().String(),
+		Source: sourceMpesaTestConst, TargetType: "invoice", TargetID: uuid.New().String(),
 	}); !errors.Is(err, ErrTargetDirectionMismatch) {
 		t.Fatalf("B2C -> invoice error = %v, want ErrTargetDirectionMismatch", err)
 	}
@@ -1239,6 +1346,7 @@ func TestIdempotencyKeyConflictDetection(t *testing.T) {
 		PhoneNumber:       "254712345678",
 		Amount:            5000,
 		IdempotencyKey:    "shared-key-1",
+		AccountReference:  "BusinessOS",
 		Status:            StatusPending,
 		CheckoutRequestID: "ws_CO_EXISTING",
 	}
@@ -1272,6 +1380,130 @@ func TestIdempotencyKeyConflictDetection(t *testing.T) {
 	})
 	if !errors.Is(err, ErrIdempotencyKeyConflict) {
 		t.Fatalf("expected ErrIdempotencyKeyConflict for cross-type replay, got %v", err)
+	}
+}
+
+func TestSTKIdempotencyIncludesSettlementTarget(t *testing.T) {
+	repo := newFakePaymentRepository()
+	cfg := &config.Config{MpesaCallbackSecret: "sec"}
+	svc := NewService(repo, nil, cfg, nil, nil, nil, nil)
+	businessID := uuid.New()
+
+	seed := &MpesaTransaction{
+		ID:                uuid.New(),
+		BusinessID:        businessID,
+		TransactionType:   TypeSTKPush,
+		PhoneNumber:       "254712345678",
+		Amount:            5000,
+		IdempotencyKey:    "target-key-1",
+		AccountReference:  "INV-A",
+		Status:            StatusPending,
+		CheckoutRequestID: "ws_CO_TARGET",
+	}
+	_ = repo.CreateMpesaTransaction(seed)
+
+	// The same settlement target is an identical request and replays safely.
+	existing, err := svc.InitiateSTKPush(context.Background(), businessID, STKPushInput{
+		PhoneNumber:      PhoneNumberTestConst,
+		Amount:           5000,
+		AccountReference: "INV-A",
+		IdempotencyKey:   "target-key-1",
+	})
+	if err != nil || existing == nil || existing.ID != seed.ID {
+		t.Fatalf("identical target replay failed: %v", err)
+	}
+
+	// Reusing the key for a different invoice must not return the first payment.
+	_, err = svc.InitiateSTKPush(context.Background(), businessID, STKPushInput{
+		PhoneNumber:      PhoneNumberTestConst,
+		Amount:           5000,
+		AccountReference: "INV-B",
+		IdempotencyKey:   "target-key-1",
+	})
+	if !errors.Is(err, ErrIdempotencyKeyConflict) {
+		t.Fatalf("expected ErrIdempotencyKeyConflict for a different settlement target, got %v", err)
+	}
+}
+
+func TestTimedOutPayoutCannotBePosted(t *testing.T) {
+	repo := newFakePaymentRepository()
+	finSvc := &mockFinanceService{}
+	svc := NewService(repo, nil, &config.Config{}, nil, nil, finSvc, nil)
+	businessID := uuid.New()
+
+	tx := &MpesaTransaction{
+		ID:                   uuid.New(),
+		BusinessID:           businessID,
+		TransactionType:      TypeB2C,
+		Amount:               5000,
+		Status:               StatusTimedOut,
+		ReconciliationStatus: Unmatched,
+	}
+	_ = repo.CreateMpesaTransaction(tx)
+
+	err := svc.ReconcileReviewItem(businessID, tx.ID, ReconcileInput{
+		Source:     sourceMpesaTestConst,
+		TargetType: "expense",
+	})
+	if !errors.Is(err, ErrTransactionNotCompleted) {
+		t.Fatalf("expected timed-out payout posting to be rejected, got %v", err)
+	}
+	if len(finSvc.expenses) != 0 {
+		t.Fatal("a timed-out payout must not create an expense before confirmation")
+	}
+
+	// Dismissal is still allowed for a timed-out row.
+	if err := svc.ReconcileReviewItem(businessID, tx.ID, ReconcileInput{Source: sourceMpesaTestConst, TargetType: "dismiss"}); err != nil {
+		t.Fatalf("dismissing a timed-out payout failed: %v", err)
+	}
+	stored, _ := repo.GetMpesaTransactionByID(tx.ID, businessID)
+	if stored.ReconciliationStatus != Manual {
+		t.Fatalf("status = %s, want manual", stored.ReconciliationStatus)
+	}
+}
+
+func TestBankReconcileRecoversExistingPosting(t *testing.T) {
+	repo := newFakePaymentRepository()
+	invSvc := &mockInvoicesService{}
+	svc := NewService(repo, nil, &config.Config{}, invSvc, nil, nil, nil)
+	businessID := uuid.New()
+
+	tx := &BankTransaction{
+		ID:                   uuid.New(),
+		BusinessID:           businessID,
+		Reference:            "BANK-RECOVER-1",
+		Type:                 BankInflow,
+		Amount:               7500,
+		ReconciliationStatus: Unmatched,
+	}
+	_ = repo.CreateBankTransaction(tx)
+
+	// Simulate a payment that committed for invoice A before the link update
+	// failed, then a reviewer selects invoice B.
+	existingInvoice := uuid.New()
+	repo.bankApplication = &fakeBankApplication{
+		marker:     bankMarker(tx),
+		entityType: EntityInvoice,
+		entityID:   existingInvoice,
+	}
+
+	err := svc.ReconcileReviewItem(businessID, tx.ID, ReconcileInput{
+		Source:     "bank",
+		TargetType: "invoice",
+		TargetID:   uuid.New().String(),
+	})
+	if err != nil {
+		t.Fatalf("recovering an existing bank posting failed: %v", err)
+	}
+	stored, _ := repo.GetBankTransactionByID(tx.ID, businessID)
+	if stored.ReconciliationStatus != Reconciled || stored.ReconciledEntityType != EntityInvoice {
+		t.Fatalf("expected reconciled to the existing invoice, got %s / %s", stored.ReconciliationStatus, stored.ReconciledEntityType)
+	}
+	if stored.ReconciledEntityID == nil || *stored.ReconciledEntityID != existingInvoice {
+		t.Fatalf("recovered the wrong entity: %v", stored.ReconciledEntityID)
+	}
+	if invSvc.paidInvoiceID != uuid.Nil {
+		t.Fatal("recovery must not post a second invoice payment")
 	}
 }
 
@@ -1312,7 +1544,10 @@ func TestSTKCallbackRequiresReceiptAndAmount(t *testing.T) {
 
 func TestC2BConfirmationRequiresTransID(t *testing.T) {
 	repo := newFakePaymentRepository()
-	cfg := &config.Config{MpesaCallbackSecret: "sec"}
+	businessID := uuid.New()
+	// Bind a valid business so the fixture reaches the TransID guard instead of
+	// failing earlier with "Could not resolve business".
+	cfg := &config.Config{MpesaCallbackSecret: "sec", MpesaBusinessID: businessID.String()}
 	svc := NewService(repo, nil, cfg, nil, nil, nil, nil)
 
 	sig := computeHMAC(cfg.MpesaCallbackSecret, nil)
@@ -1323,6 +1558,25 @@ func TestC2BConfirmationRequiresTransID(t *testing.T) {
 	}, uuid.Nil)
 	if err == nil || resp.ResultCode == 0 {
 		t.Fatal("expected error for empty TransID")
+	}
+	if !strings.Contains(resp.ResultDesc, "Missing TransID") {
+		t.Fatalf("expected a Missing TransID rejection, got %q", resp.ResultDesc)
+	}
+	if len(repo.mpesaTxs) != 0 {
+		t.Fatal("missing TransID must not persist a transaction")
+	}
+
+	// Successful control: the same fixture with a nonblank ID is persisted.
+	resp, err = svc.HandleC2BConfirmation(sig, C2BConfirmationRequest{
+		TransID:     "QK-MISSING-ID-CONTROL",
+		TransAmount: "100.00",
+		MSISDN:      "254712345678",
+	}, uuid.Nil)
+	if err != nil || resp.ResultCode != 0 {
+		t.Fatalf("control confirmation failed: res=%+v err=%v", resp, err)
+	}
+	if len(repo.mpesaTxs) != 1 {
+		t.Fatalf("expected the control confirmation to persist one transaction, got %d", len(repo.mpesaTxs))
 	}
 }
 
@@ -1714,7 +1968,7 @@ func TestInitiateSTKAmbiguousNetworkUsesTimedOut(t *testing.T) {
 		t.Fatal("expected unresolved replay to report an error")
 	}
 
-	items, total, err := svc.ListReviewQueue(businessID, "mpesa", 1, 10)
+	items, total, err := svc.ListReviewQueue(businessID, sourceMpesaTestConst, 1, 10)
 	if err != nil || total != 1 || len(items) != 1 {
 		t.Fatalf("expected 1 review item for the timed-out STK, got %d (err %v)", total, err)
 	}

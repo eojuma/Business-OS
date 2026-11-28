@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/businessos/backend/internal/modules/customers"
+	"github.com/businessos/backend/internal/modules/finance"
 	"github.com/businessos/backend/internal/modules/invoices"
 	"github.com/businessos/backend/internal/modules/suppliers"
 	"github.com/google/uuid"
@@ -24,8 +25,11 @@ var (
 // colUpdatedAt is the shared updated_at column name used by the repository's
 // compare-and-set and reconciliation updates.
 const (
-	colUpdatedAt            = "updated_at"
-	colReconciliationStatus = "reconciliation_status"
+	colUpdatedAt             = "updated_at"
+	colReconciliationStatus  = "reconciliation_status"
+	colReconciliationClaimID = "reconciliation_claim_id"
+	colReconciledEntityType  = "reconciled_entity_type"
+	colReconciledEntityID    = "reconciled_entity_id"
 )
 
 type Repository interface {
@@ -40,10 +44,19 @@ type Repository interface {
 	// makes callback processing safe to replay.
 	ClaimMpesaTransactionStatus(tx *MpesaTransaction, terminal TransactionStatus, allowedFrom ...TransactionStatus) (bool, error)
 	// ClaimMpesaReconciliation atomically moves the reconciliation status from
-	// one value to another. It returns false when another request already
-	// claimed the row, which serializes the manual-review settle path so one
-	// receipt can never be applied twice by concurrent requests.
-	ClaimMpesaReconciliation(tx *MpesaTransaction, from, to ReconciliationStatus) (bool, error)
+	// one value to another and records the owning attempt. It returns false when
+	// another request already claimed the row, which serializes the settle path
+	// so one receipt can never be applied twice by concurrent requests.
+	ClaimMpesaReconciliation(tx *MpesaTransaction, from, to ReconciliationStatus, claimID uuid.UUID) (bool, error)
+	// ReleaseMpesaReconciliationClaim clears a claim only when claimID still
+	// owns it, so a stale attempt cannot release a replacement's claim.
+	ReleaseMpesaReconciliationClaim(tx *MpesaTransaction, claimID uuid.UUID) (bool, error)
+	// FinalizeMpesaReconciliation commits the reconciliation outcome only when
+	// claimID still owns the row.
+	FinalizeMpesaReconciliation(tx *MpesaTransaction, claimID uuid.UUID) (bool, error)
+	// OwnsMpesaReconciliationClaim revalidates ownership immediately before a
+	// ledger write so an attempt whose claim expired cannot post.
+	OwnsMpesaReconciliationClaim(tx *MpesaTransaction, claimID uuid.UUID) (bool, error)
 	// ReleaseStaleReconciliationClaims returns in-progress claims older than the
 	// cutoff to Unmatched so an interrupted process cannot strand an item.
 	ReleaseStaleReconciliationClaims(before time.Time) error
@@ -62,8 +75,12 @@ type Repository interface {
 	ListBankTransactions(businessID uuid.UUID, txType string, status string, limit, offset int) ([]BankTransaction, int64, error)
 	UpdateBankTransaction(tx *BankTransaction) error
 	// ClaimBankReconciliation mirrors ClaimMpesaReconciliation for bank
-	// transactions so the manual-review settle path is serialized there too.
-	ClaimBankReconciliation(tx *BankTransaction, from, to ReconciliationStatus) (bool, error)
+	// transactions so the manual-review and automatic settle paths are
+	// serialized there too.
+	ClaimBankReconciliation(tx *BankTransaction, from, to ReconciliationStatus, claimID uuid.UUID) (bool, error)
+	ReleaseBankReconciliationClaim(tx *BankTransaction, claimID uuid.UUID) (bool, error)
+	FinalizeBankReconciliation(tx *BankTransaction, claimID uuid.UUID) (bool, error)
+	OwnsBankReconciliationClaim(tx *BankTransaction, claimID uuid.UUID) (bool, error)
 
 	ListReviewQueue(businessID uuid.UUID, source string, limit, offset int) ([]ReviewQueueItem, int64, error)
 	// ListMpesaPaymentNotesByPrefix returns payment notes that start with prefix
@@ -71,6 +88,11 @@ type Repository interface {
 	// It is filtered in SQL so a callback or reconciliation does not load the
 	// whole payment history just to check one receipt.
 	ListMpesaPaymentNotesByPrefix(businessID uuid.UUID, prefix string) ([]string, error)
+	// FindBankReconciliationApplication recovers a posting that already committed
+	// for a bank transaction even if the reconciliation link update failed. It
+	// checks every ledger table by the stable bank marker so a reviewer selecting
+	// a different target cannot settle the same transfer twice.
+	FindBankReconciliationApplication(businessID uuid.UUID, marker string) (ReconciledEntityType, uuid.UUID, bool, error)
 	FindInvoiceByNumber(businessID uuid.UUID, invoiceNumber string) (*invoices.Invoice, error)
 	FindCustomerByPhone(businessID uuid.UUID, phone string) (*customers.Customer, error)
 }
@@ -121,21 +143,21 @@ func (r *repository) UpdateMpesaTransaction(tx *MpesaTransaction) error {
 	// new row ReconciledEntityType is "" which violates the reconciled_entity_type
 	// CHECK constraint (it allows NULL or the four enum values).
 	return r.db.Model(&MpesaTransaction{}).Where("id = ?", tx.ID).Updates(map[string]any{
-		"status":                 tx.Status,
-		"result_code":            tx.ResultCode,
-		"result_desc":            tx.ResultDesc,
-		"merchant_request_id":    tx.MerchantRequestID,
-		"checkout_request_id":    tx.CheckoutRequestID,
-		"mpesa_receipt_number":   tx.MpesaReceiptNumber,
-		"phone_number":           tx.PhoneNumber,
-		"amount":                 tx.Amount,
-		"raw_payload":            tx.RawPayload,
-		"supplier_id":            tx.SupplierID,
-		"expense_category":       tx.ExpenseCategory,
-		colReconciliationStatus:  tx.ReconciliationStatus,
-		"reconciled_entity_type": nullableEntityType(tx.ReconciledEntityType),
-		"reconciled_entity_id":   tx.ReconciledEntityID,
-		colUpdatedAt:             time.Now(),
+		"status":                tx.Status,
+		"result_code":           tx.ResultCode,
+		"result_desc":           tx.ResultDesc,
+		"merchant_request_id":   tx.MerchantRequestID,
+		"checkout_request_id":   tx.CheckoutRequestID,
+		"mpesa_receipt_number":  tx.MpesaReceiptNumber,
+		"phone_number":          tx.PhoneNumber,
+		"amount":                tx.Amount,
+		"raw_payload":           tx.RawPayload,
+		"supplier_id":           tx.SupplierID,
+		"expense_category":      tx.ExpenseCategory,
+		colReconciliationStatus: tx.ReconciliationStatus,
+		colReconciledEntityType: nullableEntityType(tx.ReconciledEntityType),
+		colReconciledEntityID:   tx.ReconciledEntityID,
+		colUpdatedAt:            time.Now(),
 	}).Error
 }
 
@@ -148,12 +170,18 @@ func (r *repository) DeleteMpesaTransaction(id uuid.UUID) error {
 func (r *repository) ReleaseStaleReconciliationClaims(before time.Time) error {
 	if err := r.db.Model(&MpesaTransaction{}).
 		Where("reconciliation_status = ? AND updated_at < ?", Claiming, before).
-		Update(colReconciliationStatus, Unmatched).Error; err != nil {
+		Updates(map[string]any{
+			colReconciliationStatus:  Unmatched,
+			colReconciliationClaimID: nil,
+		}).Error; err != nil {
 		return err
 	}
 	return r.db.Model(&BankTransaction{}).
 		Where("reconciliation_status = ? AND updated_at < ?", Claiming, before).
-		Update(colReconciliationStatus, Unmatched).Error
+		Updates(map[string]any{
+			colReconciliationStatus:  Unmatched,
+			colReconciliationClaimID: nil,
+		}).Error
 }
 
 // isMpesaReceiptConflict reports whether a create error is a violation of the
@@ -236,29 +264,77 @@ func (r *repository) ClaimMpesaTransactionStatus(tx *MpesaTransaction, terminal 
 }
 
 // ClaimMpesaReconciliation performs a compare-and-set on the reconciliation
-// status. Only one concurrent caller can move the row out of the expected
-// status, which serializes manual reconciliation and prevents a double settle.
-func (r *repository) ClaimMpesaReconciliation(tx *MpesaTransaction, from, to ReconciliationStatus) (bool, error) {
+// status and records the owning attempt. Only one concurrent caller can move
+// the row out of the expected status, which serializes reconciliation and
+// prevents a double settle.
+func (r *repository) ClaimMpesaReconciliation(tx *MpesaTransaction, from, to ReconciliationStatus, claimID uuid.UUID) (bool, error) {
 	result := r.db.Model(&MpesaTransaction{}).
 		Where("id = ? AND reconciliation_status = ?", tx.ID, from).
 		Updates(map[string]any{
-			colReconciliationStatus: to,
-			colUpdatedAt:            time.Now(),
+			colReconciliationStatus:  to,
+			colReconciliationClaimID: claimID,
+			colUpdatedAt:             time.Now(),
 		})
 	if result.Error != nil {
 		return false, result.Error
 	}
 	return result.RowsAffected == 1, nil
+}
+
+// ReleaseMpesaReconciliationClaim returns a Claiming row to Unmatched only if
+// the supplied attempt still owns the claim.
+func (r *repository) ReleaseMpesaReconciliationClaim(tx *MpesaTransaction, claimID uuid.UUID) (bool, error) {
+	result := r.db.Model(&MpesaTransaction{}).
+		Where("id = ? AND reconciliation_status = ? AND reconciliation_claim_id = ?", tx.ID, Claiming, claimID).
+		Updates(map[string]any{
+			colReconciliationStatus:  Unmatched,
+			colReconciliationClaimID: nil,
+			colUpdatedAt:             time.Now(),
+		})
+	if result.Error != nil {
+		return false, result.Error
+	}
+	return result.RowsAffected == 1, nil
+}
+
+// FinalizeMpesaReconciliation commits the outcome only if the supplied attempt
+// still owns the claim, so a stale attempt cannot overwrite a replacement.
+func (r *repository) FinalizeMpesaReconciliation(tx *MpesaTransaction, claimID uuid.UUID) (bool, error) {
+	result := r.db.Model(&MpesaTransaction{}).
+		Where("id = ? AND reconciliation_status = ? AND reconciliation_claim_id = ?", tx.ID, Claiming, claimID).
+		Updates(map[string]any{
+			colReconciliationStatus:  tx.ReconciliationStatus,
+			colReconciledEntityType:  nullableEntityType(tx.ReconciledEntityType),
+			colReconciledEntityID:    tx.ReconciledEntityID,
+			colReconciliationClaimID: nil,
+			colUpdatedAt:             time.Now(),
+		})
+	if result.Error != nil {
+		return false, result.Error
+	}
+	return result.RowsAffected == 1, nil
+}
+
+func (r *repository) OwnsMpesaReconciliationClaim(tx *MpesaTransaction, claimID uuid.UUID) (bool, error) {
+	var count int64
+	err := r.db.Model(&MpesaTransaction{}).
+		Where("id = ? AND reconciliation_status = ? AND reconciliation_claim_id = ?", tx.ID, Claiming, claimID).
+		Count(&count).Error
+	if err != nil {
+		return false, err
+	}
+	return count > 0, nil
 }
 
 // ClaimBankReconciliation is the bank-transaction counterpart of
 // ClaimMpesaReconciliation.
-func (r *repository) ClaimBankReconciliation(tx *BankTransaction, from, to ReconciliationStatus) (bool, error) {
+func (r *repository) ClaimBankReconciliation(tx *BankTransaction, from, to ReconciliationStatus, claimID uuid.UUID) (bool, error) {
 	result := r.db.Model(&BankTransaction{}).
 		Where("id = ? AND reconciliation_status = ?", tx.ID, from).
 		Updates(map[string]any{
-			colReconciliationStatus: to,
-			colUpdatedAt:            time.Now(),
+			colReconciliationStatus:  to,
+			colReconciliationClaimID: claimID,
+			colUpdatedAt:             time.Now(),
 		})
 	if result.Error != nil {
 		return false, result.Error
@@ -266,12 +342,53 @@ func (r *repository) ClaimBankReconciliation(tx *BankTransaction, from, to Recon
 	return result.RowsAffected == 1, nil
 }
 
+func (r *repository) ReleaseBankReconciliationClaim(tx *BankTransaction, claimID uuid.UUID) (bool, error) {
+	result := r.db.Model(&BankTransaction{}).
+		Where("id = ? AND reconciliation_status = ? AND reconciliation_claim_id = ?", tx.ID, Claiming, claimID).
+		Updates(map[string]any{
+			colReconciliationStatus:  Unmatched,
+			colReconciliationClaimID: nil,
+			colUpdatedAt:             time.Now(),
+		})
+	if result.Error != nil {
+		return false, result.Error
+	}
+	return result.RowsAffected == 1, nil
+}
+
+func (r *repository) FinalizeBankReconciliation(tx *BankTransaction, claimID uuid.UUID) (bool, error) {
+	result := r.db.Model(&BankTransaction{}).
+		Where("id = ? AND reconciliation_status = ? AND reconciliation_claim_id = ?", tx.ID, Claiming, claimID).
+		Updates(map[string]any{
+			colReconciliationStatus:  tx.ReconciliationStatus,
+			colReconciledEntityType:  nullableEntityType(tx.ReconciledEntityType),
+			colReconciledEntityID:    tx.ReconciledEntityID,
+			colReconciliationClaimID: nil,
+			colUpdatedAt:             time.Now(),
+		})
+	if result.Error != nil {
+		return false, result.Error
+	}
+	return result.RowsAffected == 1, nil
+}
+
+func (r *repository) OwnsBankReconciliationClaim(tx *BankTransaction, claimID uuid.UUID) (bool, error) {
+	var count int64
+	err := r.db.Model(&BankTransaction{}).
+		Where("id = ? AND reconciliation_status = ? AND reconciliation_claim_id = ?", tx.ID, Claiming, claimID).
+		Count(&count).Error
+	if err != nil {
+		return false, err
+	}
+	return count > 0, nil
+}
+
 func (r *repository) UpdateMpesaReconciliation(tx *MpesaTransaction) error {
 	updates := map[string]any{
-		colReconciliationStatus:  tx.ReconciliationStatus,
-		"reconciled_entity_type": nullableEntityType(tx.ReconciledEntityType),
-		"reconciled_entity_id":   tx.ReconciledEntityID,
-		colUpdatedAt:             time.Now(),
+		colReconciliationStatus: tx.ReconciliationStatus,
+		colReconciledEntityType: nullableEntityType(tx.ReconciledEntityType),
+		colReconciledEntityID:   tx.ReconciledEntityID,
+		colUpdatedAt:            time.Now(),
 	}
 	return r.db.Model(&MpesaTransaction{}).Where("id = ?", tx.ID).Updates(updates).Error
 }
@@ -340,10 +457,10 @@ func (r *repository) ListBankTransactions(businessID uuid.UUID, txType string, s
 func (r *repository) UpdateBankTransaction(tx *BankTransaction) error {
 	tx.UpdatedAt = time.Now()
 	return r.db.Model(&BankTransaction{}).Where("id = ?", tx.ID).Updates(map[string]any{
-		colReconciliationStatus:  tx.ReconciliationStatus,
-		"reconciled_entity_type": nullableEntityType(tx.ReconciledEntityType),
-		"reconciled_entity_id":   tx.ReconciledEntityID,
-		colUpdatedAt:             tx.UpdatedAt,
+		colReconciliationStatus: tx.ReconciliationStatus,
+		colReconciledEntityType: nullableEntityType(tx.ReconciledEntityType),
+		colReconciledEntityID:   tx.ReconciledEntityID,
+		colUpdatedAt:            tx.UpdatedAt,
 	}).Error
 }
 
@@ -376,6 +493,51 @@ func (r *repository) ListMpesaPaymentNotesByPrefix(businessID uuid.UUID, prefix 
 	notes = append(notes, supplierNotes...)
 
 	return notes, nil
+}
+
+// FindBankReconciliationApplication looks for an already-committed ledger entry
+// tagged with the bank transaction's stable marker. Recovering by source
+// transaction prevents a retry that picks a different target from paying twice.
+func (r *repository) FindBankReconciliationApplication(businessID uuid.UUID, marker string) (ReconciledEntityType, uuid.UUID, bool, error) {
+	like := marker + "%"
+
+	var invoicePayment invoices.InvoicePayment
+	err := r.db.Where("business_id = ? AND note LIKE ?", businessID, like).Order("created_at ASC").First(&invoicePayment).Error
+	if err == nil {
+		return EntityInvoice, invoicePayment.InvoiceID, true, nil
+	}
+	if !errors.Is(err, gorm.ErrRecordNotFound) {
+		return "", uuid.Nil, false, err
+	}
+
+	var customerPayment customers.Payment
+	err = r.db.Where("business_id = ? AND note LIKE ?", businessID, like).Order("created_at ASC").First(&customerPayment).Error
+	if err == nil {
+		return EntityCustomerCredit, customerPayment.CustomerID, true, nil
+	}
+	if !errors.Is(err, gorm.ErrRecordNotFound) {
+		return "", uuid.Nil, false, err
+	}
+
+	var supplierPayment suppliers.Payment
+	err = r.db.Where("business_id = ? AND note LIKE ?", businessID, like).Order("created_at ASC").First(&supplierPayment).Error
+	if err == nil {
+		return EntitySupplierPayment, supplierPayment.SupplierID, true, nil
+	}
+	if !errors.Is(err, gorm.ErrRecordNotFound) {
+		return "", uuid.Nil, false, err
+	}
+
+	var expense finance.Expense
+	err = r.db.Where("business_id = ? AND description LIKE ?", businessID, like).Order("created_at ASC").First(&expense).Error
+	if err == nil {
+		return EntityExpense, expense.ID, true, nil
+	}
+	if !errors.Is(err, gorm.ErrRecordNotFound) {
+		return "", uuid.Nil, false, err
+	}
+
+	return "", uuid.Nil, false, nil
 }
 
 func (r *repository) ListReviewQueue(businessID uuid.UUID, source string, limit, offset int) ([]ReviewQueueItem, int64, error) {

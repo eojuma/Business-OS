@@ -151,6 +151,10 @@ export default function InvoiceDetailPage() {
       setPaymentError("Enter customer phone number");
       return;
     }
+    if (cents % 100 !== 0) {
+      setPaymentError("M-Pesa accepts whole shillings only");
+      return;
+    }
     setSubmitting(true);
     setPaymentError("");
     setStkSuccess("");
@@ -164,6 +168,9 @@ export default function InvoiceDetailPage() {
         // requests. The server accepts them as one idempotent operation.
         idempotency_key: `stk-${invoice.id}`,
       });
+      // The page may have unmounted while the prompt was being sent; do not
+      // create a polling timer that cleanup can no longer clear.
+      if (!mountedRef.current) return;
       // Discard background reads that started before this submission so a
       // stale unpaid snapshot cannot overwrite a newer paid invoice.
       invoiceGeneration.current += 1;

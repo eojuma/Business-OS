@@ -73,6 +73,8 @@ type ReviewItem = {
   description: string;
   transacted_at: string;
   status: string;
+  // Gateway status for M-Pesa rows; pending rows cannot be reconciled yet.
+  transaction_status: string;
 };
 
 type TabType = "overview" | "mpesa" | "bank" | "review";
@@ -100,9 +102,22 @@ export default function FinancePage() {
   const [reviewItems, setReviewItems] = useState<ReviewItem[]>([]);
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
+  // Submission failures are rendered inside the open modal so they are not
+  // hidden behind the backdrop.
+  const [modalError, setModalError] = useState("");
   // Request counter held in a ref so callbacks always compare against the
   // latest value (state captured in a closure would be stale).
   const requestVersion = useRef(0);
+  // The tab that is active right now. Submission callbacks refresh this tab,
+  // not the one captured when the request started, so switching tabs mid-flight
+  // cannot reload the wrong resource or discard the new tab's load.
+  const activeTabRef = useRef<TabType>("overview");
+
+  /** Point the reload helper at the new tab before React renders it. */
+  function selectTab(tab: TabType) {
+    activeTabRef.current = tab;
+    setActiveTab(tab);
+  }
   // Reuse one STK idempotency key across retries of the same attempt (same
   // phone and amount) so a retried submit cannot prompt the customer twice.
   const stkKeyRef = useRef<{ signature: string; key: string }>({ signature: "", key: "" });
@@ -139,25 +154,26 @@ export default function FinancePage() {
   const [recExpenseCategory, setRecExpenseCategory] = useState("Operations");
   const [recNote, setRecNote] = useState("");
 
-  /** Loads summary and tab data. */
+  /** Loads summary and tab data for whichever tab is active now. */
   const loadData = useCallback(async () => {
+    const tab = activeTabRef.current;
     const myVersion = ++requestVersion.current;
     setError("");
     try {
-      if (activeTab === "overview") {
+      if (tab === "overview") {
         const [s, e] = await Promise.all([api.get("/finance/summary"), api.get("/finance/expenses")]);
         if (myVersion !== requestVersion.current) return;
         setD(s.data.data);
         setExpenses(e.data.data || []);
-      } else if (activeTab === "mpesa") {
+      } else if (tab === "mpesa") {
         const res = await api.get("/payments/mpesa/transactions");
         if (myVersion !== requestVersion.current) return;
         setMpesaTxs(res.data.data || []);
-      } else if (activeTab === "bank") {
+      } else if (tab === "bank") {
         const res = await api.get("/payments/bank/transactions");
         if (myVersion !== requestVersion.current) return;
         setBankTxs(res.data.data || []);
-      } else if (activeTab === "review") {
+      } else if (tab === "review") {
         const res = await api.get("/payments/review-queue");
         if (myVersion !== requestVersion.current) return;
         setReviewItems(res.data.data || []);
@@ -166,25 +182,26 @@ export default function FinancePage() {
       if (myVersion !== requestVersion.current) return;
       setError(e.response?.data?.error || "Failed to load data");
     }
-  }, [activeTab]);
+  }, []);
 
-  // Invalidate any in-flight load and clear stale banners when the tab changes.
+  // Point at the active tab, invalidate any in-flight load, and clear stale
+  // banners when the tab changes or access is first granted.
   useEffect(() => {
+    activeTabRef.current = activeTab;
     requestVersion.current += 1;
     setMessage("");
     setError("");
-  }, [activeTab]);
-
-  useEffect(() => {
+    setModalError("");
     if (canView) void loadData();
-  }, [canView, loadData]);
+  }, [activeTab, canView, loadData]);
 
   /** Record expense */
   async function submitExpense(e: React.FormEvent) {
     e.preventDefault();
+    setModalError("");
     const cents = parseCents(amount);
     if (!cents) {
-      setError("Enter a valid amount");
+      setModalError("Enter a valid amount");
       return;
     }
     try {
@@ -195,16 +212,21 @@ export default function FinancePage() {
       setMessage(`Expense recorded successfully for ${formatMoney(cents)}.`);
       await loadData();
     } catch (e: any) {
-      setError(e.response?.data?.error || "Failed to save expense");
+      setModalError(e.response?.data?.error || "Failed to save expense");
     }
   }
 
   /** Send M-Pesa STK push */
   async function submitSTK(e: React.FormEvent) {
     e.preventDefault();
+    setModalError("");
     const cents = parseCents(stkAmount);
     if (!cents) {
-      setError("Enter a valid amount");
+      setModalError("Enter a valid amount");
+      return;
+    }
+    if (cents % 100 !== 0) {
+      setModalError("M-Pesa accepts whole shillings only");
       return;
     }
     try {
@@ -232,16 +254,17 @@ export default function FinancePage() {
       setMessage(`STK push for ${formatMoney(cents)} initiated! The customer will be prompted on their phone.`);
       await loadData();
     } catch (e: any) {
-      setError(e.response?.data?.error || "Failed to initiate STK push");
+      setModalError(e.response?.data?.error || "Failed to initiate STK push");
     }
   }
 
   /** Record manual bank transfer */
   async function submitBankManual(e: React.FormEvent) {
     e.preventDefault();
+    setModalError("");
     const cents = parseCents(bankAmount);
     if (!cents) {
-      setError("Enter a valid amount");
+      setModalError("Enter a valid amount");
       return;
     }
     try {
@@ -260,13 +283,14 @@ export default function FinancePage() {
       setMessage(bankTransferMessage(tx.amount, tx.reconciliation_status));
       await loadData();
     } catch (e: any) {
-      setError(e.response?.data?.error || "Failed to record bank transfer");
+      setModalError(e.response?.data?.error || "Failed to record bank transfer");
     }
   }
 
   /** Upload bank statement CSV */
   async function submitStatement(e: React.FormEvent) {
     e.preventDefault();
+    setModalError("");
     if (!statementFile) return;
     const formData = new FormData();
     formData.append("statement", statementFile);
@@ -284,26 +308,27 @@ export default function FinancePage() {
       );
       await loadData();
     } catch (e: any) {
-      setError(e.response?.data?.error || "Failed to import bank statement");
+      setModalError(e.response?.data?.error || "Failed to import bank statement");
     }
   }
 
   /** Reconcile Review Item */
   async function submitReconcile(e: React.FormEvent) {
     e.preventDefault();
+    setModalError("");
     if (!reconcileTarget) return;
     if (
       reconcileTarget.type === "outflow" &&
       (recType === "invoice" || recType === "customer_credit")
     ) {
-      setError("An outflow cannot be reconciled against an invoice or customer balance.");
+      setModalError("An outflow cannot be reconciled against an invoice or customer balance.");
       return;
     }
     if (
       reconcileTarget.type !== "outflow" &&
       (recType === "expense" || recType === "supplier_payment")
     ) {
-      setError(recType === "supplier_payment"
+      setModalError(recType === "supplier_payment"
         ? "An inflow cannot be reconciled as a supplier payment."
         : "An inflow cannot be booked as an operating expense.");
       return;
@@ -326,7 +351,7 @@ export default function FinancePage() {
       setMessage(`Transaction successfully reconciled as ${label}.`);
       await loadData();
     } catch (e: any) {
-      setError(e.response?.data?.error || "Failed to reconcile transaction");
+      setModalError(e.response?.data?.error || "Failed to reconcile transaction");
     }
   }
 
@@ -354,21 +379,21 @@ export default function FinancePage() {
           canManage ? (
             <div className="flex flex-wrap gap-2">
               {activeTab === "overview" && (
-                <button className="btn-primary" onClick={() => setShowExpenseForm(true)}>
+                <button className="btn-primary" onClick={() => { setModalError(""); setShowExpenseForm(true); }}>
                   <Plus size={16} /> Record expense
                 </button>
               )}
               {activeTab === "mpesa" && (
-                <button className="btn-primary" onClick={() => setShowSTKModal(true)}>
+                <button className="btn-primary" onClick={() => { setModalError(""); setShowSTKModal(true); }}>
                   <Smartphone size={16} /> Initiate STK Push
                 </button>
               )}
               {activeTab === "bank" && (
                 <>
-                  <button className="btn-secondary" onClick={() => setShowStatementModal(true)}>
+                  <button className="btn-secondary" onClick={() => { setModalError(""); setShowStatementModal(true); }}>
                     <Upload size={16} /> Import Statement
                   </button>
-                  <button className="btn-primary" onClick={() => setShowBankManualModal(true)}>
+                  <button className="btn-primary" onClick={() => { setModalError(""); setShowBankManualModal(true); }}>
                     <Building2 size={16} /> Record Bank Transfer
                   </button>
                 </>
@@ -384,7 +409,7 @@ export default function FinancePage() {
       {/* Tabs */}
       <div className="mb-6 flex border-b border-border-subtle">
         <button
-          onClick={() => setActiveTab("overview")}
+          onClick={() => selectTab("overview")}
           className={`border-b-2 px-4 py-2.5 text-sm font-semibold transition-colors ${
             activeTab === "overview"
               ? "border-primary text-foreground"
@@ -394,7 +419,7 @@ export default function FinancePage() {
           Overview & Expenses
         </button>
         <button
-          onClick={() => setActiveTab("mpesa")}
+          onClick={() => selectTab("mpesa")}
           className={`border-b-2 px-4 py-2.5 text-sm font-semibold transition-colors ${
             activeTab === "mpesa"
               ? "border-primary text-foreground"
@@ -404,7 +429,7 @@ export default function FinancePage() {
           M-Pesa Payments
         </button>
         <button
-          onClick={() => setActiveTab("bank")}
+          onClick={() => selectTab("bank")}
           className={`border-b-2 px-4 py-2.5 text-sm font-semibold transition-colors ${
             activeTab === "bank"
               ? "border-primary text-foreground"
@@ -414,7 +439,7 @@ export default function FinancePage() {
           Bank Transfers
         </button>
         <button
-          onClick={() => setActiveTab("review")}
+          onClick={() => selectTab("review")}
           className={`border-b-2 px-4 py-2.5 text-sm font-semibold transition-colors ${
             activeTab === "review"
               ? "border-primary text-foreground"
@@ -447,7 +472,11 @@ export default function FinancePage() {
           </div>
 
           {canManage && showExpenseForm && (
-            <form onSubmit={submitExpense} className="panel mt-6 grid gap-3 p-5 sm:grid-cols-3">
+            <form
+              onSubmit={submitExpense}
+              onChange={() => setModalError("")}
+              className="panel mt-6 grid gap-3 p-5 sm:grid-cols-3"
+            >
               <select className="field" value={category} onChange={(e) => setCategory(e.target.value)}>
                 <option>Operations</option>
                 <option>Rent</option>
@@ -472,9 +501,21 @@ export default function FinancePage() {
                 onChange={(e) => setAmount(e.target.value)}
                 required
               />
-              <div className="flex gap-2 sm:col-span-3">
+              {modalError && (
+                <p className="rounded-lg bg-danger-soft p-3 text-sm text-danger sm:col-span-3">
+                  {modalError}
+                </p>
+              )}
+              <div className="flex flex-wrap gap-2 sm:col-span-3">
                 <button className="btn-primary">Save expense</button>
-                <button type="button" className="btn-secondary" onClick={() => setShowExpenseForm(false)}>
+                <button
+                  type="button"
+                  className="btn-secondary"
+                  onClick={() => {
+                    setShowExpenseForm(false);
+                    setModalError("");
+                  }}
+                >
                   Cancel
                 </button>
               </div>
@@ -693,19 +734,23 @@ export default function FinancePage() {
                       <td className="px-5 py-4 text-muted">{item.description || "—"}</td>
                       <td className="px-5 py-4 text-right font-semibold">{formatMoney(item.amount)}</td>
                       <td className="px-5 py-4 text-right">
-                        {canManage && (
-                          <button
-                            className="btn-secondary py-1 text-xs"
-                            onClick={() => {
-                              setReconcileTarget(item);
-                              setRecType(item.type === "outflow" ? "expense" : "invoice");
-                              setRecTargetID("");
-                              setRecNote(`Reconciled ${item.source} ref: ${item.reference}`);
-                            }}
-                          >
-                            Reconcile
-                          </button>
-                        )}
+                        {canManage &&
+                          (item.transaction_status === "pending" ? (
+                            <span className="text-xs text-muted">Awaiting result</span>
+                          ) : (
+                            <button
+                              className="btn-secondary py-1 text-xs"
+                              onClick={() => {
+                                setModalError("");
+                                setReconcileTarget(item);
+                                setRecType(item.type === "outflow" ? "expense" : "invoice");
+                                setRecTargetID("");
+                                setRecNote(`Reconciled ${item.source} ref: ${item.reference}`);
+                              }}
+                            >
+                              Reconcile
+                            </button>
+                          ))}
                       </td>
                     </tr>
                   ))}
@@ -719,7 +764,11 @@ export default function FinancePage() {
       {/* MODAL: M-Pesa STK Push */}
       {showSTKModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-          <form onSubmit={submitSTK} className="panel w-full max-w-md p-6">
+          <form
+            onSubmit={submitSTK}
+            onChange={() => setModalError("")}
+            className="panel w-full max-w-md p-6"
+          >
             <h3 className="text-lg font-bold">Initiate M-Pesa STK Push</h3>
             <p className="mt-1 text-xs text-muted">
               Sends an instant payment prompt to the customer&apos;s phone.
@@ -741,8 +790,8 @@ export default function FinancePage() {
                   className="field mt-1"
                   type="number"
                   min="1"
-                  step="0.01"
-                  placeholder="100.00"
+                  step="1"
+                  placeholder="100"
                   value={stkAmount}
                   onChange={(e) => setStkAmount(e.target.value)}
                   required
@@ -758,8 +807,18 @@ export default function FinancePage() {
                 />
               </div>
             </div>
+            {modalError && (
+              <p className="mt-4 rounded-lg bg-danger-soft p-3 text-sm text-danger">{modalError}</p>
+            )}
             <div className="mt-6 flex justify-end gap-2">
-              <button type="button" className="btn-secondary" onClick={() => setShowSTKModal(false)}>
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={() => {
+                  setShowSTKModal(false);
+                  setModalError("");
+                }}
+              >
                 Cancel
               </button>
               <button className="btn-primary">Send Prompt</button>
@@ -771,7 +830,11 @@ export default function FinancePage() {
       {/* MODAL: Manual Bank Transfer */}
       {showBankManualModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-          <form onSubmit={submitBankManual} className="panel w-full max-w-md p-6">
+          <form
+            onSubmit={submitBankManual}
+            onChange={() => setModalError("")}
+            className="panel w-full max-w-md p-6"
+          >
             <h3 className="text-lg font-bold">Record Bank Transfer</h3>
             <div className="mt-4 space-y-3">
               <div>
@@ -827,8 +890,18 @@ export default function FinancePage() {
                 />
               </div>
             </div>
+            {modalError && (
+              <p className="mt-4 rounded-lg bg-danger-soft p-3 text-sm text-danger">{modalError}</p>
+            )}
             <div className="mt-6 flex justify-end gap-2">
-              <button type="button" className="btn-secondary" onClick={() => setShowBankManualModal(false)}>
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={() => {
+                  setShowBankManualModal(false);
+                  setModalError("");
+                }}
+              >
                 Cancel
               </button>
               <button className="btn-primary">Save Transfer</button>
@@ -840,7 +913,11 @@ export default function FinancePage() {
       {/* MODAL: Bank Statement CSV Upload */}
       {showStatementModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-          <form onSubmit={submitStatement} className="panel w-full max-w-md p-6">
+          <form
+            onSubmit={submitStatement}
+            onChange={() => setModalError("")}
+            className="panel w-full max-w-md p-6"
+          >
             <h3 className="text-lg font-bold">Import Bank Statement (CSV)</h3>
             <p className="mt-1 text-xs text-muted">
               Upload standard bank statement CSV with Date, Reference, Description, and Amount columns.
@@ -866,8 +943,18 @@ export default function FinancePage() {
                 />
               </div>
             </div>
+            {modalError && (
+              <p className="mt-4 rounded-lg bg-danger-soft p-3 text-sm text-danger">{modalError}</p>
+            )}
             <div className="mt-6 flex justify-end gap-2">
-              <button type="button" className="btn-secondary" onClick={() => setShowStatementModal(false)}>
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={() => {
+                  setShowStatementModal(false);
+                  setModalError("");
+                }}
+              >
                 Cancel
               </button>
               <button className="btn-primary" disabled={!statementFile}>
@@ -881,7 +968,11 @@ export default function FinancePage() {
       {/* MODAL: Reconcile Review Item */}
       {reconcileTarget && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-          <form onSubmit={submitReconcile} className="panel w-full max-w-md p-6">
+          <form
+            onSubmit={submitReconcile}
+            onChange={() => setModalError("")}
+            className="panel w-full max-w-md p-6"
+          >
             <h3 className="text-lg font-bold">Reconcile Transaction</h3>
             <p className="mt-1 text-xs text-muted">
               Source: <span className="font-semibold uppercase">{reconcileTarget.source}</span> | Ref:{" "}
@@ -986,8 +1077,18 @@ export default function FinancePage() {
                 />
               </div>
             </div>
+            {modalError && (
+              <p className="mt-4 rounded-lg bg-danger-soft p-3 text-sm text-danger">{modalError}</p>
+            )}
             <div className="mt-6 flex justify-end gap-2">
-              <button type="button" className="btn-secondary" onClick={() => setReconcileTarget(null)}>
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={() => {
+                  setReconcileTarget(null);
+                  setModalError("");
+                }}
+              >
                 Cancel
               </button>
               <button className="btn-primary">Apply Reconciliation</button>
